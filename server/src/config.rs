@@ -1,4 +1,4 @@
-use std::{env, path::PathBuf};
+use std::{env, fs, path::PathBuf};
 
 use anyhow::{Context, Result};
 
@@ -22,14 +22,14 @@ pub struct Config {
 
 impl Config {
     pub fn from_env() -> Result<Self> {
-        let secret_key = required("SECRET_KEY")?;
+        let secret_key = required_or_file("SECRET_KEY", "SECRET_KEY_FILE")?;
         if secret_key.trim().is_empty() {
             anyhow::bail!("SECRET_KEY 不能为空");
         }
         let data_root = PathBuf::from(env::var("DATA_ROOT").unwrap_or_else(|_| "/data".into()));
         Ok(Self {
             app_name: env::var("APP_NAME").unwrap_or_else(|_| "文流".into()),
-            database_url: required("DATABASE_URL")?,
+            database_url: database_url()?,
             database_pool_size: parsed("DATABASE_POOL_SIZE", 20)?,
             secret_key,
             work_root: data_root.join("work"),
@@ -55,6 +55,45 @@ impl Config {
 
 fn required(key: &str) -> Result<String> {
     env::var(key).with_context(|| format!("缺少环境变量 {key}"))
+}
+
+fn required_or_file(key: &str, file_key: &str) -> Result<String> {
+    if let Ok(value) = env::var(key)
+        && !value.trim().is_empty()
+    {
+        return Ok(value);
+    }
+    let path = required(file_key)?;
+    let value = fs::read_to_string(&path).with_context(|| format!("无法读取 {file_key}={path}"))?;
+    let value = value.trim().to_string();
+    if value.is_empty() {
+        anyhow::bail!("{file_key} 指向的文件为空");
+    }
+    Ok(value)
+}
+
+fn database_url() -> Result<String> {
+    if let Ok(value) = env::var("DATABASE_URL")
+        && !value.trim().is_empty()
+    {
+        return Ok(value);
+    }
+
+    let host = env::var("DATABASE_HOST").unwrap_or_else(|_| "db".into());
+    let port = parsed::<u16>("DATABASE_PORT", 5432)?;
+    let database = env::var("DATABASE_NAME").unwrap_or_else(|_| "docflow".into());
+    let user = env::var("DATABASE_USER").unwrap_or_else(|_| "docflow".into());
+    let password = required_or_file("DATABASE_PASSWORD", "DATABASE_PASSWORD_FILE")?;
+    let mut url = url::Url::parse("postgres://localhost").context("无法创建数据库连接地址")?;
+    url.set_host(Some(&host)).context("数据库主机名无效")?;
+    url.set_port(Some(port))
+        .map_err(|_| anyhow::anyhow!("数据库端口无效"))?;
+    url.set_username(&user)
+        .map_err(|_| anyhow::anyhow!("数据库用户名无效"))?;
+    url.set_password(Some(&password))
+        .map_err(|_| anyhow::anyhow!("数据库密码无效"))?;
+    url.set_path(&database);
+    Ok(url.into())
 }
 
 fn parsed<T>(key: &str, default: T) -> Result<T>

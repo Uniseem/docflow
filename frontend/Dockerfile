@@ -1,9 +1,7 @@
 FROM node:24-alpine AS build
 WORKDIR /app
-ARG VITE_PUBLIC_ORIGIN=http://localhost:8090
-ENV VITE_PUBLIC_ORIGIN=$VITE_PUBLIC_ORIGIN
 COPY package.json package-lock.json* ./
-RUN npm install
+RUN npm ci
 COPY . .
 RUN npm run build
 

@@ -9,7 +9,7 @@
 - Rust、Axum、Tokio：公开 HTTP API、管理 API、上传流、SSE 实时进度和后台 Worker。
 - SQLx、PostgreSQL：元数据、三种 Markdown、最终 HTML、管理员、加密配置、任务租约和不可删除的详细事件。
 - PostgreSQL 持久队列：Worker 通过 `FOR UPDATE SKIP LOCKED` 并发领取任务，不再依赖 Redis/Celery。
-- VPS 本地卷：源文件上传完成即永久写入；随后补齐 MinerU ZIP、原始/翻译/规范化 Markdown、HTML、WebP、事件和归档清单。
+- VPS 当前目录：`./data` 绑定挂载 PostgreSQL、实例密钥、源文件、MinerU ZIP、三种 Markdown、HTML、WebP、事件和归档清单，不使用 Docker 命名卷。
 - Cloudflare R2：可选的异地对象镜像；失败不会阻止本地任务发布，也不会触发本地删除。
 - Vue 3、Vuetify、Vite：提交页、公开文库、阅读页、SSE 进度页和 `/admin` 管理后台。
 - Nginx：同源反向代理、SSE 透传和 SPA 路由。
@@ -67,23 +67,35 @@ curl -F "file=@paper.pdf" -F "translate=true" \
   http://185.99.135.224:8090/api/v1/jobs
 ```
 
-## VPS 部署
+## VPS 一键部署
 
-目标地址：`http://185.99.135.224:8090`。VPS 只需要 Docker Engine 和 Docker Compose；Rust 和 Node 编译均在 VPS 的多阶段容器中完成。
+目标地址：`http://185.99.135.224:8090`。VPS 只需要 Docker Engine 和 Docker Compose，不需要 Git、Rust、Node 或手工创建 `.env`。Compose 直接拉取 GHCR 公共镜像，首次启动自动生成数据库密码与实例密钥，已有密钥永不覆盖。
 
 ```bash
-cd /opt/docflow
-cp .env.example .env
-# 修改 SECRET_KEY、POSTGRES_PASSWORD 等实例参数
-docker compose up -d --build --remove-orphans
+mkdir -p /opt/docflow && cd /opt/docflow
+curl -fsSLO https://raw.githubusercontent.com/FengYuchen1314/docflow/main/docker-compose.yml
+docker compose up -d
 ```
+
+运行后目录即完整实例：
+
+```text
+/opt/docflow/
+├── docker-compose.yml
+└── data/
+    ├── config/       # 实例密钥与 PostgreSQL 密码
+    ├── postgres/     # 完整 PostgreSQL 数据目录
+    └── documents/    # 源文件、Markdown、HTML、WebP、MinerU ZIP 与工作区
+```
+
+端口等参数有默认值；如需覆盖，可在同目录创建可选 `.env`，参考仓库中的 `.env.example`。MinerU、DeepSeek 和 R2 凭据始终在 `/admin` 中配置，而不是写入 Compose 或 `.env`。
 
 管理员访问 `http://185.99.135.224:8090/admin`：
 
 1. 首次注册唯一管理员；已有 Python 版本的 Argon2 密码可直接登录。
 2. 配置并验证 MinerU API Key 与模型。
 3. 可选配置 DeepSeek API Key 和模型；验证成功后前台默认选择中文翻译。
-4. 如需异地镜像，可选配置 R2 Account ID、Access Key ID、Secret Access Key 和 Bucket。凭据在数据库中以 `SHA-256(SECRET_KEY)` 派生的 Fernet 密钥加密，不写入 `.env`。
+4. 如需异地镜像，可选配置 R2 Account ID、Access Key ID、Secret Access Key 和 Bucket。凭据在数据库中使用 `data/config/secret_key` 派生的 Fernet 密钥加密。
 5. 在“文档重命名”中修改公开标题与下载文件名；扩展名必须保持一致，后端物理路径不会变化。
 
 Cloudflare R2 凭据应仅授予目标存储桶对象读写权限。应用没有 R2 删除调用，也不配置生命周期规则。
@@ -96,12 +108,16 @@ docker compose logs -f api worker
 curl --fail http://127.0.0.1:8090/api/health
 ```
 
-必须永久备份：
+完整迁移或冷备份时先停服务，再打包 Compose 与整个 `data` 目录：
 
-- `docflow_postgres_data`：所有 Markdown、HTML、事件、管理员和配置密文。
-- `docflow_documents_data`：源文件、Markdown、HTML、WebP、MinerU ZIP、元数据和历史兼容数据，是默认主归档。
-- Cloudflare R2 存储桶：若已配置则作为可选镜像备份。
-- `.env` 中的 `SECRET_KEY`：丢失后无法解密外部服务凭据。
+```bash
+cd /opt/docflow
+docker compose stop
+tar -czf ../docflow-backup-$(date +%Y%m%d-%H%M%S).tar.gz docker-compose.yml data
+docker compose start
+```
+
+在新 VPS 原样解压后执行 `docker compose up -d` 即可恢复。不要只复制 `documents`：数据库、加密凭据和文件路径映射需要作为同一实例一起迁移。R2 若已配置，只是额外镜像，不替代本地 `data` 备份。
 
 现有 Alembic 表不会重建。Rust 的 SQLx 迁移只追加字段与索引，不提供降级或删除逻辑。
 
