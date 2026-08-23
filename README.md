@@ -77,6 +77,177 @@ curl -fsSLO https://raw.githubusercontent.com/FengYuchen1314/docflow/main/docker
 docker compose up -d
 ```
 
+大多数情况下也可以直接在 VPS 上新建 `docker-compose.yml`，完整复制下面的内容，然后运行 `docker compose up -d`。以下代码块与仓库根目录的 `docker-compose.yml` 保持一致：
+
+```yaml
+name: docflow
+
+x-logging: &default_logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
+x-backend-environment: &backend_environment
+  APP_NAME: ${APP_NAME:-文流}
+  DATABASE_HOST: db
+  DATABASE_PORT: "5432"
+  DATABASE_NAME: ${POSTGRES_DB:-docflow}
+  DATABASE_USER: ${POSTGRES_USER:-docflow}
+  DATABASE_PASSWORD_FILE: /run/docflow/postgres_password
+  SECRET_KEY_FILE: /run/docflow/secret_key
+  DATA_ROOT: /data
+  MAX_UPLOAD_MB: ${MAX_UPLOAD_MB:-200}
+  TRANSLATION_CHUNK_CHARS: ${TRANSLATION_CHUNK_CHARS:-12000}
+  MINERU_POLL_SECONDS: ${MINERU_POLL_SECONDS:-5}
+  MINERU_MAX_WAIT_SECONDS: ${MINERU_MAX_WAIT_SECONDS:-7200}
+  WEBP_QUALITY: ${WEBP_QUALITY:-88}
+  DATABASE_POOL_SIZE: ${DATABASE_POOL_SIZE:-20}
+  PUBLIC_ORIGIN: ${PUBLIC_ORIGIN:-http://185.99.135.224:8090}
+  RUST_LOG: ${RUST_LOG:-docflow_server=info,tower_http=info}
+  TZ: ${TZ:-Asia/Shanghai}
+
+services:
+  # 第一次启动时生成实例密钥，并准备宿主机持久化目录。已有文件永不覆盖。
+  init:
+    image: alpine:3.22
+    restart: "no"
+    logging: *default_logging
+    user: "0:0"
+    command:
+      - /bin/sh
+      - -ec
+      - |
+        mkdir -p /config /documents/archives /documents/work
+        if [ ! -s /config/secret_key ]; then
+          head -c 64 /dev/urandom | sha256sum | cut -d ' ' -f 1 > /config/secret_key
+        fi
+        if [ ! -s /config/postgres_password ]; then
+          head -c 64 /dev/urandom | sha256sum | cut -d ' ' -f 1 > /config/postgres_password
+        fi
+        chmod 755 /config /documents
+        chmod 644 /config/secret_key /config/postgres_password
+        if [ ! -e /config/documents_permissions_v1 ]; then
+          chown -R 10001:10001 /documents
+          touch /config/documents_permissions_v1
+        fi
+    volumes:
+      - type: bind
+        source: ./data/config
+        target: /config
+      - type: bind
+        source: ./data/documents
+        target: /documents
+
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    logging: *default_logging
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-docflow}
+      POSTGRES_USER: ${POSTGRES_USER:-docflow}
+      POSTGRES_PASSWORD_FILE: /run/docflow/postgres_password
+      TZ: ${TZ:-Asia/Shanghai}
+    depends_on:
+      init:
+        condition: service_completed_successfully
+    volumes:
+      - type: bind
+        source: ./data/postgres
+        target: /var/lib/postgresql/data
+      - type: bind
+        source: ./data/config
+        target: /run/docflow
+        read_only: true
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-docflow} -d ${POSTGRES_DB:-docflow}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  migrate:
+    image: ghcr.io/fengyuchen1314/docflow-server:latest
+    pull_policy: always
+    environment: *backend_environment
+    command: ["migrate"]
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - type: bind
+        source: ./data/documents
+        target: /data
+      - type: bind
+        source: ./data/config
+        target: /run/docflow
+        read_only: true
+    restart: "no"
+    logging: *default_logging
+
+  api:
+    image: ghcr.io/fengyuchen1314/docflow-server:latest
+    pull_policy: always
+    restart: unless-stopped
+    logging: *default_logging
+    environment: *backend_environment
+    command: ["api"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    volumes:
+      - type: bind
+        source: ./data/documents
+        target: /data
+      - type: bind
+        source: ./data/config
+        target: /run/docflow
+        read_only: true
+    healthcheck:
+      test: ["CMD", "docflow-server", "healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  worker:
+    image: ghcr.io/fengyuchen1314/docflow-server:latest
+    pull_policy: always
+    restart: unless-stopped
+    logging: *default_logging
+    environment:
+      <<: *backend_environment
+      WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-3}
+    command: ["worker"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    volumes:
+      - type: bind
+        source: ./data/documents
+        target: /data
+      - type: bind
+        source: ./data/config
+        target: /run/docflow
+        read_only: true
+
+  web:
+    image: ghcr.io/fengyuchen1314/docflow-web:latest
+    pull_policy: always
+    restart: unless-stopped
+    logging: *default_logging
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "0.0.0.0:${HTTP_PORT:-8090}:80"
+    volumes:
+      - type: bind
+        source: ./data/documents
+        target: /data
+        read_only: true
+```
+
+如果部署地址不是 `185.99.135.224:8090`，可在同目录创建 `.env`，例如写入 `PUBLIC_ORIGIN=http://你的VPS公网IP:8090`；如需修改监听端口，再增加 `HTTP_PORT=新端口`。
+
 运行后目录即完整实例：
 
 ```text
