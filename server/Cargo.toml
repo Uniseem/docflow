@@ -1,0 +1,46 @@
+[package]
+name = "docflow-server"
+version = "2.0.0"
+edition = "2024"
+
+[dependencies]
+ammonia = "4"
+anyhow = "1"
+argon2 = "0.5"
+async-stream = "0.3"
+aws-config = "1"
+aws-sdk-s3 = "1"
+axum = { version = "0.8", features = ["multipart", "macros"] }
+base64 = "0.22"
+bytes = "1"
+chrono = { version = "0.4", features = ["serde"] }
+comrak = { version = "0.48", default-features = false }
+fernet = "0.2"
+futures = "0.3"
+hex = "0.4"
+image = { version = "0.25", default-features = false, features = ["bmp", "gif", "jpeg", "png", "tiff", "webp"] }
+jsonwebtoken = "9"
+mime_guess = "2"
+rand = "0.8"
+regex = "1"
+reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "rustls-tls", "stream"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "postgres", "chrono", "uuid", "json", "migrate"] }
+thiserror = "2"
+tokio = { version = "1", features = ["full"] }
+tokio-util = { version = "0.7", features = ["io"] }
+tower-http = { version = "0.6", features = ["cors", "limit", "request-id", "trace"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+url = "2"
+uuid = { version = "1", features = ["v4", "serde"] }
+walkdir = "2"
+webp = "0.3"
+zip = { version = "4", default-features = false, features = ["deflate", "bzip2", "zstd"] }
+
+[profile.release]
+strip = true
+lto = "thin"
+codegen-units = 1

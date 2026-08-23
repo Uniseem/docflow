@@ -1,0 +1,102 @@
+name: docflow
+
+x-logging: &default_logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    logging: *default_logging
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-docflow}
+      POSTGRES_USER: ${POSTGRES_USER:-docflow}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?请在 .env 中设置 POSTGRES_PASSWORD}
+      TZ: ${TZ:-Asia/Shanghai}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-docflow} -d ${POSTGRES_DB:-docflow}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  migrate:
+    image: docflow-server:2.0.0
+    build:
+      context: ./server
+    env_file: .env
+    environment: &backend_environment
+      DATABASE_URL: postgres://${POSTGRES_USER:-docflow}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-docflow}
+      DATA_ROOT: /data
+      RUST_LOG: ${RUST_LOG:-docflow_server=info,tower_http=info}
+    command: ["migrate"]
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - documents_data:/data
+    restart: "no"
+    logging: *default_logging
+
+  api:
+    image: docflow-server:2.0.0
+    build:
+      context: ./server
+    restart: unless-stopped
+    logging: *default_logging
+    env_file: .env
+    environment: *backend_environment
+    command: ["api"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    volumes:
+      - documents_data:/data
+    healthcheck:
+      test: ["CMD", "docflow-server", "healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  worker:
+    image: docflow-server:2.0.0
+    build:
+      context: ./server
+    restart: unless-stopped
+    logging: *default_logging
+    env_file: .env
+    environment:
+      <<: *backend_environment
+      WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-3}
+    command: ["worker"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    volumes:
+      - documents_data:/data
+
+  web:
+    image: docflow-web:2.0.0
+    build:
+      context: ./frontend
+      args:
+        VITE_PUBLIC_ORIGIN: ${PUBLIC_ORIGIN:-http://185.99.135.224:8090}
+    restart: unless-stopped
+    logging: *default_logging
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "0.0.0.0:${HTTP_PORT:-8090}:80"
+    volumes:
+      - documents_data:/data:ro
+
+volumes:
+  postgres_data:
+  # 旧 Redis AOF 卷继续保留但不再挂载；升级过程不会删除历史卷。
+  redis_data:
+  documents_data:

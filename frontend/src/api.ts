@@ -1,0 +1,104 @@
+import type {
+  AdminSettings,
+  AdminStatus,
+  DocumentDetail,
+  DocumentList,
+  DocumentSummary,
+  ProcessingEventList,
+  PublicConfig,
+} from './types'
+
+const jsonHeaders = { 'Content-Type': 'application/json' }
+
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(path, init)
+  if (!response.ok) {
+    let message = `请求失败（${response.status}）`
+    try {
+      const body = await response.json()
+      message = body.detail || message
+    } catch {
+      // Keep the HTTP status fallback.
+    }
+    throw new Error(message)
+  }
+  return response.json() as Promise<T>
+}
+
+function adminHeaders(): Record<string, string> {
+  const token = localStorage.getItem('docflow-admin-token')
+  return { ...jsonHeaders, Authorization: `Bearer ${token || ''}` }
+}
+
+export const api = {
+  publicConfig: () => request<PublicConfig>('/api/config/public'),
+  listDocuments: (page = 1, pageSize = 12, query = '') =>
+    request<DocumentList>(`/api/documents?page=${page}&page_size=${pageSize}&q=${encodeURIComponent(query)}`),
+  getDocument: (id: string) => request<DocumentDetail>(`/api/documents/${id}`),
+  getDocumentEvents: (id: string, afterId = 0) =>
+    request<ProcessingEventList>(`/api/documents/${id}/events?after_id=${afterId}&limit=500`),
+  adminStatus: () => request<AdminStatus>('/api/admin/status'),
+  adminRegister: (username: string, password: string) =>
+    request<{ token: string }>('/api/admin/register', {
+      method: 'POST',
+      headers: jsonHeaders,
+      body: JSON.stringify({ username, password }),
+    }),
+  adminLogin: (username: string, password: string) =>
+    request<{ token: string }>('/api/admin/login', {
+      method: 'POST',
+      headers: jsonHeaders,
+      body: JSON.stringify({ username, password }),
+    }),
+  adminSettings: () => request<AdminSettings>('/api/admin/settings', { headers: adminHeaders() }),
+  saveMinerU: (apiKey: string, model: string) =>
+    request<AdminSettings>('/api/admin/settings/mineru', {
+      method: 'PUT',
+      headers: adminHeaders(),
+      body: JSON.stringify({ api_key: apiKey, model }),
+    }),
+  saveDeepSeek: (apiKey: string, model: string) =>
+    request<AdminSettings>('/api/admin/settings/deepseek', {
+      method: 'PUT',
+      headers: adminHeaders(),
+      body: JSON.stringify({ api_key: apiKey, model }),
+    }),
+  saveR2: (accountId: string, accessKeyId: string, secretAccessKey: string, bucket: string, publicBaseUrl: string) =>
+    request<AdminSettings>('/api/admin/settings/r2', {
+      method: 'PUT',
+      headers: adminHeaders(),
+      body: JSON.stringify({ account_id: accountId, access_key_id: accessKeyId, secret_access_key: secretAccessKey, bucket, public_base_url: publicBaseUrl }),
+    }),
+  updateDocumentNames: (id: string, title: string, displayFilename: string) =>
+    request<DocumentSummary>(`/api/admin/documents/${id}/names`, {
+      method: 'PATCH',
+      headers: adminHeaders(),
+      body: JSON.stringify({ title, display_filename: displayFilename }),
+    }),
+  streamDocumentEvents: (id: string, afterId: number, onEvent: (event: import('./types').ProcessingEvent) => void, onEnd: () => void, onError: () => void) => {
+    const source = new EventSource(`/api/v1/jobs/${id}/events/stream?after_id=${afterId}`)
+    source.addEventListener('progress', (message) => onEvent(JSON.parse((message as MessageEvent).data) as import('./types').ProcessingEvent))
+    source.addEventListener('end', () => { source.close(); onEnd() })
+    source.onerror = () => { source.close(); onError() }
+    return () => source.close()
+  },
+  uploadDocument: (file: File, title: string, translate: boolean, onProgress: (percent: number) => void) =>
+    new Promise<DocumentSummary>((resolve, reject) => {
+      const form = new FormData()
+      form.append('file', file)
+      if (title.trim()) form.append('title', title.trim())
+      form.append('translate', String(translate))
+      const xhr = new XMLHttpRequest()
+      xhr.open('POST', '/api/v1/jobs')
+      xhr.responseType = 'json'
+      xhr.upload.onprogress = (event) => {
+        if (event.lengthComputable) onProgress(Math.round((event.loaded / event.total) * 100))
+      }
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) resolve(xhr.response as DocumentSummary)
+        else reject(new Error(xhr.response?.detail || `上传失败（${xhr.status}）`))
+      }
+      xhr.onerror = () => reject(new Error('网络连接中断，请稍后重试'))
+      xhr.send(form)
+    }),
+}
