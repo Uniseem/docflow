@@ -281,6 +281,7 @@ fn hard_split(text: &str, limit: usize) -> Vec<String> {
     chars.chunks(limit).map(|v| v.iter().collect()).collect()
 }
 
+#[derive(Clone, Copy)]
 struct CallProgress<'a> {
     state: &'a Arc<AppState>,
     id: &'a str,
@@ -412,10 +413,7 @@ async fn call_google(
                 last = error.to_string();
                 let delay = 2u64.pow((attempt - 1).min(3));
                 append_provider_retry(
-                    state,
-                    id,
-                    current,
-                    total,
+                    progress,
                     attempt,
                     delay,
                     "Google 免费翻译连接失败",
@@ -432,10 +430,7 @@ async fn call_google(
             last = body;
             let delay = 2u64.pow((attempt - 1).min(3));
             append_provider_retry(
-                state,
-                id,
-                current,
-                total,
+                progress,
                 attempt,
                 delay,
                 &format!("Google 免费翻译返回 HTTP {status}"),
@@ -462,15 +457,18 @@ async fn call_google(
 }
 
 async fn append_provider_retry(
-    state: &Arc<AppState>,
-    id: &str,
-    current: usize,
-    total: usize,
+    progress: CallProgress<'_>,
     attempt: u32,
     delay: u64,
     reason: &str,
     detail: &str,
 ) -> Result<()> {
+    let CallProgress {
+        state,
+        id,
+        current,
+        total,
+    } = progress;
     events::append(
         &state.pool,
         id,
