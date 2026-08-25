@@ -21,7 +21,7 @@ x-backend-environment: &backend_environment
   MINERU_MAX_WAIT_SECONDS: ${MINERU_MAX_WAIT_SECONDS:-7200}
   WEBP_QUALITY: ${WEBP_QUALITY:-88}
   DATABASE_POOL_SIZE: ${DATABASE_POOL_SIZE:-20}
-  PUBLIC_ORIGIN: ${PUBLIC_ORIGIN:-http://185.99.135.224:8090}
+  PUBLIC_ORIGIN: ${PUBLIC_ORIGIN:-http://185.99.135.224:38101}
   RUST_LOG: ${RUST_LOG:-docflow_server=info,tower_http=info}
   TZ: ${TZ:-Asia/Shanghai}
 
@@ -156,7 +156,7 @@ services:
       api:
         condition: service_healthy
     ports:
-      - "0.0.0.0:${HTTP_PORT:-8090}:80"
+      - "0.0.0.0:${HTTP_PORT:-38101}:80"
     volumes:
       - type: bind
         source: ./data/documents

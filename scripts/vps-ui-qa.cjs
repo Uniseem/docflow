@@ -2,7 +2,7 @@ const fs = require('node:fs/promises')
 const path = require('node:path')
 const { chromium } = require('playwright')
 
-const baseUrl = process.argv[2] || 'http://127.0.0.1:8090'
+const baseUrl = process.argv[2] || 'http://127.0.0.1:38101'
 const outputDir = process.argv[3] || '/tmp/docflow-ui-qa'
 const executablePath = process.env.CHROMIUM_PATH
 
