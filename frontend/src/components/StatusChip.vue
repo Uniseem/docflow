@@ -13,5 +13,8 @@ const state = computed(() => ({
 </script>
 
 <template>
-  <v-chip :color="state.color" :prepend-icon="state.icon" size="small" variant="tonal">{{ state.label }}</v-chip>
+  <span class="status-chip" :class="`status-${status}`">
+    <v-icon :icon="state.icon" size="14" />
+    {{ state.label }}
+  </span>
 </template>

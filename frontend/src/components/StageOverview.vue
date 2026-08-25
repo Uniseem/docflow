@@ -36,18 +36,23 @@ function stateIcon(state: string, fallback: string) {
   if (state === 'active') return 'mdi-progress-clock'
   return fallback
 }
+
+function stateLabel(state: string) {
+  return { completed: '完成', active: '进行中', failed: '失败', pending: '等待' }[state] || state
+}
 </script>
 
 <template>
-  <div class="stage-overview">
-    <div v-for="(stage, index) in stages" :key="stage.title" class="stage-cell" :class="`is-${stageState(stage)}`">
-      <div class="stage-cell__head">
-        <span class="stage-cell__index">{{ index + 1 }}</span>
-        <v-icon :icon="stateIcon(stageState(stage), stage.icon)" size="20" />
-      </div>
-      <strong>{{ stage.title }}</strong>
-      <small>{{ stage.caption }}</small>
-      <div class="stage-cell__range">{{ stage.start === stage.end ? `${stage.end}%` : `${stage.start}–${stage.end}%` }}</div>
+  <div class="stage-list" role="list" aria-label="文档处理阶段">
+    <div v-for="(stage, index) in stages" :key="stage.title" class="stage-row" :class="`is-${stageState(stage)}`" role="listitem">
+      <span class="stage-row__marker">
+        <v-icon :icon="stateIcon(stageState(stage), stage.icon)" size="16" />
+      </span>
+      <span class="stage-row__copy">
+        <span class="stage-row__title"><b>{{ index + 1 }}. {{ stage.title }}</b><small>{{ stateLabel(stageState(stage)) }}</small></span>
+        <span class="stage-row__caption">{{ stage.caption }}</span>
+      </span>
+      <span class="stage-row__range">{{ stage.start === stage.end ? `${stage.end}%` : `${stage.start}–${stage.end}%` }}</span>
     </div>
   </div>
 </template>
