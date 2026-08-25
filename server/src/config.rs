@@ -42,7 +42,7 @@ impl Config {
             webp_quality: parsed("WEBP_QUALITY", 86)?,
             worker_concurrency: parsed("WORKER_CONCURRENCY", 3)?,
             public_origin: env::var("PUBLIC_ORIGIN")
-                .unwrap_or_else(|_| "http://185.99.135.224:8090".into())
+                .unwrap_or_else(|_| "http://185.99.135.224:38101".into())
                 .trim_end_matches('/')
                 .to_string(),
         })
