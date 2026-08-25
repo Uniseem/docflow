@@ -1,9 +1,10 @@
 import { createRouter, createWebHistory } from 'vue-router'
 
-import AdminView from './views/AdminView.vue'
-import DocumentView from './views/DocumentView.vue'
 import HomeView from './views/HomeView.vue'
-import LibraryView from './views/LibraryView.vue'
+
+const AdminView = () => import('./views/AdminView.vue')
+const DocumentView = () => import('./views/DocumentView.vue')
+const LibraryView = () => import('./views/LibraryView.vue')
 
 export default createRouter({
   history: createWebHistory(),
@@ -16,4 +17,3 @@ export default createRouter({
     { path: '/:pathMatch(.*)*', redirect: '/' },
   ],
 })
-

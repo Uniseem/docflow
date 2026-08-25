@@ -80,24 +80,21 @@ function counterText(event: ProcessingEvent) {
 </script>
 
 <template>
-  <section class="event-panel">
-    <div class="event-panel__head">
+  <section class="timeline-panel">
+    <div class="timeline-panel__head">
       <div>
-        <div class="d-flex align-center ga-2">
-          <h2 class="text-h6 font-weight-bold">详细处理记录</h2>
+        <div class="timeline-title-line">
+          <h2>详细处理记录</h2>
           <span v-if="live" class="live-dot"><i />实时更新</span>
         </div>
-        <p class="text-caption muted mt-1">共 {{ total }} 条永久事件，最新记录显示在最上方</p>
+        <p>共 {{ total }} 条永久事件，最新记录在最上方</p>
       </div>
-      <v-chip size="small" variant="tonal" prepend-icon="mdi-database-clock-outline">已持久化</v-chip>
+      <span class="persisted-mark"><v-icon icon="mdi-database-check-outline" size="15" />已保存</span>
     </div>
 
     <div v-if="visibleEvents.length" class="event-list">
       <article v-for="event in visibleEvents" :key="event.id" class="event-row" :class="`event-${event.level}`">
-        <div class="event-row__rail">
-          <span class="event-dot" :class="`text-${eventColor(event)}`"><v-icon :icon="eventIcon(event)" size="15" /></span>
-          <span class="event-line" />
-        </div>
+        <span class="event-dot" :class="`text-${eventColor(event)}`"><v-icon :icon="eventIcon(event)" size="13" /></span>
         <div class="event-row__body">
           <div class="event-row__meta">
             <span class="event-stage">{{ stageLabels[event.stage] || event.stage }}</span>
@@ -113,13 +110,12 @@ function counterText(event: ProcessingEvent) {
         </div>
       </article>
     </div>
-    <v-alert v-else type="info" variant="tonal">正在等待第一条后台处理记录。</v-alert>
+    <div v-else class="event-empty">正在等待第一条后台处理记录。</div>
 
     <v-btn
       v-if="events.length > 200"
       block
-      variant="tonal"
-      color="secondary"
+      variant="text"
       class="mt-4"
       :prepend-icon="showAll ? 'mdi-chevron-up' : 'mdi-format-list-bulleted-square'"
       @click="showAll = !showAll"

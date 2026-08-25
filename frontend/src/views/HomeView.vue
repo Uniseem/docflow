@@ -69,88 +69,103 @@ onMounted(async () => {
 </script>
 
 <template>
-  <v-container>
-    <header class="home-intro">
-      <div class="eyebrow mb-3">公开文档处理服务</div>
-      <h1 class="page-title mb-3">文档解析与中文翻译</h1>
-      <p class="muted">提交 PDF、Office 文档、图片或 HTML。系统在后台完成 MinerU 解析、图片 WebP 转换、分块翻译和 Markdown 规范化，结果默认公开。</p>
-      <div class="system-strip">
-        <span><v-icon icon="mdi-eye-outline" size="16" />所有结果公开</span>
-        <span><v-icon icon="mdi-harddisk" size="16" />本地永久归档</span>
-        <span><v-icon icon="mdi-folder-zip-outline" size="16" />完整归档一键打包</span>
-        <span><v-icon icon="mdi-cloud-outline" size="16" />R2 可选镜像</span>
+  <v-container class="home-shell">
+    <header class="page-heading home-heading">
+      <div>
+        <h1>上传文档</h1>
+        <p>解析、翻译并整理为可直接阅读和下载的标准文档。</p>
+      </div>
+      <div class="service-status" :class="{ 'is-ready': config?.accepting_uploads }">
+        <span class="service-status__dot" />
+        {{ config?.accepting_uploads ? '服务正常' : '服务未就绪' }}
       </div>
     </header>
 
-    <v-card class="workspace-card">
-      <div class="workspace-grid">
-        <main class="upload-area">
-          <div class="d-flex align-center justify-space-between mb-5">
-            <div>
-              <h2 class="text-h6 font-weight-bold">提交文档</h2>
-              <p class="text-caption muted mt-1">单文件最大 {{ config?.max_upload_mb || 200 }} MB</p>
-            </div>
-            <v-chip :color="config?.accepting_uploads ? 'success' : 'warning'" size="small" variant="tonal">
-              {{ config?.accepting_uploads ? '服务可用' : '等待配置' }}
-            </v-chip>
-          </div>
-          <v-alert v-if="config && !config.mineru_configured" type="warning" variant="tonal" density="compact" class="mb-4">管理员尚未配置 MinerU，当前不能创建任务。</v-alert>
-          <v-alert v-else-if="config && !config.r2_configured" type="info" variant="tonal" density="compact" class="mb-4">当前使用 VPS 本地永久归档；R2 未配置不会影响上传或处理。</v-alert>
-          <div
-            class="drop-zone"
-            :class="{ 'is-dragging': dragging }"
-            role="button"
-            tabindex="0"
-            @click="fileInput?.click()"
-            @keydown.enter="fileInput?.click()"
-            @dragover.prevent="dragging = true"
-            @dragleave.prevent="dragging = false"
-            @drop.prevent="handleDrop"
-          >
-            <input ref="fileInput" hidden type="file" :accept="config?.accepted_extensions.join(',')" @change="chooseFile(($event.target as HTMLInputElement).files?.[0])">
-            <div v-if="!file">
-              <div class="drop-icon"><v-icon icon="mdi-tray-arrow-up" size="26" /></div>
-              <h3 class="text-subtitle-1 font-weight-bold mb-1">拖入文件，或点击选择</h3>
-              <p class="text-caption muted">PDF · Word · PowerPoint · Excel · 图片 · HTML</p>
-            </div>
-            <div v-else class="selected-file">
-              <v-icon icon="mdi-file-check-outline" color="success" size="25" />
-              <div>
-                <div class="selected-file__name">{{ file.name }}</div>
-                <div class="text-caption muted mt-1">{{ formatSize(file.size) }} · 点击可更换</div>
-              </div>
-            </div>
-          </div>
-          <v-text-field v-if="file" v-model="title" class="mt-4" label="公开展示标题" hint="只写入数据库，不作为服务器物理文件名" persistent-hint maxlength="512" />
-          <v-alert v-if="error" type="error" variant="tonal" density="compact" class="mt-4">{{ error }}</v-alert>
-          <v-progress-linear v-if="uploading" :model-value="uploadProgress" color="primary" height="6" class="mt-5" />
-        </main>
+    <v-alert v-if="config && !config.mineru_configured" type="warning" variant="tonal" density="compact" class="mb-4">MinerU 尚未配置，当前不能提交文档。</v-alert>
 
-        <aside class="upload-side">
-          <div class="side-row">
-            <strong>中文翻译</strong>
-            <small>DeepSeek 按段调用；公式、代码、图片和链接先做无损保护。</small>
-            <v-switch v-model="translate" color="primary" density="compact" hide-details :disabled="!config?.translation_available" label="翻译为简体中文" class="mt-2" />
+    <section class="upload-panel">
+      <main class="upload-main">
+        <div class="panel-title-row">
+          <div>
+            <h2>选择文件</h2>
+            <p>支持 PDF、Word、PowerPoint、Excel、图片和 HTML，最大 {{ config?.max_upload_mb || 200 }} MB</p>
           </div>
-          <div class="side-row">
-            <strong>文件命名</strong>
-            <small>展示标题和下载名保存在数据库；磁盘使用 UUID 目录与固定 ASCII 文件名，避免中文编码问题。</small>
+          <span class="step-number">01</span>
+        </div>
+
+        <div
+          class="drop-zone"
+          :class="{ 'is-dragging': dragging, 'has-file': file }"
+          role="button"
+          tabindex="0"
+          @click="fileInput?.click()"
+          @keydown.enter="fileInput?.click()"
+          @keydown.space.prevent="fileInput?.click()"
+          @dragover.prevent="dragging = true"
+          @dragleave.prevent="dragging = false"
+          @drop.prevent="handleDrop"
+        >
+          <input ref="fileInput" hidden type="file" :accept="config?.accepted_extensions.join(',')" @change="chooseFile(($event.target as HTMLInputElement).files?.[0])">
+          <template v-if="!file">
+            <span class="drop-icon"><v-icon icon="mdi-tray-arrow-up" size="23" /></span>
+            <div>
+              <strong>拖放文件到这里</strong>
+              <span>或点击浏览本地文件</span>
+            </div>
+            <v-btn variant="outlined" size="small" tabindex="-1">选择文件</v-btn>
+          </template>
+          <template v-else>
+            <span class="file-type-icon"><v-icon icon="mdi-file-document-outline" size="23" /></span>
+            <div class="selected-file-copy">
+              <strong>{{ file.name }}</strong>
+              <span>{{ formatSize(file.size) }} · 点击可更换</span>
+            </div>
+            <v-icon icon="mdi-check-circle" color="success" size="22" />
+          </template>
+        </div>
+
+        <v-text-field v-if="file" v-model="title" class="title-field" label="公开展示标题" hint="可以使用中文；服务器实际文件名始终使用安全编码" persistent-hint maxlength="512" />
+        <v-alert v-if="error" type="error" variant="tonal" density="compact" class="mt-4">{{ error }}</v-alert>
+        <div v-if="uploading" class="upload-progress">
+          <div><span>正在上传源文件</span><strong>{{ uploadProgress }}%</strong></div>
+          <v-progress-linear :model-value="uploadProgress" color="primary" height="5" rounded />
+        </div>
+      </main>
+
+      <aside class="upload-options">
+        <div class="panel-title-row">
+          <div>
+            <h2>处理选项</h2>
+            <p>提交后可离开页面，任务会继续运行</p>
           </div>
-          <div class="side-row">
-            <strong>数据策略</strong>
-            <small>源文件先永久落盘，随后补齐 Markdown、HTML、WebP、MinerU 结果与事件清单；R2 只作可选镜像。</small>
-          </div>
-          <v-btn block color="primary" size="large" class="mt-5" :disabled="!file || !config?.accepting_uploads" :loading="uploading" @click="submit">
-            {{ uploading ? `上传 ${uploadProgress}%` : '创建处理任务' }}
-          </v-btn>
-        </aside>
-      </div>
-    </v-card>
+          <span class="step-number">02</span>
+        </div>
+
+        <label class="option-row" :class="{ 'is-disabled': !config?.translation_available }">
+          <span class="option-icon"><v-icon icon="mdi-translate" size="19" /></span>
+          <span class="option-copy">
+            <strong>翻译为简体中文</strong>
+            <small>{{ config?.translation_available ? '按段翻译并保护公式、代码和链接' : '管理员尚未配置 DeepSeek' }}</small>
+          </span>
+          <v-switch v-model="translate" color="primary" density="compact" hide-details :disabled="!config?.translation_available" aria-label="翻译为简体中文" />
+        </label>
+
+        <div class="processing-notes">
+          <div><v-icon icon="mdi-eye-outline" size="17" /><span><strong>默认公开</strong><small>处理记录和结果对所有访问者可见</small></span></div>
+          <div><v-icon icon="mdi-harddisk" size="17" /><span><strong>永久保存</strong><small>源文件、Markdown 和 WebP 保存在本机</small></span></div>
+          <div><v-icon icon="mdi-progress-clock" size="17" /><span><strong>详细进度</strong><small>每个解析、翻译和归档步骤实时更新</small></span></div>
+        </div>
+
+        <v-btn block color="primary" size="large" :disabled="!file || !config?.accepting_uploads" :loading="uploading" @click="submit">
+          {{ uploading ? `正在上传 ${uploadProgress}%` : '开始处理' }}
+        </v-btn>
+      </aside>
+    </section>
 
     <section v-if="recent.length" class="recent-section">
-      <div class="d-flex align-center justify-space-between mb-4">
-        <div><div class="eyebrow mb-2">最近任务</div><h2 class="section-title">公开处理记录</h2></div>
-        <v-btn to="/library" variant="text" append-icon="mdi-arrow-right">全部文档</v-btn>
+      <div class="section-heading">
+        <div><h2>最近提交</h2><p>最新的公开处理记录</p></div>
+        <v-btn to="/library" variant="text" append-icon="mdi-arrow-right" size="small">查看全部</v-btn>
       </div>
       <div class="document-list"><DocumentCard v-for="document in recent" :key="document.id" :document="document" /></div>
     </section>

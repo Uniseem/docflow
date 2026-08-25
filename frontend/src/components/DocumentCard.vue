@@ -1,10 +1,34 @@
 <script setup lang="ts">
+import { computed } from 'vue'
+
 import type { DocumentSummary } from '../types'
 import StatusChip from './StatusChip.vue'
 
-defineProps<{ document: DocumentSummary }>()
+const props = defineProps<{ document: DocumentSummary }>()
 
-const formatDate = (value: string) => new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium' }).format(new Date(value))
+const active = computed(() => ['processing', 'queued', 'retrying'].includes(props.document.status))
+const formatDate = (value: string) => new Intl.DateTimeFormat('zh-CN', { month: '2-digit', day: '2-digit', year: 'numeric' }).format(new Date(value))
 const formatSize = (bytes: number) => bytes < 1048576 ? `${(bytes / 1024).toFixed(0)} KB` : `${(bytes / 1048576).toFixed(1)} MB`
 </script>
-<template><v-card class="document-card" :to="`/documents/${document.id}`"><div class="document-primary"><div class="document-title">{{ document.title }}</div><div class="document-excerpt">{{ document.excerpt||(document.status==='failed'?document.failure_reason:`${document.display_filename} · ${document.progress}%`) }}</div><v-progress-linear v-if="['processing','queued','retrying'].includes(document.status)" :model-value="document.progress" color="primary" height="2" class="mt-2" /></div><div class="document-status"><span class="document-cell-label">状态</span><StatusChip :status="document.status" /></div><div class="document-date"><span class="document-cell-label">创建时间</span><div class="document-meta-value">{{ formatDate(document.created_at) }}</div></div><div class="document-size"><span class="document-cell-label">大小</span><div class="document-meta-value">{{ formatSize(document.source_size) }}</div></div></v-card></template>
+
+<template>
+  <router-link class="document-row" :to="`/documents/${document.id}`">
+    <span class="document-row__icon"><v-icon icon="mdi-file-document-outline" size="20" /></span>
+    <span class="document-row__main">
+      <span class="document-row__title-line">
+        <strong>{{ document.title }}</strong>
+        <span v-if="document.translated" class="translation-mark">中文</span>
+      </span>
+      <span class="document-row__excerpt">{{ document.excerpt || (document.status === 'failed' ? document.failure_reason : document.display_filename) }}</span>
+      <span class="document-row__mobile-meta">{{ formatDate(document.created_at) }} · {{ formatSize(document.source_size) }}</span>
+      <v-progress-linear v-if="active" :model-value="document.progress" color="primary" height="3" rounded class="document-row__progress" />
+    </span>
+    <span class="document-row__status">
+      <StatusChip :status="document.status" />
+      <small v-if="active">{{ document.progress }}%</small>
+    </span>
+    <span class="document-row__meta">{{ formatDate(document.created_at) }}</span>
+    <span class="document-row__meta">{{ formatSize(document.source_size) }}</span>
+    <v-icon class="document-row__arrow" icon="mdi-chevron-right" size="19" />
+  </router-link>
+</template>
