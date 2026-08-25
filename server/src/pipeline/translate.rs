@@ -412,14 +412,8 @@ async fn call_google(
             Err(error) => {
                 last = error.to_string();
                 let delay = 2u64.pow((attempt - 1).min(3));
-                append_provider_retry(
-                    progress,
-                    attempt,
-                    delay,
-                    "Google 免费翻译连接失败",
-                    &last,
-                )
-                .await?;
+                append_provider_retry(progress, attempt, delay, "Google 免费翻译连接失败", &last)
+                    .await?;
                 tokio::time::sleep(Duration::from_secs(delay)).await;
                 continue;
             }
