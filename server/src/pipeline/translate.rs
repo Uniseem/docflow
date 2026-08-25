@@ -384,12 +384,6 @@ async fn call_google(
     content: &str,
     progress: CallProgress<'_>,
 ) -> Result<String> {
-    let CallProgress {
-        state,
-        id,
-        current,
-        total,
-    } = progress;
     let mut last = String::new();
     for attempt in 1u32..=4 {
         let response = client
