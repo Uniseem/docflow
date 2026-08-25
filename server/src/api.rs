@@ -961,7 +961,7 @@ async fn create_document(
             "所选第 2–4 档需要管理员先配置并验证 DeepSeek API Key 与模型",
         ));
     }
-    let translation_tier = requested_translation_tier.unwrap_or_else(|| {
+    let translation_tier = requested_translation_tier.unwrap_or({
         if configured_tier > 1 && !deepseek_ready {
             1
         } else {
