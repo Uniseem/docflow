@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 
 import { api } from '../api'
@@ -15,7 +15,9 @@ const dragging = ref(false)
 const uploading = ref(false)
 const uploadProgress = ref(0)
 const error = ref('')
+const translationNotice = ref('')
 const fileInput = ref<HTMLInputElement | null>(null)
+const selectedTranslationTier = ref<1 | 2 | 3 | 4>(1)
 
 const translationTiers = [
   { tier: 1, name: '极速', engine: 'Google', detail: '免费分块直译', icon: 'mdi-flash-outline' },
@@ -23,6 +25,8 @@ const translationTiers = [
   { tier: 3, name: '精细', engine: 'DeepSeek', detail: '先速览全文再翻译', icon: 'mdi-book-open-page-variant-outline' },
   { tier: 4, name: 'Agent', engine: 'DeepSeek', detail: '通读全文后逐段翻译', icon: 'mdi-robot-outline' },
 ] as const
+
+const selectedTier = computed(() => translationTiers.find((item) => item.tier === selectedTranslationTier.value) || translationTiers[0])
 
 const formatSize = (bytes: number) => bytes < 1048576 ? `${(bytes / 1024).toFixed(0)} KB` : `${(bytes / 1048576).toFixed(1)} MB`
 
@@ -47,13 +51,22 @@ function handleDrop(event: DragEvent) {
   chooseFile(event.dataTransfer?.files?.[0])
 }
 
+function selectTranslationTier(tier: 1 | 2 | 3 | 4) {
+  if (tier > 1 && !config.value?.deepseek_configured) {
+    translationNotice.value = '第 2–4 档需要管理员先在后台配置并验证 DeepSeek。'
+    return
+  }
+  selectedTranslationTier.value = tier
+  translationNotice.value = ''
+}
+
 async function submit() {
   if (!file.value || uploading.value || !config.value?.accepting_uploads) return
   error.value = ''
   uploading.value = true
   uploadProgress.value = 0
   try {
-    const document = await api.uploadDocument(file.value, title.value, (value) => { uploadProgress.value = value })
+    const document = await api.uploadDocument(file.value, title.value, selectedTranslationTier.value, (value) => { uploadProgress.value = value })
     await router.push(`/documents/${document.id}`)
   } catch (reason) {
     error.value = reason instanceof Error ? reason.message : '上传失败'
@@ -66,6 +79,7 @@ onMounted(async () => {
   try {
     const [cfg, documents] = await Promise.all([api.publicConfig(), api.listDocuments(1, 5)])
     config.value = cfg
+    selectedTranslationTier.value = cfg.translation_tier
     recent.value = documents.items
   } catch (reason) {
     error.value = reason instanceof Error ? reason.message : '服务暂不可用'
@@ -148,23 +162,42 @@ onMounted(async () => {
 
         <div class="translation-tier-summary">
           <div class="translation-tier-summary__head">
-            <span><strong>自动翻译为简体中文</strong><small>管理员全站统一设置，任务提交时固定档位</small></span>
-            <span class="option-fixed">第 {{ config?.translation_tier || 1 }} 档</span>
+            <span><strong>选择翻译质量</strong><small>管理员设置默认值，你可以为本次任务切换</small></span>
+            <span class="option-fixed">本次第 {{ selectedTranslationTier }} 档</span>
           </div>
-          <div class="translation-tier-track">
-            <div
+          <div class="translation-tier-track" role="radiogroup" aria-label="本次任务翻译质量">
+            <button
               v-for="item in translationTiers"
               :key="item.tier"
+              type="button"
               class="translation-tier-step"
-              :class="{ 'is-active': item.tier === (config?.translation_tier || 1), 'is-unavailable': item.tier > 1 && !config?.deepseek_configured }"
+              :class="{
+                'is-active': item.tier === selectedTranslationTier,
+                'is-default': item.tier === (config?.translation_tier || 1),
+                'is-unavailable': item.tier > 1 && !config?.deepseek_configured,
+              }"
+              role="radio"
+              :aria-checked="item.tier === selectedTranslationTier"
+              :aria-disabled="item.tier > 1 && !config?.deepseek_configured"
+              @click="selectTranslationTier(item.tier)"
             >
-              <span><v-icon :icon="item.icon" size="16" /></span>
-              <b>{{ item.name }}</b>
-              <small>{{ item.engine }}</small>
+              <span class="translation-tier-step__top">
+                <span class="translation-tier-step__icon"><v-icon :icon="item.icon" size="20" /></span>
+                <span class="translation-tier-step__number">0{{ item.tier }}</span>
+              </span>
+              <span class="translation-tier-step__title"><b>{{ item.name }}</b><small>{{ item.engine }}</small></span>
               <em>{{ item.detail }}</em>
-            </div>
+              <span class="translation-tier-step__state">
+                <template v-if="item.tier === selectedTranslationTier"><v-icon icon="mdi-check-circle" size="15" />本次选择</template>
+                <template v-else-if="item.tier > 1 && !config?.deepseek_configured"><v-icon icon="mdi-lock-outline" size="14" />尚未开放</template>
+                <template v-else-if="item.tier === config?.translation_tier">管理员默认</template>
+                <template v-else>点击选择</template>
+              </span>
+            </button>
           </div>
-          <p v-if="!config?.deepseek_configured" class="translation-tier-note">DeepSeek 尚未由管理员配置，因此当前仅开放极速档。</p>
+          <p v-if="translationNotice" class="translation-tier-note">{{ translationNotice }}</p>
+          <p v-else-if="!config?.deepseek_configured" class="translation-tier-note">当前仅开放第 1 档；配置 DeepSeek 后会开放第 2–4 档。</p>
+          <p v-else class="translation-tier-note is-ready">已选择“{{ selectedTier.name }}”；提交后任务将固定使用第 {{ selectedTranslationTier }} 档。</p>
         </div>
 
         <div class="processing-notes">
@@ -174,7 +207,7 @@ onMounted(async () => {
         </div>
 
         <v-btn block color="primary" size="large" :disabled="!file || !config?.accepting_uploads" :loading="uploading" @click="submit">
-          {{ uploading ? `正在上传 ${uploadProgress}%` : '开始处理' }}
+          {{ uploading ? `正在上传 ${uploadProgress}%` : `以第 ${selectedTranslationTier} 档开始处理` }}
         </v-btn>
       </aside>
     </section>
