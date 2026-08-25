@@ -4,6 +4,22 @@ import { computed, onMounted, ref } from 'vue'
 import { api } from '../api'
 import type { AdminSettings, DocumentSummary } from '../types'
 
+type TranslationTier = 1 | 2 | 3 | 4
+
+const translationTiers: Array<{
+  tier: TranslationTier
+  name: string
+  engine: string
+  description: string
+  meta: string
+  icon: string
+}> = [
+  { tier: 1, name: '极速', engine: 'Google', description: '免费分块直译，适合快速获取中文内容。', meta: '最快 · 免费', icon: 'mdi-flash-outline' },
+  { tier: 2, name: '标准', engine: 'DeepSeek', description: '大模型分块翻译，表达更自然，术语处理更稳。', meta: '较快 · 按量计费', icon: 'mdi-translate' },
+  { tier: 3, name: '精细', engine: 'DeepSeek', description: '先速览全文并生成统一约束，再逐块执行翻译。', meta: '较慢 · 全文一致', icon: 'mdi-book-open-page-variant-outline' },
+  { tier: 4, name: 'Agent', engine: 'DeepSeek', description: '通读全文建立蓝图，携带前后文逐段翻译。', meta: '最慢 · 质量最高', icon: 'mdi-robot-outline' },
+]
+
 const token = ref(localStorage.getItem('docflow-admin-token') || '')
 const initialized = ref<boolean | null>(null)
 const username = ref('')
@@ -14,7 +30,7 @@ const mineruKey = ref('')
 const mineruModel = ref('vlm')
 const deepseekKey = ref('')
 const deepseekModel = ref('deepseek-v4-flash')
-const translationTier = ref<1 | 2 | 3 | 4>(1)
+const translationTier = ref<TranslationTier>(1)
 const r2AccountId = ref('')
 const r2AccessKeyId = ref('')
 const r2SecretAccessKey = ref('')
@@ -28,6 +44,7 @@ const renameFilename = ref('')
 const loading = ref(false)
 const message = ref('')
 const error = ref('')
+const hasPendingTranslationTier = computed(() => Boolean(settings.value && translationTier.value !== settings.value.translation_tier))
 
 const filteredDocuments = computed(() => {
   const query = documentQuery.value.trim().toLocaleLowerCase()
@@ -121,10 +138,22 @@ async function saveDeepSeek() {
   } finally { loading.value = false }
 }
 
+function selectTranslationTier(tier: TranslationTier) {
+  if (tier > 1 && !settings.value?.deepseek_configured) {
+    error.value = '第 2–4 档需要先在下方配置并验证 DeepSeek API Key 与模型。'
+    document.querySelector('#deepseek')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    return
+  }
+  error.value = ''
+  message.value = ''
+  translationTier.value = tier
+}
+
 async function saveTranslator() {
   error.value = ''; message.value = ''; loading.value = true
   try {
     settings.value = await api.saveTranslationTier(translationTier.value)
+    translationTier.value = settings.value.translation_tier
     message.value = `全站翻译质量已切换为第 ${translationTier.value} 档；已进入队列的任务继续使用创建时记录的档位。`
   } catch (reason) {
     error.value = reason instanceof Error ? reason.message : '保存失败'
@@ -255,31 +284,51 @@ onMounted(async () => {
           </section>
 
           <section id="translation" class="settings-section">
-            <header><div><h2>全站翻译质量</h2><p>所有新任务统一翻译为简体中文，前台只展示当前档位，不能自行切换。</p></div><span class="setting-state is-ok">第 {{ settings.translation_tier }} 档</span></header>
-            <div class="provider-picker">
-              <button type="button" :class="{ 'is-selected': translationTier === 1 }" @click="translationTier = 1">
-                <v-icon icon="mdi-flash-outline" size="20" />
-                <span><b>第 1 档 · 极速</b><small>Google 免费翻译；分块直译，速度最快，无需 DeepSeek</small></span>
-                <v-icon :icon="translationTier === 1 ? 'mdi-radiobox-marked' : 'mdi-radiobox-blank'" size="18" />
-              </button>
-              <button type="button" :disabled="!settings.deepseek_configured" :class="{ 'is-selected': translationTier === 2 }" @click="translationTier = 2">
-                <v-icon icon="mdi-translate" size="20" />
-                <span><b>第 2 档 · 标准</b><small>DeepSeek 分块直译；比 Google 更自然</small></span>
-                <v-icon :icon="translationTier === 2 ? 'mdi-radiobox-marked' : 'mdi-radiobox-blank'" size="18" />
-              </button>
-              <button type="button" :disabled="!settings.deepseek_configured" :class="{ 'is-selected': translationTier === 3 }" @click="translationTier = 3">
-                <v-icon icon="mdi-book-open-page-variant-outline" size="20" />
-                <span><b>第 3 档 · 精细</b><small>DeepSeek 先速览全文，生成统一约束后再分块翻译</small></span>
-                <v-icon :icon="translationTier === 3 ? 'mdi-radiobox-marked' : 'mdi-radiobox-blank'" size="18" />
-              </button>
-              <button type="button" :disabled="!settings.deepseek_configured" :class="{ 'is-selected': translationTier === 4 }" @click="translationTier = 4">
-                <v-icon icon="mdi-robot-outline" size="20" />
-                <span><b>第 4 档 · Agent</b><small>通读全文建立蓝图，携带前后文记忆逐段翻译；最慢最精细</small></span>
-                <v-icon :icon="translationTier === 4 ? 'mdi-radiobox-marked' : 'mdi-radiobox-blank'" size="18" />
+            <header><div><h2>全站翻译质量</h2><p>点击档位卡进行选择，再保存应用到之后创建的所有任务。</p></div><span class="setting-state is-ok">当前生效：第 {{ settings.translation_tier }} 档</span></header>
+            <div class="translation-quality-grid" role="radiogroup" aria-label="全站翻译质量档位">
+              <button
+                v-for="tier in translationTiers"
+                :key="tier.tier"
+                type="button"
+                class="translation-quality-card"
+                :class="{
+                  'is-selected': translationTier === tier.tier,
+                  'is-current': settings.translation_tier === tier.tier,
+                  'is-unavailable': tier.tier > 1 && !settings.deepseek_configured,
+                }"
+                role="radio"
+                :aria-checked="translationTier === tier.tier"
+                :aria-disabled="tier.tier > 1 && !settings.deepseek_configured"
+                @click="selectTranslationTier(tier.tier)"
+              >
+                <span class="translation-quality-card__top">
+                  <span class="translation-quality-card__number">0{{ tier.tier }}</span>
+                  <span class="translation-quality-card__engine">{{ tier.engine }}</span>
+                  <v-icon v-if="translationTier === tier.tier" icon="mdi-check-circle" size="22" />
+                  <v-icon v-else icon="mdi-circle-outline" size="22" />
+                </span>
+                <span class="translation-quality-card__body">
+                  <span class="translation-quality-card__icon"><v-icon :icon="tier.icon" size="25" /></span>
+                  <span><b>{{ tier.name }}</b><small>{{ tier.description }}</small></span>
+                </span>
+                <span class="translation-quality-card__footer">
+                  <span>{{ tier.meta }}</span>
+                  <em v-if="settings.translation_tier === tier.tier">当前档位</em>
+                  <em v-else-if="tier.tier > 1 && !settings.deepseek_configured">需要 DeepSeek</em>
+                  <em v-else>可选择</em>
+                </span>
               </button>
             </div>
-            <p class="section-help">档位会在任务创建时固定写入数据库。第 3–4 档会永久保存全文速览约束；切换不会改变正在处理或已经完成的文档。</p>
-            <div class="form-actions"><v-btn color="primary" :loading="loading" :disabled="translationTier === settings.translation_tier" @click="saveTranslator">保存全站翻译档位</v-btn></div>
+            <div class="translation-save-bar" :class="{ 'has-change': hasPendingTranslationTier }">
+              <span>
+                <v-icon :icon="hasPendingTranslationTier ? 'mdi-alert-circle-outline' : 'mdi-check-circle-outline'" size="21" />
+                <span><b>{{ hasPendingTranslationTier ? `已选择第 ${translationTier} 档，尚未保存` : `第 ${settings.translation_tier} 档正在全站生效` }}</b><small>档位在任务创建时固定；不会改变正在处理或已完成的文档。</small></span>
+              </span>
+              <v-btn class="translation-save-button" color="primary" size="large" :loading="loading" :disabled="!hasPendingTranslationTier" @click="saveTranslator">
+                {{ hasPendingTranslationTier ? `保存并应用第 ${translationTier} 档` : '当前设置已保存' }}
+              </v-btn>
+            </div>
+            <p class="section-help">第 3–4 档会永久保存全文速览约束或 Agent 蓝图。普通用户只能看到当前档位，不能自行修改。</p>
           </section>
 
           <section id="deepseek" class="settings-section">
