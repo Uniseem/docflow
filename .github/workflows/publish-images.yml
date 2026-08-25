@@ -6,6 +6,9 @@ on:
     paths:
       - server/**
       - frontend/**
+      - scripts/verify-compose-readme.py
+      - docker-compose.yml
+      - README.md
       - .github/workflows/publish-images.yml
   workflow_dispatch:
 
@@ -18,8 +21,92 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  verify-server:
+    name: Verify server and fresh database migration
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: docflow
+          POSTGRES_USER: docflow
+          POSTGRES_PASSWORD: docflow-test-password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U docflow -d docflow"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v7
+
+      - name: Verify documented Compose
+        run: |
+          python3 scripts/verify-compose-readme.py
+          docker compose config --quiet
+
+      - name: Run Rust formatting, tests and Clippy in Docker
+        run: docker build --target test --tag docflow-server:test ./server
+
+      - name: Build migration smoke-test image
+        run: docker build --tag docflow-server:smoke ./server
+
+      - name: Migrate a completely empty PostgreSQL database
+        run: |
+          docker run --rm --network host \
+            -e DATABASE_HOST=127.0.0.1 \
+            -e DATABASE_PORT=5432 \
+            -e DATABASE_NAME=docflow \
+            -e DATABASE_USER=docflow \
+            -e DATABASE_PASSWORD=docflow-test-password \
+            -e SECRET_KEY=docflow-test-secret-key \
+            -e DATA_ROOT=/tmp/docflow \
+            docflow-server:smoke migrate
+
+          schema_ok="$(docker run --rm --network host \
+            -e PGPASSWORD=docflow-test-password \
+            postgres:17-alpine psql -h 127.0.0.1 -U docflow -d docflow -Atc \
+            "SELECT to_regclass('public.documents') IS NOT NULL
+                AND to_regclass('public.app_settings') IS NOT NULL
+                AND to_regclass('public.admin_users') IS NOT NULL
+                AND to_regclass('public.processing_events') IS NOT NULL
+                AND EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_schema='public' AND table_name='documents'
+                      AND column_name='translation_provider'
+                )
+                AND (SELECT count(*) FROM _sqlx_migrations WHERE success) = 3")"
+          test "$schema_ok" = "t"
+
+      - name: Re-run migrations without losing existing data
+        run: |
+          docker run --rm --network host \
+            -e PGPASSWORD=docflow-test-password \
+            postgres:17-alpine psql -h 127.0.0.1 -U docflow -d docflow -v ON_ERROR_STOP=1 -c \
+            "INSERT INTO app_settings(key,value,encrypted,updated_at) VALUES('migration_smoke','kept',false,NOW())"
+
+          docker run --rm --network host \
+            -e DATABASE_HOST=127.0.0.1 \
+            -e DATABASE_PORT=5432 \
+            -e DATABASE_NAME=docflow \
+            -e DATABASE_USER=docflow \
+            -e DATABASE_PASSWORD=docflow-test-password \
+            -e SECRET_KEY=docflow-test-secret-key \
+            -e DATA_ROOT=/tmp/docflow \
+            docflow-server:smoke migrate
+
+          preserved="$(docker run --rm --network host \
+            -e PGPASSWORD=docflow-test-password \
+            postgres:17-alpine psql -h 127.0.0.1 -U docflow -d docflow -Atc \
+            "SELECT value FROM app_settings WHERE key='migration_smoke'")"
+          test "$preserved" = "kept"
+
   publish:
     name: Publish ${{ matrix.name }}
+    needs: verify-server
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false

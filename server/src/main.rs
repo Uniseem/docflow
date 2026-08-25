@@ -1,4 +1,5 @@
 mod api;
+mod bootstrap;
 mod config;
 mod db;
 mod events;
@@ -50,6 +51,7 @@ async fn main() -> Result<()> {
         .context("连接 PostgreSQL 失败")?;
 
     if mode == "migrate" {
+        bootstrap::ensure_legacy_schema(&pool).await?;
         sqlx::migrate!("./migrations").run(&pool).await?;
         local_backfill::run(&pool, &config).await?;
         tracing::info!("database migrations completed");

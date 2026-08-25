@@ -65,7 +65,7 @@ GET  /api/v1/jobs/{id}/assets/{name}      本地 WebP（R2 仅作回退）
 
 ```bash
 curl -c docflow.cookies -F "file=@paper.pdf" -F "title=文档标题" \
-  http://185.99.135.224:38101/api/v1/jobs
+  http://你的服务器IP:38100/api/v1/jobs
 ```
 
 上传响应中的 Cookie 是该私有文档的访问凭证。命令行后续读取进度或下载时使用 `-b docflow.cookies`。网页会自动管理该凭证。全站始终翻译为中文，客户端提交的旧版 `translate` 字段会被兼容接收但忽略。
@@ -74,7 +74,7 @@ curl -c docflow.cookies -F "file=@paper.pdf" -F "title=文档标题" \
 
 ## VPS 一键部署
 
-默认地址：`http://185.99.135.224:38101`。VPS 只需要 Docker Engine 和 Docker Compose，不需要 Git、Rust、Node 或手工创建 `.env`。Compose 直接拉取 GHCR 公共镜像，首次启动自动生成数据库密码与实例密钥，已有密钥永不覆盖。
+默认监听所有网卡的 `38100` 端口，部署后访问 `http://你的服务器IP:38100`。VPS 只需要 Docker Engine 和 Docker Compose，不需要 Git、Rust、Node 或手工创建 `.env`。Compose 直接拉取 GHCR 公共镜像，首次启动自动生成数据库密码与实例密钥，已有密钥永不覆盖；域名、HTTPS 和反向代理由部署者按需配置。
 
 ```bash
 mkdir -p /opt/docflow && cd /opt/docflow
@@ -110,7 +110,7 @@ x-backend-environment: &backend_environment
   MINERU_MAX_WAIT_SECONDS: ${MINERU_MAX_WAIT_SECONDS:-7200}
   WEBP_QUALITY: ${WEBP_QUALITY:-88}
   DATABASE_POOL_SIZE: ${DATABASE_POOL_SIZE:-20}
-  PUBLIC_ORIGIN: ${PUBLIC_ORIGIN:-http://185.99.135.224:38101}
+  PUBLIC_ORIGIN: "${PUBLIC_ORIGIN:-}"
   RUST_LOG: ${RUST_LOG:-docflow_server=info,tower_http=info}
   TZ: ${TZ:-Asia/Shanghai}
 
@@ -188,7 +188,7 @@ services:
         source: ./data/config
         target: /run/docflow
         read_only: true
-    restart: "no"
+    restart: "on-failure:5"
     logging: *default_logging
 
   api:
@@ -245,7 +245,7 @@ services:
       api:
         condition: service_healthy
     ports:
-      - "0.0.0.0:${HTTP_PORT:-38101}:80"
+      - "0.0.0.0:${HTTP_PORT:-38100}:80"
     volumes:
       - type: bind
         source: ./data/documents
@@ -260,12 +260,13 @@ docker compose up -d
 docker compose ps
 ```
 
-默认监听端口为 `38101`。如需修改，在同目录创建 `.env`，同时设置监听端口和公开访问地址，例如：
+默认监听端口为 `38100`，无需指定服务器 IP。如需修改，只需在同目录创建 `.env`：
 
 ```dotenv
 HTTP_PORT=9000
-PUBLIC_ORIGIN=http://你的VPS公网IP:9000
 ```
+
+`PUBLIC_ORIGIN` 默认留空，OpenAPI 会使用相对地址并自动跟随当前 IP、域名或反向代理入口。如确实需要在 OpenAPI 中固定绝对地址，可另外设置 `PUBLIC_ORIGIN=https://你的域名`。
 
 运行后目录即完整实例：
 
@@ -280,7 +281,7 @@ PUBLIC_ORIGIN=http://你的VPS公网IP:9000
 
 端口等参数有默认值；如需覆盖，可在同目录创建可选 `.env`，参考仓库中的 `.env.example`。MinerU、可选 DeepSeek 和 R2 凭据始终在 `/admin` 中配置，而不是写入 Compose 或 `.env`。Google 免费翻译无需凭据。
 
-管理员访问 `http://185.99.135.224:38101/admin`：
+管理员访问 `http://你的服务器IP:38100/admin`：
 
 1. 首次注册唯一管理员；已有 Python 版本的 Argon2 密码可直接登录。
 2. 配置并验证 MinerU API Key 与模型。
@@ -295,7 +296,7 @@ Cloudflare R2 凭据应仅授予目标存储桶对象读写权限。应用没有
 ```bash
 docker compose ps
 docker compose logs -f api worker
-curl --fail http://127.0.0.1:38101/api/health
+curl --fail http://127.0.0.1:38100/api/health
 ```
 
 完整迁移或冷备份时先停服务，再打包 Compose 与整个 `data` 目录：
@@ -309,7 +310,7 @@ docker compose start
 
 在新 VPS 原样解压后执行 `docker compose up -d` 即可恢复。不要只复制 `documents`：数据库、加密凭据和文件路径映射需要作为同一实例一起迁移。R2 若已配置，只是额外镜像，不替代本地 `data` 备份。
 
-现有 Alembic 表不会重建。Rust 的 SQLx 迁移只追加字段与索引，不提供降级或删除逻辑。
+首次启动会幂等创建旧版 Alembic 基础表，再执行 Rust 的 SQLx 增量迁移；因此全新空库和旧版数据库都可直接启动。现有 SQLx 迁移文件不会改写，不会触发历史迁移 checksum 冲突。所有数据库变更均为非破坏性操作，不提供降级或删除逻辑。
 
 ## 安全边界
 

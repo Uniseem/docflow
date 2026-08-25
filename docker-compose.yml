@@ -21,7 +21,7 @@ x-backend-environment: &backend_environment
   MINERU_MAX_WAIT_SECONDS: ${MINERU_MAX_WAIT_SECONDS:-7200}
   WEBP_QUALITY: ${WEBP_QUALITY:-88}
   DATABASE_POOL_SIZE: ${DATABASE_POOL_SIZE:-20}
-  PUBLIC_ORIGIN: ${PUBLIC_ORIGIN:-http://185.99.135.224:38101}
+  PUBLIC_ORIGIN: "${PUBLIC_ORIGIN:-}"
   RUST_LOG: ${RUST_LOG:-docflow_server=info,tower_http=info}
   TZ: ${TZ:-Asia/Shanghai}
 
@@ -99,7 +99,7 @@ services:
         source: ./data/config
         target: /run/docflow
         read_only: true
-    restart: "no"
+    restart: "on-failure:5"
     logging: *default_logging
 
   api:
@@ -156,7 +156,7 @@ services:
       api:
         condition: service_healthy
     ports:
-      - "0.0.0.0:${HTTP_PORT:-38101}:80"
+      - "0.0.0.0:${HTTP_PORT:-38100}:80"
     volumes:
       - type: bind
         source: ./data/documents
