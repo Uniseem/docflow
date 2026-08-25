@@ -15,7 +15,7 @@ use sqlx::Row;
 use crate::{db::AppState, events, settings};
 
 pub async fn process(state: Arc<AppState>, id: &str) -> Result<()> {
-    let row = sqlx::query("SELECT source_path,original_filename,mime_type,translate_requested,mineru_model,mineru_task_id FROM documents WHERE id=$1")
+    let row = sqlx::query("SELECT source_path,original_filename,mime_type,translate_requested,translation_provider,mineru_model,mineru_task_id FROM documents WHERE id=$1")
         .bind(id).fetch_one(&state.pool).await?;
     let source_path: String = row.get("source_path");
     let source = Path::new("/data").join(&source_path);
@@ -74,22 +74,30 @@ pub async fn process(state: Arc<AppState>, id: &str) -> Result<()> {
 
     let translate_requested: bool = row.get("translate_requested");
     let (translated_markdown, translated) = if translate_requested {
-        let key = settings::get(
-            &state.pool,
-            &state.config.secret_key,
-            settings::DEEPSEEK_API_KEY,
-        )
-        .await?
-        .context("已选择翻译，但 DeepSeek API Key 不可用")?;
-        let model = settings::get(
-            &state.pool,
-            &state.config.secret_key,
-            settings::DEEPSEEK_MODEL,
-        )
-        .await?
-        .unwrap_or_else(|| "deepseek-chat".into());
+        let provider_name: String = row.get("translation_provider");
+        let provider = match provider_name.as_str() {
+            "google" => translate::TranslationProvider::Google,
+            "deepseek" => {
+                let api_key = settings::get(
+                    &state.pool,
+                    &state.config.secret_key,
+                    settings::DEEPSEEK_API_KEY,
+                )
+                .await?
+                .context("该任务指定了 DeepSeek，但 API Key 不可用")?;
+                let model = settings::get(
+                    &state.pool,
+                    &state.config.secret_key,
+                    settings::DEEPSEEK_MODEL,
+                )
+                .await?
+                .context("该任务指定了 DeepSeek，但模型名称不可用")?;
+                translate::TranslationProvider::DeepSeek { api_key, model }
+            }
+            other => anyhow::bail!("任务翻译服务无效：{other}"),
+        };
         (
-            translate::translate(&state, id, &extraction.localized_markdown, &key, &model).await?,
+            translate::translate(&state, id, &extraction.localized_markdown, &provider).await?,
             true,
         )
     } else {
@@ -98,8 +106,8 @@ pub async fn process(state: Arc<AppState>, id: &str) -> Result<()> {
             id,
             "translation_skipped",
             82,
-            "未选择中文翻译，跳过 DeepSeek",
-            None,
+            "历史任务未启用中文翻译",
+            Some("新任务始终使用管理员指定的全站翻译服务；该分支仅兼容旧数据"),
         )
         .await?;
         (extraction.localized_markdown.clone(), false)

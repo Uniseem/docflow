@@ -8,6 +8,7 @@ pub const MINERU_API_KEY: &str = "mineru_api_key";
 pub const MINERU_MODEL: &str = "mineru_model";
 pub const DEEPSEEK_API_KEY: &str = "deepseek_api_key";
 pub const DEEPSEEK_MODEL: &str = "deepseek_model";
+pub const TRANSLATION_PROVIDER: &str = "translation_provider";
 pub const R2_ACCOUNT_ID: &str = "r2_account_id";
 pub const R2_ACCESS_KEY_ID: &str = "r2_access_key_id";
 pub const R2_SECRET_ACCESS_KEY: &str = "r2_secret_access_key";
@@ -56,6 +57,17 @@ pub async fn configured(pool: &PgPool, secret_key: &str, key: &str) -> bool {
         .ok()
         .flatten()
         .is_some_and(|value| !value.trim().is_empty())
+}
+
+pub async fn translation_provider(pool: &PgPool, secret_key: &str) -> Result<String> {
+    Ok(match get(pool, secret_key, TRANSLATION_PROVIDER)
+        .await?
+        .as_deref()
+    {
+        Some("deepseek") => "deepseek",
+        _ => "google",
+    }
+    .to_string())
 }
 
 pub fn mask(value: Option<&str>) -> Option<String> {
@@ -117,6 +129,7 @@ pub struct AdminSettingsResponse {
     pub deepseek_configured: bool,
     pub deepseek_api_key_masked: Option<String>,
     pub deepseek_model: String,
+    pub translation_provider: String,
     pub r2_configured: bool,
     pub r2_account_id: String,
     pub r2_access_key_id_masked: Option<String>,

@@ -39,7 +39,7 @@ onMounted(load)
     <header class="page-heading library-heading">
       <div>
         <h1>公开文库</h1>
-        <p>共 {{ total }} 份文档，包含文章、原文件和完整处理记录。</p>
+        <p>共 {{ total }} 份由管理员主动公开的文档，包含文章、原文件和完整处理记录。</p>
       </div>
       <v-btn to="/" color="primary" prepend-icon="mdi-tray-arrow-up">提交文档</v-btn>
     </header>
@@ -61,8 +61,8 @@ onMounted(load)
 
     <div v-else-if="!loading" class="empty-state">
       <span class="empty-state__icon"><v-icon icon="mdi-file-search-outline" size="28" /></span>
-      <h2>{{ query ? '没有找到文档' : '还没有文档' }}</h2>
-      <p>{{ query ? '换一个关键词再试试。' : '提交第一份文档后，它会出现在这里。' }}</p>
+      <h2>{{ query ? '没有找到文档' : '还没有公开文档' }}</h2>
+      <p>{{ query ? '换一个关键词再试试。' : '新上传内容默认私有，管理员公开后才会出现在这里。' }}</p>
       <v-btn v-if="!query" to="/" color="primary" class="mt-4">提交文档</v-btn>
     </div>
 

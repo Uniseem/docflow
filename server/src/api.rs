@@ -11,7 +11,7 @@ use axum::{
     Json, Router,
     body::Body,
     extract::{DefaultBodyLimit, Multipart, Path as AxumPath, Query, State},
-    http::{HeaderValue, StatusCode, header},
+    http::{HeaderMap, HeaderValue, StatusCode, header},
     middleware,
     response::{
         Html, IntoResponse, Response, Sse,
@@ -95,11 +95,18 @@ impl From<anyhow::Error> for ApiError {
 
 pub async fn serve(state: Arc<AppState>) -> anyhow::Result<()> {
     let admin = Router::new()
+        .route("/session", post(admin_session))
         .route("/settings", get(admin_settings))
         .route("/settings/mineru", put(save_mineru))
         .route("/settings/deepseek", put(save_deepseek))
+        .route("/settings/translation", put(save_translation_provider))
         .route("/settings/r2", put(save_r2))
+        .route("/documents", get(admin_list_documents))
         .route("/documents/{id}/names", patch(update_document_names))
+        .route(
+            "/documents/{id}/visibility",
+            patch(update_document_visibility),
+        )
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             security::require_admin,
@@ -111,6 +118,7 @@ pub async fn serve(state: Arc<AppState>) -> anyhow::Result<()> {
         .route("/admin/status", get(admin_status))
         .route("/admin/register", post(admin_register))
         .route("/admin/login", post(admin_login))
+        .route("/admin/logout", post(admin_logout))
         .nest("/admin", admin)
         .route("/documents", get(list_documents).post(create_document))
         .route("/documents/{id}", get(get_document))
@@ -165,11 +173,18 @@ async fn public_config(State(state): State<Arc<AppState>>) -> Result<Json<Public
     let deepseek = settings::configured(&state.pool, secret, settings::DEEPSEEK_API_KEY).await
         && settings::configured(&state.pool, secret, settings::DEEPSEEK_MODEL).await;
     let r2 = R2Settings::load(&state.pool, secret).await?.is_some();
+    let provider = settings::translation_provider(&state.pool, secret).await?;
     Ok(Json(PublicConfig {
         app_name: state.config.app_name.clone(),
         mineru_configured: mineru,
-        translation_available: deepseek,
-        default_translate: deepseek,
+        translation_available: true,
+        default_translate: true,
+        translation_provider: if provider == "deepseek" && deepseek {
+            "deepseek".into()
+        } else {
+            "google".into()
+        },
+        documents_public_by_default: false,
         r2_configured: r2,
         accepting_uploads: mineru,
         max_upload_mb: state.config.max_upload_mb(),
@@ -202,10 +217,17 @@ fn clean_username(value: &str) -> Result<String, ApiError> {
     Ok(value.to_string())
 }
 
+fn admin_cookie(token: &str, max_age: i64) -> Result<HeaderValue, ApiError> {
+    HeaderValue::from_str(&format!(
+        "docflow_admin={token}; Path=/; HttpOnly; SameSite=Lax; Max-Age={max_age}"
+    ))
+    .map_err(ApiError::internal)
+}
+
 async fn admin_register(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<RegisterRequest>,
-) -> Result<(StatusCode, Json<TokenResponse>), ApiError> {
+) -> Result<Response, ApiError> {
     if payload.password.chars().count() < 10 {
         return Err(ApiError::bad_request("管理员密码至少需要 10 个字符"));
     }
@@ -221,13 +243,19 @@ async fn admin_register(
     }
     let token =
         security::create_token(&state.config.secret_key, &username).map_err(ApiError::internal)?;
-    Ok((StatusCode::CREATED, Json(TokenResponse { token })))
+    let cookie = admin_cookie(&token, 12 * 60 * 60)?;
+    Ok((
+        StatusCode::CREATED,
+        [(header::SET_COOKIE, cookie)],
+        Json(TokenResponse { token }),
+    )
+        .into_response())
 }
 
 async fn admin_login(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<LoginRequest>,
-) -> Result<Json<TokenResponse>, ApiError> {
+) -> Result<Response, ApiError> {
     let username = clean_username(&payload.username)?;
     let row = sqlx::query("SELECT username,password_hash FROM admin_users WHERE id=1")
         .fetch_optional(&state.pool)
@@ -242,10 +270,36 @@ async fn admin_login(
     {
         return Err(ApiError::unauthorized("管理员名称或密码错误"));
     }
-    Ok(Json(TokenResponse {
-        token: security::create_token(&state.config.secret_key, &stored)
-            .map_err(ApiError::internal)?,
-    }))
+    let token =
+        security::create_token(&state.config.secret_key, &stored).map_err(ApiError::internal)?;
+    let cookie = admin_cookie(&token, 12 * 60 * 60)?;
+    Ok((
+        [(header::SET_COOKIE, cookie)],
+        Json(TokenResponse { token }),
+    )
+        .into_response())
+}
+
+async fn admin_session(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    let token = security::admin_token(&headers)
+        .filter(|value| security::validate_token(&state.config.secret_key, value))
+        .ok_or_else(|| ApiError::unauthorized("需要有效的管理员登录"))?;
+    Ok((
+        StatusCode::NO_CONTENT,
+        [(header::SET_COOKIE, admin_cookie(&token, 12 * 60 * 60)?)],
+    )
+        .into_response())
+}
+
+async fn admin_logout() -> Result<Response, ApiError> {
+    Ok((
+        StatusCode::NO_CONTENT,
+        [(header::SET_COOKIE, admin_cookie("", 0)?)],
+    )
+        .into_response())
 }
 
 async fn load_admin_settings(state: &AppState) -> Result<AdminSettingsResponse, ApiError> {
@@ -253,6 +307,12 @@ async fn load_admin_settings(state: &AppState) -> Result<AdminSettingsResponse, 
     let secret = &state.config.secret_key;
     let mineru_key = settings::get(pool, secret, settings::MINERU_API_KEY).await?;
     let deepseek_key = settings::get(pool, secret, settings::DEEPSEEK_API_KEY).await?;
+    let deepseek_model = settings::get(pool, secret, settings::DEEPSEEK_MODEL)
+        .await?
+        .unwrap_or_else(|| "deepseek-chat".into());
+    let deepseek_configured = deepseek_key.as_ref().is_some_and(|v| !v.trim().is_empty())
+        && !deepseek_model.trim().is_empty();
+    let selected_provider = settings::translation_provider(pool, secret).await?;
     let r2_access = settings::get(pool, secret, settings::R2_ACCESS_KEY_ID).await?;
     let r2_secret = settings::get(pool, secret, settings::R2_SECRET_ACCESS_KEY).await?;
     Ok(AdminSettingsResponse {
@@ -261,11 +321,14 @@ async fn load_admin_settings(state: &AppState) -> Result<AdminSettingsResponse, 
         mineru_model: settings::get(pool, secret, settings::MINERU_MODEL)
             .await?
             .unwrap_or_else(|| "vlm".into()),
-        deepseek_configured: deepseek_key.as_ref().is_some_and(|v| !v.is_empty()),
+        deepseek_configured,
         deepseek_api_key_masked: settings::mask(deepseek_key.as_deref()),
-        deepseek_model: settings::get(pool, secret, settings::DEEPSEEK_MODEL)
-            .await?
-            .unwrap_or_else(|| "deepseek-chat".into()),
+        deepseek_model,
+        translation_provider: if selected_provider == "deepseek" && deepseek_configured {
+            "deepseek".into()
+        } else {
+            "google".into()
+        },
         r2_configured: R2Settings::load(pool, secret).await?.is_some(),
         r2_account_id: settings::get(pool, secret, settings::R2_ACCOUNT_ID)
             .await?
@@ -377,6 +440,48 @@ async fn save_deepseek(
 }
 
 #[derive(Deserialize)]
+struct TranslationProviderInput {
+    provider: String,
+}
+
+async fn save_translation_provider(
+    State(state): State<Arc<AppState>>,
+    Json(input): Json<TranslationProviderInput>,
+) -> Result<Json<AdminSettingsResponse>, ApiError> {
+    let provider = input.provider.trim().to_ascii_lowercase();
+    if !matches!(provider.as_str(), "google" | "deepseek") {
+        return Err(ApiError::bad_request("翻译服务只能选择 google 或 deepseek"));
+    }
+    if provider == "deepseek"
+        && !(settings::configured(
+            &state.pool,
+            &state.config.secret_key,
+            settings::DEEPSEEK_API_KEY,
+        )
+        .await
+            && settings::configured(
+                &state.pool,
+                &state.config.secret_key,
+                settings::DEEPSEEK_MODEL,
+            )
+            .await)
+    {
+        return Err(ApiError::bad_request(
+            "请先保存并验证 DeepSeek API Key 与模型名称",
+        ));
+    }
+    settings::set(
+        &state.pool,
+        &state.config.secret_key,
+        settings::TRANSLATION_PROVIDER,
+        &provider,
+        false,
+    )
+    .await?;
+    Ok(Json(load_admin_settings(&state).await?))
+}
+
+#[derive(Deserialize)]
 struct R2Input {
     account_id: String,
     access_key_id: String,
@@ -461,7 +566,7 @@ async fn save_r2(
 }
 
 fn document_columns() -> &'static str {
-    "id,title,original_filename,display_filename,storage_key,title_custom,source_path,source_size,mime_type,status,stage,progress,failure_reason,translate_requested,translated,mineru_task_id,mineru_model,pages_processed,pages_total,image_count,content_html,excerpt,created_at,updated_at,completed_at,markdown_original,markdown_translated,markdown_normalized,upload_sha256,queue_attempts,archive_status,archive_error,local_archive_status,local_archive_path,r2_mirror_status,r2_mirror_error,r2_prefix,source_r2_key,api_version"
+    "id,title,original_filename,display_filename,storage_key,title_custom,source_path,source_size,mime_type,status,stage,progress,failure_reason,translate_requested,translation_provider,translated,is_public,access_token_hash,mineru_task_id,mineru_model,pages_processed,pages_total,image_count,content_html,excerpt,created_at,updated_at,completed_at,markdown_original,markdown_translated,markdown_normalized,upload_sha256,queue_attempts,archive_status,archive_error,local_archive_status,local_archive_path,r2_mirror_status,r2_mirror_error,r2_prefix,source_r2_key,api_version"
 }
 
 #[derive(Deserialize)]
@@ -480,6 +585,33 @@ fn twelve() -> i64 {
     12
 }
 async fn list_documents(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<ListQuery>,
+) -> Result<Json<DocumentList>, ApiError> {
+    let page = query.page.clamp(1, 1_000_000);
+    let size = query.page_size.clamp(1, 100);
+    let pattern = format!("%{}%", query.q.trim());
+    let total: i64=sqlx::query_scalar("SELECT count(*) FROM documents WHERE is_public=true AND ($1='' OR title ILIKE $2 OR original_filename ILIKE $2 OR display_filename ILIKE $2)").bind(query.q.trim()).bind(&pattern).fetch_one(&state.pool).await?;
+    let sql = format!(
+        "SELECT {} FROM documents WHERE is_public=true AND ($1='' OR title ILIKE $2 OR original_filename ILIKE $2 OR display_filename ILIKE $2) ORDER BY created_at DESC LIMIT $3 OFFSET $4",
+        document_columns()
+    );
+    let items = sqlx::query_as::<_, Document>(&sql)
+        .bind(query.q.trim())
+        .bind(pattern)
+        .bind(size)
+        .bind((page - 1) * size)
+        .fetch_all(&state.pool)
+        .await?;
+    Ok(Json(DocumentList {
+        items,
+        total,
+        page,
+        page_size: size,
+    }))
+}
+
+async fn admin_list_documents(
     State(state): State<Arc<AppState>>,
     Query(query): Query<ListQuery>,
 ) -> Result<Json<DocumentList>, ApiError> {
@@ -515,15 +647,73 @@ async fn find_document(pool: &sqlx::PgPool, id: &str) -> Result<Document, ApiErr
         .ok_or_else(|| ApiError::not_found("文档不存在"))
 }
 
+fn document_cookie_name(id: &str) -> Result<String, ApiError> {
+    let id = Uuid::parse_str(id).map_err(|_| ApiError::not_found("文档不存在"))?;
+    Ok(format!("docflow_access_{}", id.simple()))
+}
+
+fn document_access_cookie(id: &str, token: &str) -> Result<HeaderValue, ApiError> {
+    HeaderValue::from_str(&format!(
+        "{}={token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=315360000",
+        document_cookie_name(id)?
+    ))
+    .map_err(ApiError::internal)
+}
+
+fn request_can_access_document(state: &AppState, headers: &HeaderMap, doc: &Document) -> bool {
+    doc.is_public
+        || security::request_is_admin(&state.config.secret_key, headers)
+        || doc.access_token_hash.as_deref().is_some_and(|expected| {
+            document_cookie_name(&doc.id)
+                .ok()
+                .and_then(|name| security::cookie_value(headers, &name))
+                .is_some_and(|token| security::verify_document_access_token(&token, expected))
+        })
+}
+
+async fn find_accessible_document(
+    state: &AppState,
+    headers: &HeaderMap,
+    id: &str,
+) -> Result<Document, ApiError> {
+    let doc = find_document(&state.pool, id).await?;
+    if !request_can_access_document(state, headers, &doc) {
+        return Err(ApiError::not_found("文档不存在"));
+    }
+    Ok(doc)
+}
+
 async fn get_document(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     AxumPath(id): AxumPath<String>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let doc = find_document(&state.pool, &id).await?;
+    let doc = find_accessible_document(&state, &headers, &id).await?;
     let mut value = serde_json::to_value(&doc).map_err(ApiError::internal)?;
     value["content_html"] = serde_json::to_value(&doc.content_html).unwrap();
     value["markdown_available"] = json!({"original":doc.markdown_original.is_some(),"translated":doc.markdown_translated.is_some(),"normalized":doc.markdown_normalized.is_some()});
     Ok(Json(value))
+}
+
+#[derive(Deserialize)]
+struct DocumentVisibilityInput {
+    is_public: bool,
+}
+
+async fn update_document_visibility(
+    State(state): State<Arc<AppState>>,
+    AxumPath(id): AxumPath<String>,
+    Json(input): Json<DocumentVisibilityInput>,
+) -> Result<Json<Document>, ApiError> {
+    let result = sqlx::query("UPDATE documents SET is_public=$2,updated_at=NOW() WHERE id=$1")
+        .bind(&id)
+        .bind(input.is_public)
+        .execute(&state.pool)
+        .await?;
+    if result.rows_affected() != 1 {
+        return Err(ApiError::not_found("文档不存在"));
+    }
+    Ok(Json(find_document(&state.pool, &id).await?))
 }
 
 #[derive(Deserialize)]
@@ -605,7 +795,7 @@ fn clean_filename(value: &str) -> String {
 async fn create_document(
     State(state): State<Arc<AppState>>,
     mut multipart: Multipart,
-) -> Result<(StatusCode, Json<Document>), ApiError> {
+) -> Result<Response, ApiError> {
     if !settings::configured(
         &state.pool,
         &state.config.secret_key,
@@ -625,7 +815,6 @@ async fn create_document(
     fs::create_dir_all(&source_dir)
         .await
         .map_err(ApiError::internal)?;
-    let mut translate = false;
     let mut title: Option<String> = None;
     let mut saved: Option<(String, PathBuf, u64, String, String)> = None;
     while let Some(field) = multipart
@@ -635,7 +824,8 @@ async fn create_document(
     {
         let name = field.name().unwrap_or("").to_string();
         if name == "translate" {
-            translate = field.text().await.unwrap_or_default() == "true";
+            // 兼容旧客户端，但翻译服务与是否翻译均由管理员全站统一控制。
+            let _ = field.text().await;
             continue;
         }
         if name == "title" {
@@ -715,17 +905,27 @@ async fn create_document(
         let _ = fs::remove_dir_all(&root).await;
         return Err(ApiError::bad_request("缺少文件字段"));
     };
-    if translate
-        && !settings::configured(
+    let selected_provider =
+        settings::translation_provider(&state.pool, &state.config.secret_key).await?;
+    let deepseek_ready = settings::configured(
+        &state.pool,
+        &state.config.secret_key,
+        settings::DEEPSEEK_API_KEY,
+    )
+    .await
+        && settings::configured(
             &state.pool,
             &state.config.secret_key,
-            settings::DEEPSEEK_API_KEY,
+            settings::DEEPSEEK_MODEL,
         )
-        .await
-    {
-        let _ = fs::remove_dir_all(&root).await;
-        return Err(ApiError::bad_request("当前未配置中文翻译服务"));
-    }
+        .await;
+    let translation_provider = if selected_provider == "deepseek" && deepseek_ready {
+        "deepseek"
+    } else {
+        "google"
+    };
+    let access_token = security::create_document_access_token();
+    let access_token_hash = security::hash_document_access_token(&access_token);
     let custom_title = title.as_ref().is_some_and(|value| !value.trim().is_empty());
     let display = title.filter(|v| !v.trim().is_empty()).unwrap_or_else(|| {
         Path::new(&filename)
@@ -747,7 +947,7 @@ async fn create_document(
     .await?
     .unwrap_or_else(|| "vlm".into());
     let sql = format!(
-        "INSERT INTO documents(id,title,original_filename,display_filename,storage_key,title_custom,source_path,source_size,mime_type,status,stage,progress,failure_reason,translate_requested,translated,mineru_task_id,mineru_model,pages_processed,pages_total,image_count,content_html,excerpt,created_at,updated_at,completed_at,markdown_original,markdown_translated,markdown_normalized,upload_sha256,queue_attempts,archive_status,archive_error,archive_manifest,local_archive_status,local_archive_path,r2_mirror_status,r2_mirror_error,r2_prefix,source_r2_key,article_r2_key,mineru_r2_key,api_version,queue_available_at) VALUES($1,$2,$3,$3,$4,$5,$6,$7,$8,'queued','queued',2,NULL,$9,false,NULL,$10,NULL,NULL,0,NULL,NULL,NOW(),NOW(),NULL,NULL,NULL,NULL,$11,0,'source_local',NULL,NULL,'source_saved',$12,'disabled',NULL,NULL,NULL,NULL,NULL,'v2',NOW()) RETURNING {}",
+        "INSERT INTO documents(id,title,original_filename,display_filename,storage_key,title_custom,source_path,source_size,mime_type,status,stage,progress,failure_reason,translate_requested,translation_provider,translated,is_public,access_token_hash,mineru_task_id,mineru_model,pages_processed,pages_total,image_count,content_html,excerpt,created_at,updated_at,completed_at,markdown_original,markdown_translated,markdown_normalized,upload_sha256,queue_attempts,archive_status,archive_error,archive_manifest,local_archive_status,local_archive_path,r2_mirror_status,r2_mirror_error,r2_prefix,source_r2_key,article_r2_key,mineru_r2_key,api_version,queue_available_at) VALUES($1,$2,$3,$3,$4,$5,$6,$7,$8,'queued','queued',2,NULL,true,$9,false,false,$10,NULL,$11,NULL,NULL,0,NULL,NULL,NOW(),NOW(),NULL,NULL,NULL,NULL,$12,0,'source_local',NULL,NULL,'source_saved',$13,'disabled',NULL,NULL,NULL,NULL,NULL,'v2',NOW()) RETURNING {}",
         document_columns()
     );
     let doc = sqlx::query_as::<_, Document>(&sql)
@@ -759,7 +959,8 @@ async fn create_document(
         .bind(source_path)
         .bind(size as i32)
         .bind(mime)
-        .bind(translate)
+        .bind(translation_provider)
+        .bind(access_token_hash)
         .bind(model)
         .bind(sha)
         .bind(format!("archives/{storage_key}"))
@@ -792,14 +993,25 @@ async fn create_document(
             level: "info",
             progress: 2,
             message: "任务已写入 PostgreSQL 持久队列",
-            detail: Some("并发 Worker 将使用 SKIP LOCKED 原子领取；网页关闭不会中断"),
+            detail: Some(&format!(
+                "文档默认私有；当前浏览器已取得独立访问凭证；并发 Worker 将使用 SKIP LOCKED 原子领取；全站翻译服务为 {}",
+                if translation_provider == "deepseek" { "DeepSeek" } else { "Google 免费翻译" }
+            )),
             current: None,
             total: None,
         },
     )
     .await
     .map_err(ApiError::internal)?;
-    Ok((StatusCode::ACCEPTED, Json(doc)))
+    Ok((
+        StatusCode::ACCEPTED,
+        [(
+            header::SET_COOKIE,
+            document_access_cookie(&id, &access_token)?,
+        )],
+        Json(doc),
+    )
+        .into_response())
 }
 
 #[derive(Deserialize)]
@@ -814,14 +1026,11 @@ fn five_hundred() -> i64 {
 }
 async fn list_events(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     AxumPath(id): AxumPath<String>,
     Query(q): Query<EventsQuery>,
 ) -> Result<Json<EventList>, ApiError> {
-    let _: String = sqlx::query_scalar("SELECT id FROM documents WHERE id=$1")
-        .bind(&id)
-        .fetch_optional(&state.pool)
-        .await?
-        .ok_or_else(|| ApiError::not_found("文档不存在"))?;
+    find_accessible_document(&state, &headers, &id).await?;
     let limit = q.limit.clamp(1, 1000);
     let items=sqlx::query_as::<_,ProcessingEvent>("SELECT id,document_id,stage,state,level,progress,message,detail,current,total,created_at FROM processing_events WHERE document_id=$1 AND id>$2 ORDER BY id LIMIT $3").bind(&id).bind(q.after_id).bind(limit).fetch_all(&state.pool).await?;
     let total: i64 =
@@ -847,14 +1056,11 @@ async fn list_events(
 
 async fn stream_events(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     AxumPath(id): AxumPath<String>,
     Query(q): Query<EventsQuery>,
 ) -> Result<Sse<impl futures::Stream<Item = Result<Event, Infallible>>>, ApiError> {
-    let _: String = sqlx::query_scalar("SELECT id FROM documents WHERE id=$1")
-        .bind(&id)
-        .fetch_optional(&state.pool)
-        .await?
-        .ok_or_else(|| ApiError::not_found("文档不存在"))?;
+    find_accessible_document(&state, &headers, &id).await?;
     let pool = state.pool.clone();
     let stream = async_stream::stream! {
       let mut cursor=q.after_id;
@@ -896,10 +1102,11 @@ fn normalized() -> String {
 }
 async fn get_markdown(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     AxumPath(id): AxumPath<String>,
     Query(q): Query<MarkdownQuery>,
 ) -> Result<Response, ApiError> {
-    let doc = find_document(&state.pool, &id).await?;
+    let doc = find_accessible_document(&state, &headers, &id).await?;
     let text = match q.variant.as_str() {
         "original" => doc.markdown_original,
         "translated" => doc.markdown_translated,
@@ -962,9 +1169,10 @@ async fn r2_response(
 
 async fn download_bundle(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     AxumPath(id): AxumPath<String>,
 ) -> Result<Response, ApiError> {
-    let doc = find_document(&state.pool, &id).await?;
+    let doc = find_accessible_document(&state, &headers, &id).await?;
     let events = sqlx::query_as::<_, ProcessingEvent>("SELECT id,document_id,stage,state,level,progress,message,detail,current,total,created_at FROM processing_events WHERE document_id=$1 ORDER BY id")
         .bind(&id)
         .fetch_all(&state.pool)
@@ -1089,7 +1297,9 @@ fn build_bundle(
         "status": doc.status,
         "local_archive_status": doc.local_archive_status,
         "r2_mirror_status": doc.r2_mirror_status,
+        "translation_provider": doc.translation_provider,
         "translated": doc.translated,
+        "is_public": doc.is_public,
         "created_at": doc.created_at,
         "completed_at": doc.completed_at,
         "custom_display_title": doc.title_custom,
@@ -1175,9 +1385,10 @@ fn bundle_download_name(title: &str) -> String {
 
 async fn download_source(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     AxumPath(id): AxumPath<String>,
 ) -> Result<Response, ApiError> {
-    let doc = find_document(&state.pool, &id).await?;
+    let doc = find_accessible_document(&state, &headers, &id).await?;
     let path = safe_data_path(&state.config.data_root, &doc.source_path);
     let Some(path) = path.filter(|path| path.is_file()) else {
         if let Some(key) = doc.source_r2_key.as_deref() {
@@ -1206,13 +1417,14 @@ async fn download_source(
 
 async fn get_asset(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     AxumPath((id, name)): AxumPath<(String, String)>,
 ) -> Result<Response, ApiError> {
     if name.contains('/') || name.contains('\\') || name.contains("..") || !name.ends_with(".webp")
     {
         return Err(ApiError::bad_request("图片名称无效"));
     }
-    let doc = find_document(&state.pool, &id).await?;
+    let doc = find_accessible_document(&state, &headers, &id).await?;
     if let Some(relative) = doc.local_archive_path.as_deref()
         && let Some(root) = safe_data_path(&state.config.data_root, relative)
     {
@@ -1234,10 +1446,10 @@ async fn get_asset(
 
 async fn openapi(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
     Json(json!({
-        "openapi":"3.1.0","info":{"title":format!("{} Open API",state.config.app_name),"version":"1.0.0","description":"公开文档解析、翻译、归档与实时进度 API。数据默认公开且没有删除接口。"},
+        "openapi":"3.1.0","info":{"title":format!("{} Open API",state.config.app_name),"version":"1.1.0","description":"文档解析、全站统一中文翻译、永久归档与实时进度 API。新任务默认私有；上传响应设置当前浏览器专属 HttpOnly 访问 Cookie，管理员可改为公开。没有删除接口。"},
         "servers":[{"url":format!("{}/api/v1",state.config.public_origin)}],
         "paths":{
-          "/jobs":{"get":{"summary":"公开任务列表"},"post":{"summary":"上传文档并创建任务","requestBody":{"required":true,"content":{"multipart/form-data":{"schema":{"type":"object","required":["file"],"properties":{"file":{"type":"string","format":"binary"},"translate":{"type":"boolean","default":true},"title":{"type":"string"}}}}}}}},
+          "/jobs":{"get":{"summary":"管理员主动公开的任务列表"},"post":{"summary":"上传文档并创建默认私有任务","description":"翻译服务由管理员全站统一指定；响应通过 Set-Cookie 赋予当前浏览器文档访问权。","requestBody":{"required":true,"content":{"multipart/form-data":{"schema":{"type":"object","required":["file"],"properties":{"file":{"type":"string","format":"binary"},"title":{"type":"string"}}}}}}}},
           "/jobs/{id}":{"get":{"summary":"任务状态与文章"}},
           "/jobs/{id}/events":{"get":{"summary":"增量读取永久进度事件"}},
           "/jobs/{id}/events/stream":{"get":{"summary":"SSE 实时进度流"}},
@@ -1250,7 +1462,7 @@ async fn openapi(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> 
 
 async fn api_docs() -> Html<&'static str> {
     Html(
-        r#"<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>文流 Open API</title><style>body{font:16px/1.7 system-ui;max-width:920px;margin:48px auto;padding:0 24px;color:#17201d}code,pre{background:#f3f5f3;border-radius:8px}code{padding:2px 6px}pre{padding:18px;overflow:auto}a{color:#176b4d}</style></head><body><p><a href="/">← 返回文流</a></p><h1>文流 Open API v1</h1><p>公开、无鉴权的上传与查询接口。实时事件使用 SSE；源文件从上传完成起永久保存在 VPS 本地，R2 是可选镜像。</p><h2>创建任务</h2><pre>curl -F "file=@paper.pdf" -F "title=公开标题" -F "translate=true" http://185.99.135.224:8090/api/v1/jobs</pre><h2>实时进度</h2><pre>GET /api/v1/jobs/{id}/events/stream?after_id=0</pre><h2>完整打包</h2><pre>GET /api/v1/jobs/{id}/bundle</pre><h2>机器可读规范</h2><p><a href="/api/openapi.json">OpenAPI 3.1 JSON</a></p></body></html>"#,
+        r#"<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>文流 Open API</title><style>body{font:16px/1.7 system-ui;max-width:920px;margin:48px auto;padding:0 24px;color:#17201d}code,pre{background:#f3f5f3;border-radius:8px}code{padding:2px 6px}pre{padding:18px;overflow:auto}a{color:#176b4d}</style></head><body><p><a href="/">← 返回文流</a></p><h1>文流 Open API v1</h1><p>上传无需登录，但新任务默认私有。上传响应设置当前客户端专属访问 Cookie；后续查询、SSE 与下载必须携带它。管理员可在后台公开文档。翻译服务由管理员全站统一指定，源文件与处理结果永久保存在 VPS 本地，R2 是可选镜像。</p><h2>创建私有任务并保存访问 Cookie</h2><pre>curl -c docflow.cookies -F "file=@paper.pdf" -F "title=文档标题" http://185.99.135.224:8090/api/v1/jobs</pre><h2>实时进度</h2><pre>curl -b docflow.cookies -N http://185.99.135.224:8090/api/v1/jobs/{id}/events/stream?after_id=0</pre><h2>完整打包</h2><pre>curl -b docflow.cookies -OJ http://185.99.135.224:8090/api/v1/jobs/{id}/bundle</pre><h2>机器可读规范</h2><p><a href="/api/openapi.json">OpenAPI 3.1 JSON</a></p></body></html>"#,
     )
 }
 

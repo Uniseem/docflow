@@ -11,7 +11,6 @@ const config = ref<PublicConfig | null>(null)
 const recent = ref<DocumentSummary[]>([])
 const file = ref<File | null>(null)
 const title = ref('')
-const translate = ref(false)
 const dragging = ref(false)
 const uploading = ref(false)
 const uploadProgress = ref(0)
@@ -47,7 +46,7 @@ async function submit() {
   uploading.value = true
   uploadProgress.value = 0
   try {
-    const document = await api.uploadDocument(file.value, title.value, translate.value, (value) => { uploadProgress.value = value })
+    const document = await api.uploadDocument(file.value, title.value, (value) => { uploadProgress.value = value })
     await router.push(`/documents/${document.id}`)
   } catch (reason) {
     error.value = reason instanceof Error ? reason.message : '上传失败'
@@ -60,7 +59,6 @@ onMounted(async () => {
   try {
     const [cfg, documents] = await Promise.all([api.publicConfig(), api.listDocuments(1, 5)])
     config.value = cfg
-    translate.value = cfg.default_translate
     recent.value = documents.items
   } catch (reason) {
     error.value = reason instanceof Error ? reason.message : '服务暂不可用'
@@ -124,7 +122,7 @@ onMounted(async () => {
           </template>
         </div>
 
-        <v-text-field v-if="file" v-model="title" class="title-field" label="公开展示标题" hint="可以使用中文；服务器实际文件名始终使用安全编码" persistent-hint maxlength="512" />
+        <v-text-field v-if="file" v-model="title" class="title-field" label="文档标题" hint="可以使用中文；服务器实际文件名始终使用安全编码" persistent-hint maxlength="512" />
         <v-alert v-if="error" type="error" variant="tonal" density="compact" class="mt-4">{{ error }}</v-alert>
         <div v-if="uploading" class="upload-progress">
           <div><span>正在上传源文件</span><strong>{{ uploadProgress }}%</strong></div>
@@ -141,17 +139,17 @@ onMounted(async () => {
           <span class="step-number">02</span>
         </div>
 
-        <label class="option-row" :class="{ 'is-disabled': !config?.translation_available }">
+        <div class="option-row">
           <span class="option-icon"><v-icon icon="mdi-translate" size="19" /></span>
           <span class="option-copy">
-            <strong>翻译为简体中文</strong>
-            <small>{{ config?.translation_available ? '按段翻译并保护公式、代码和链接' : '管理员尚未配置 DeepSeek' }}</small>
+            <strong>自动翻译为简体中文</strong>
+            <small>{{ config?.translation_provider === 'deepseek' ? '全站使用管理员配置的 DeepSeek' : '全站使用 Google 免费翻译' }}；分段处理并保护公式、代码和链接</small>
           </span>
-          <v-switch v-model="translate" color="primary" density="compact" hide-details :disabled="!config?.translation_available" aria-label="翻译为简体中文" />
-        </label>
+          <span class="option-fixed">全站统一</span>
+        </div>
 
         <div class="processing-notes">
-          <div><v-icon icon="mdi-eye-outline" size="17" /><span><strong>默认公开</strong><small>处理记录和结果对所有访问者可见</small></span></div>
+          <div><v-icon icon="mdi-lock-outline" size="17" /><span><strong>默认私有</strong><small>仅当前上传浏览器与管理员可见，管理员可公开</small></span></div>
           <div><v-icon icon="mdi-harddisk" size="17" /><span><strong>永久保存</strong><small>源文件、Markdown 和 WebP 保存在本机</small></span></div>
           <div><v-icon icon="mdi-progress-clock" size="17" /><span><strong>详细进度</strong><small>每个解析、翻译和归档步骤实时更新</small></span></div>
         </div>
@@ -164,7 +162,7 @@ onMounted(async () => {
 
     <section v-if="recent.length" class="recent-section">
       <div class="section-heading">
-        <div><h2>最近提交</h2><p>最新的公开处理记录</p></div>
+        <div><h2>公开文档</h2><p>由管理员主动公开的最新文档</p></div>
         <v-btn to="/library" variant="text" append-icon="mdi-arrow-right" size="small">查看全部</v-btn>
       </div>
       <div class="document-list"><DocumentCard v-for="document in recent" :key="document.id" :document="document" /></div>
