@@ -1445,9 +1445,14 @@ async fn get_asset(
 }
 
 async fn openapi(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
+    let server_url = if state.config.public_origin.is_empty() {
+        "/api/v1".to_string()
+    } else {
+        format!("{}/api/v1", state.config.public_origin)
+    };
     Json(json!({
         "openapi":"3.1.0","info":{"title":format!("{} Open API",state.config.app_name),"version":"1.1.0","description":"文档解析、全站统一中文翻译、永久归档与实时进度 API。新任务默认私有；上传响应设置当前浏览器专属 HttpOnly 访问 Cookie，管理员可改为公开。没有删除接口。"},
-        "servers":[{"url":format!("{}/api/v1",state.config.public_origin)}],
+        "servers":[{"url":server_url}],
         "paths":{
           "/jobs":{"get":{"summary":"管理员主动公开的任务列表"},"post":{"summary":"上传文档并创建默认私有任务","description":"翻译服务由管理员全站统一指定；响应通过 Set-Cookie 赋予当前浏览器文档访问权。","requestBody":{"required":true,"content":{"multipart/form-data":{"schema":{"type":"object","required":["file"],"properties":{"file":{"type":"string","format":"binary"},"title":{"type":"string"}}}}}}}},
           "/jobs/{id}":{"get":{"summary":"任务状态与文章"}},
@@ -1462,7 +1467,7 @@ async fn openapi(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> 
 
 async fn api_docs() -> Html<&'static str> {
     Html(
-        r#"<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>文流 Open API</title><style>body{font:16px/1.7 system-ui;max-width:920px;margin:48px auto;padding:0 24px;color:#17201d}code,pre{background:#f3f5f3;border-radius:8px}code{padding:2px 6px}pre{padding:18px;overflow:auto}a{color:#176b4d}</style></head><body><p><a href="/">← 返回文流</a></p><h1>文流 Open API v1</h1><p>上传无需登录，但新任务默认私有。上传响应设置当前客户端专属访问 Cookie；后续查询、SSE 与下载必须携带它。管理员可在后台公开文档。翻译服务由管理员全站统一指定，源文件与处理结果永久保存在 VPS 本地，R2 是可选镜像。</p><h2>创建私有任务并保存访问 Cookie</h2><pre>curl -c docflow.cookies -F "file=@paper.pdf" -F "title=文档标题" http://185.99.135.224:38101/api/v1/jobs</pre><h2>实时进度</h2><pre>curl -b docflow.cookies -N http://185.99.135.224:38101/api/v1/jobs/{id}/events/stream?after_id=0</pre><h2>完整打包</h2><pre>curl -b docflow.cookies -OJ http://185.99.135.224:38101/api/v1/jobs/{id}/bundle</pre><h2>机器可读规范</h2><p><a href="/api/openapi.json">OpenAPI 3.1 JSON</a></p></body></html>"#,
+        r#"<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>文流 Open API</title><style>body{font:16px/1.7 system-ui;max-width:920px;margin:48px auto;padding:0 24px;color:#17201d}code,pre{background:#f3f5f3;border-radius:8px}code{padding:2px 6px}pre{padding:18px;overflow:auto}a{color:#176b4d}</style></head><body><p><a href="/">← 返回文流</a></p><h1>文流 Open API v1</h1><p>上传无需登录，但新任务默认私有。上传响应设置当前客户端专属访问 Cookie；后续查询、SSE 与下载必须携带它。管理员可在后台公开文档。翻译服务由管理员全站统一指定，源文件与处理结果永久保存在 VPS 本地，R2 是可选镜像。</p><h2>创建私有任务并保存访问 Cookie</h2><pre>curl -c docflow.cookies -F "file=@paper.pdf" -F "title=文档标题" http://你的服务器IP:38100/api/v1/jobs</pre><h2>实时进度</h2><pre>curl -b docflow.cookies -N http://你的服务器IP:38100/api/v1/jobs/{id}/events/stream?after_id=0</pre><h2>完整打包</h2><pre>curl -b docflow.cookies -OJ http://你的服务器IP:38100/api/v1/jobs/{id}/bundle</pre><h2>机器可读规范</h2><p><a href="/api/openapi.json">OpenAPI 3.1 JSON</a></p></body></html>"#,
     )
 }
 
