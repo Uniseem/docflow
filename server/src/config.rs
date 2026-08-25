@@ -13,6 +13,10 @@ pub struct Config {
     pub archive_root: PathBuf,
     pub max_upload_bytes: u64,
     pub translation_chunk_chars: usize,
+    pub translation_per_document_concurrency: usize,
+    pub translation_queue_capacity: usize,
+    pub google_translation_concurrency: usize,
+    pub deepseek_translation_concurrency: usize,
     pub mineru_poll_seconds: u64,
     pub mineru_max_wait_seconds: u64,
     pub webp_quality: u8,
@@ -37,6 +41,20 @@ impl Config {
             data_root,
             max_upload_bytes: parsed::<u64>("MAX_UPLOAD_MB", 200)? * 1024 * 1024,
             translation_chunk_chars: parsed("TRANSLATION_CHUNK_CHARS", 10_000)?,
+            translation_per_document_concurrency: parsed::<usize>(
+                "TRANSLATION_PER_DOCUMENT_CONCURRENCY",
+                8,
+            )?
+            .clamp(1, 32),
+            translation_queue_capacity: parsed::<usize>("TRANSLATION_QUEUE_CAPACITY", 4_096)?
+                .clamp(64, 65_536),
+            google_translation_concurrency: parsed::<usize>("GOOGLE_TRANSLATION_CONCURRENCY", 32)?
+                .clamp(1, 256),
+            deepseek_translation_concurrency: parsed::<usize>(
+                "DEEPSEEK_TRANSLATION_CONCURRENCY",
+                64,
+            )?
+            .clamp(1, 2_000),
             mineru_poll_seconds: parsed("MINERU_POLL_SECONDS", 5)?,
             mineru_max_wait_seconds: parsed("MINERU_MAX_WAIT_SECONDS", 7_200)?,
             webp_quality: parsed("WEBP_QUALITY", 86)?,

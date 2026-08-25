@@ -65,13 +65,19 @@ export const api = {
       headers: adminHeaders(),
       body: JSON.stringify({ api_key: apiKey, model }),
     }),
+  saveGoogle: (apiKey: string) =>
+    request<AdminSettings>('/api/admin/settings/google', {
+      method: 'PUT',
+      headers: adminHeaders(),
+      body: JSON.stringify({ api_key: apiKey }),
+    }),
   saveDeepSeek: (apiKey: string, model: string) =>
     request<AdminSettings>('/api/admin/settings/deepseek', {
       method: 'PUT',
       headers: adminHeaders(),
       body: JSON.stringify({ api_key: apiKey, model }),
     }),
-  saveTranslationTier: (tier: 1 | 2 | 3 | 4) =>
+  saveTranslationTier: (tier: 1 | 2 | 3) =>
     request<AdminSettings>('/api/admin/settings/translation', {
       method: 'PUT',
       headers: adminHeaders(),
@@ -102,7 +108,7 @@ export const api = {
     source.onerror = () => { source.close(); onError() }
     return () => source.close()
   },
-  uploadDocument: (file: File, title: string, translationTier: 1 | 2 | 3 | 4, onProgress: (percent: number) => void) =>
+  uploadDocument: (file: File, title: string, translationTier: 1 | 2 | 3, onProgress: (percent: number) => void) =>
     new Promise<DocumentSummary>((resolve, reject) => {
       const form = new FormData()
       form.append('file', file)

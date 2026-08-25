@@ -1,6 +1,6 @@
 use std::{sync::Arc, time::Duration};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use sqlx::Row;
 use uuid::Uuid;
 
@@ -11,6 +11,15 @@ use crate::{
 };
 
 pub async fn run(state: Arc<AppState>) -> Result<()> {
+    // Provider concurrency limits are account-wide, so the Compose deployment must
+    // have exactly one site-wide pool owner even if someone tries `--scale worker`.
+    let mut pool_owner = state.pool.acquire().await?;
+    let acquired: bool = sqlx::query_scalar("SELECT pg_try_advisory_lock(381001337)")
+        .fetch_one(&mut *pool_owner)
+        .await?;
+    if !acquired {
+        anyhow::bail!("已有 Worker 持有全站翻译任务池；请勿横向扩容 worker 服务");
+    }
     let instance = format!("{}-{}", hostname(), Uuid::new_v4());
     tracing::info!(concurrency=state.config.worker_concurrency, %instance, "PostgreSQL worker started");
     let mut handles = Vec::new();
@@ -22,8 +31,9 @@ pub async fn run(state: Arc<AppState>) -> Result<()> {
         ));
     }
     for handle in handles {
-        handle.await??;
+        handle.await.context("Worker 任务意外退出")??;
     }
+    drop(pool_owner);
     Ok(())
 }
 

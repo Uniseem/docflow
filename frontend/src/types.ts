@@ -4,7 +4,8 @@ export interface PublicConfig {
   translation_available: boolean
   default_translate: boolean
   translation_provider: 'google' | 'deepseek'
-  translation_tier: 1 | 2 | 3 | 4
+  translation_tier: 1 | 2 | 3
+  google_configured: boolean
   deepseek_configured: boolean
   documents_public_by_default: boolean
   r2_configured: boolean
@@ -30,7 +31,7 @@ export interface DocumentSummary {
   failure_reason: string | null
   translate_requested: boolean
   translation_provider: 'google' | 'deepseek' | 'none'
-  translation_tier: 1 | 2 | 3 | 4
+  translation_tier: 1 | 2 | 3
   translated: boolean
   is_public: boolean
   mineru_model: string
@@ -87,11 +88,13 @@ export interface AdminSettings {
   mineru_configured: boolean
   mineru_api_key_masked: string | null
   mineru_model: string
+  google_configured: boolean
+  google_api_key_masked: string | null
   deepseek_configured: boolean
   deepseek_api_key_masked: string | null
   deepseek_model: string
   translation_provider: 'google' | 'deepseek'
-  translation_tier: 1 | 2 | 3 | 4
+  translation_tier: 1 | 2 | 3
   r2_configured: boolean
   r2_account_id: string
   r2_access_key_id_masked: string | null

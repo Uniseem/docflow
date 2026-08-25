@@ -4,7 +4,7 @@ import { computed, onMounted, ref } from 'vue'
 import { api } from '../api'
 import type { AdminSettings, DocumentSummary } from '../types'
 
-type TranslationTier = 1 | 2 | 3 | 4
+type TranslationTier = 1 | 2 | 3
 
 const translationTiers: Array<{
   tier: TranslationTier
@@ -14,10 +14,9 @@ const translationTiers: Array<{
   meta: string
   icon: string
 }> = [
-  { tier: 1, name: '极速', engine: 'Google', description: '免费分块直译，适合快速获取中文内容。', meta: '最快 · 免费', icon: 'mdi-flash-outline' },
-  { tier: 2, name: '标准', engine: 'DeepSeek', description: '大模型分块翻译，表达更自然，术语处理更稳。', meta: '较快 · 按量计费', icon: 'mdi-translate' },
-  { tier: 3, name: '精细', engine: 'DeepSeek', description: '先速览全文并生成统一约束，再逐块执行翻译。', meta: '较慢 · 全文一致', icon: 'mdi-book-open-page-variant-outline' },
-  { tier: 4, name: 'Agent', engine: 'DeepSeek', description: '通读全文建立蓝图，携带前后文逐段翻译。', meta: '最慢 · 质量最高', icon: 'mdi-robot-outline' },
+  { tier: 1, name: '极速', engine: 'Google Cloud', description: '使用官方 Translation API，通过独立共享池高速并发翻译。', meta: '最快 · 按字符计费', icon: 'mdi-flash-outline' },
+  { tier: 2, name: '均衡', engine: 'DeepSeek V4 Flash', description: '明确关闭思考模式，并发分块翻译，兼顾速度和自然度。', meta: '较快 · 非思考', icon: 'mdi-scale-balance' },
+  { tier: 3, name: '精准', engine: 'DeepSeek V4 Flash', description: '明确开启思考模式，为复杂论文和术语推理预留更多输出预算。', meta: '较慢 · 思考模式', icon: 'mdi-brain' },
 ]
 
 const token = ref(localStorage.getItem('docflow-admin-token') || '')
@@ -28,6 +27,7 @@ const passwordConfirm = ref('')
 const settings = ref<AdminSettings | null>(null)
 const mineruKey = ref('')
 const mineruModel = ref('vlm')
+const googleKey = ref('')
 const deepseekKey = ref('')
 const deepseekModel = ref('deepseek-v4-flash')
 const translationTier = ref<TranslationTier>(1)
@@ -132,16 +132,33 @@ async function saveDeepSeek() {
   try {
     settings.value = await api.saveDeepSeek(deepseekKey.value, deepseekModel.value)
     deepseekKey.value = ''
-    message.value = 'DeepSeek 验证成功。上传页现在会开放第 2–4 档；保存 Key 不会自动切换默认档位。'
+    message.value = 'DeepSeek V4 Flash 验证成功，均衡档和精准档已经开放。'
   } catch (reason) {
     error.value = reason instanceof Error ? reason.message : '保存失败'
   } finally { loading.value = false }
 }
 
+async function saveGoogle() {
+  error.value = ''; message.value = ''; loading.value = true
+  try {
+    settings.value = await api.saveGoogle(googleKey.value)
+    googleKey.value = ''
+    message.value = 'Google Cloud Translation 验证成功，极速档已经开放。'
+  } catch (reason) {
+    error.value = reason instanceof Error ? reason.message : '保存失败'
+  } finally { loading.value = false }
+}
+
+function tierAvailable(tier: TranslationTier) {
+  return tier === 1 ? Boolean(settings.value?.google_configured) : Boolean(settings.value?.deepseek_configured)
+}
+
 function selectTranslationTier(tier: TranslationTier) {
-  if (tier > 1 && !settings.value?.deepseek_configured) {
-    error.value = '第 2–4 档需要先在下方配置并验证 DeepSeek API Key 与模型。'
-    document.querySelector('#deepseek')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  if (!tierAvailable(tier)) {
+    error.value = tier === 1
+      ? '极速档需要先配置并验证 Google Cloud Translation API Key。'
+      : '均衡档和精准档需要先配置并验证 DeepSeek API Key。'
+    document.querySelector(tier === 1 ? '#google' : '#deepseek')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
     return
   }
   error.value = ''
@@ -257,6 +274,7 @@ onMounted(async () => {
           <nav aria-label="后台设置目录">
             <a href="#mineru"><v-icon icon="mdi-file-search-outline" size="17" />MinerU</a>
             <a href="#translation"><v-icon icon="mdi-translate" size="17" />默认翻译</a>
+            <a href="#google"><v-icon icon="mdi-google" size="17" />Google Cloud</a>
             <a href="#deepseek"><v-icon icon="mdi-key-outline" size="17" />DeepSeek</a>
             <a href="#storage"><v-icon icon="mdi-harddisk" size="17" />本地存储</a>
             <a href="#r2"><v-icon icon="mdi-cloud-outline" size="17" />R2 镜像</a>
@@ -266,6 +284,7 @@ onMounted(async () => {
             <h3>服务状态</h3>
             <div><span>MinerU</span><b :class="settings.mineru_configured ? 'ok' : 'warn'">{{ settings.mineru_configured ? '已配置' : '未配置' }}</b></div>
             <div><span>默认档位</span><b class="ok">第 {{ settings.translation_tier }} 档</b></div>
+            <div><span>Google</span><b :class="settings.google_configured ? 'ok' : ''">{{ settings.google_configured ? '已配置' : '未配置' }}</b></div>
             <div><span>DeepSeek</span><b :class="settings.deepseek_configured ? 'ok' : ''">{{ settings.deepseek_configured ? '已配置' : '未配置' }}</b></div>
             <div><span>本地存储</span><b class="ok">已启用</b></div>
             <div><span>R2</span><b :class="settings.r2_configured ? 'ok' : ''">{{ settings.r2_configured ? '已配置' : '可选' }}</b></div>
@@ -294,11 +313,11 @@ onMounted(async () => {
                 :class="{
                   'is-selected': translationTier === tier.tier,
                   'is-current': settings.translation_tier === tier.tier,
-                  'is-unavailable': tier.tier > 1 && !settings.deepseek_configured,
+                  'is-unavailable': !tierAvailable(tier.tier),
                 }"
                 role="radio"
                 :aria-checked="translationTier === tier.tier"
-                :aria-disabled="tier.tier > 1 && !settings.deepseek_configured"
+                :aria-disabled="!tierAvailable(tier.tier)"
                 @click="selectTranslationTier(tier.tier)"
               >
                 <span class="translation-quality-card__top">
@@ -314,7 +333,7 @@ onMounted(async () => {
                 <span class="translation-quality-card__footer">
                   <span>{{ tier.meta }}</span>
                   <em v-if="settings.translation_tier === tier.tier">当前默认</em>
-                  <em v-else-if="tier.tier > 1 && !settings.deepseek_configured">需要 DeepSeek</em>
+                  <em v-else-if="!tierAvailable(tier.tier)">{{ tier.tier === 1 ? '需要 Google Key' : '需要 DeepSeek' }}</em>
                   <em v-else>可选择</em>
                 </span>
               </button>
@@ -328,17 +347,26 @@ onMounted(async () => {
                 {{ hasPendingTranslationTier ? `保存并应用第 ${translationTier} 档` : '当前设置已保存' }}
               </v-btn>
             </div>
-            <p class="section-help">第 3–4 档会永久保存全文速览约束或 Agent 蓝图。DeepSeek 配置成功后，上传者可以选择第 2–4 档。</p>
+            <p class="section-help">三档分别进入两个独立的全站共享任务池。分块并行执行并按原始顺序合并，单篇长文档不会独占全站执行槽。</p>
+          </section>
+
+          <section id="google" class="settings-section">
+            <header><div><h2>Google Cloud Translation</h2><p>极速档使用官方 Basic v2 API；启用该 API 后填写项目 API Key。</p></div><span class="setting-state" :class="settings.google_configured ? 'is-ok' : ''">{{ settings.google_configured ? '已配置' : '未配置' }}</span></header>
+            <p v-if="settings.google_api_key_masked" class="current-secret">当前 Key：<code>{{ settings.google_api_key_masked }}</code></p>
+            <v-text-field v-model="googleKey" label="新的 Google Cloud Translation API Key" type="password" autocomplete="new-password" hide-details />
+            <p class="section-help">程序按官方建议将单次输入控制在 4,500 Unicode 字符，并以官方分钟配额的 80% 作为全站安全线。Google 提供每月前 50 万字符抵扣额度，超出后按 Cloud Translation 定价计费。</p>
+            <div class="form-actions"><v-btn color="primary" :loading="loading" :disabled="googleKey.length < 16" @click="saveGoogle">调用官方接口验证并保存</v-btn></div>
           </section>
 
           <section id="deepseek" class="settings-section">
-            <header><div><h2>DeepSeek 配置</h2><p>配置成功后在上传页开放第 2–4 档，不会自动切换默认档位。</p></div><span class="setting-state" :class="settings.deepseek_configured ? 'is-ok' : ''">{{ settings.deepseek_configured ? '已配置' : '可选' }}</span></header>
+            <header><div><h2>DeepSeek 配置</h2><p>均衡档和精准档固定使用 V4 Flash，通过同一个全站共享池调度。</p></div><span class="setting-state" :class="settings.deepseek_configured ? 'is-ok' : ''">{{ settings.deepseek_configured ? '已配置' : '未配置' }}</span></header>
             <p v-if="settings.deepseek_api_key_masked" class="current-secret">当前 Key：<code>{{ settings.deepseek_api_key_masked }}</code></p>
             <div class="form-grid form-grid--2">
               <v-text-field v-model="deepseekKey" label="新的 DeepSeek API Key" type="password" autocomplete="new-password" hide-details />
-              <v-text-field v-model="deepseekModel" label="模型名称" placeholder="deepseek-v4-flash" hide-details />
+              <v-text-field v-model="deepseekModel" label="固定模型" readonly hide-details append-inner-icon="mdi-lock-outline" />
             </div>
-            <div class="form-actions"><v-btn color="primary" :loading="loading" :disabled="deepseekKey.length < 8 || !deepseekModel" @click="saveDeepSeek">调用模型验证并保存</v-btn></div>
+            <p class="section-help">均衡档显式关闭思考；精准档显式开启思考。官方账号并发上限为 2,500，程序硬上限保留 20% 余量并设为 2,000；VPS 默认只启用 64 路。</p>
+            <div class="form-actions"><v-btn color="primary" :loading="loading" :disabled="deepseekKey.length < 8" @click="saveDeepSeek">调用模型验证并保存</v-btn></div>
           </section>
 
           <section id="storage" class="settings-section storage-section">

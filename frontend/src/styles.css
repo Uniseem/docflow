@@ -119,12 +119,16 @@ code { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; }
 .translation-tier-summary__head span:first-child, .translation-tier-summary__head strong, .translation-tier-summary__head small { display: block; }
 .translation-tier-summary__head strong { color: #202939; font-size: 14px; }
 .translation-tier-summary__head small { margin-top: 4px; color: #697586; font-size: 11px; line-height: 1.45; }
-.translation-tier-track { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-top: 16px; }
+.translation-tier-track { display: grid; grid-template-columns: 1fr; gap: 10px; margin-top: 16px; }
 .translation-tier-step {
   position: relative;
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 13px;
   min-width: 0;
-  min-height: 142px;
-  padding: 14px;
+  min-height: 92px;
+  padding: 14px 16px;
   border: 1px solid #dfe4eb;
   border-radius: 11px;
   color: #667085;
@@ -136,19 +140,18 @@ code { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; }
 }
 .translation-tier-step:hover { border-color: #9bb7f6; background: #f7f9ff; transform: translateY(-1px); }
 .translation-tier-step:focus-visible { outline: 3px solid rgba(36, 87, 214, .2); outline-offset: 2px; }
-.translation-tier-step__top { display: flex; align-items: center; justify-content: space-between; }
-.translation-tier-step__icon { display: grid; width: 36px; height: 36px; place-items: center; border-radius: 9px; color: #475467; background: #eef1f5; }
-.translation-tier-step__number { color: #98a2b3; font-size: 11px; font-weight: 800; letter-spacing: .08em; }
-.translation-tier-step__title { display: flex; align-items: baseline; gap: 7px; margin-top: 11px; }
+.translation-tier-step__icon { display: grid; width: 44px; height: 44px; place-items: center; border-radius: 11px; color: #475467; background: #eef1f5; }
+.translation-tier-step__copy { min-width: 0; }
+.translation-tier-step__title { display: flex; align-items: baseline; flex-wrap: wrap; gap: 7px; }
 .translation-tier-step b, .translation-tier-step small, .translation-tier-step em { display: block; }
-.translation-tier-step b { color: #202939; font-size: 15px; }
-.translation-tier-step small { color: #7a8596; font-size: 10px; }
-.translation-tier-step em { margin-top: 4px; min-height: 34px; color: #697586; font-size: 11px; font-style: normal; line-height: 1.5; }
-.translation-tier-step__state { display: flex !important; align-items: center; gap: 4px; margin-top: 8px; color: #667085; font-size: 10px; font-weight: 700; }
+.translation-tier-step b { color: #202939; font-size: 16px; }
+.translation-tier-step small { color: #7a8596; font-size: 11px; }
+.translation-tier-step em { margin-top: 5px; color: #697586; font-size: 11px; font-style: normal; line-height: 1.5; }
+.translation-tier-step__state { display: flex !important; align-items: center; justify-content: flex-end; gap: 4px; min-width: 74px; color: #667085; font-size: 10px; font-weight: 700; }
 .translation-tier-step.is-active { border-color: #3166dc; color: #2457d6; background: #f2f6ff; box-shadow: inset 0 0 0 1px #3166dc, 0 5px 14px rgba(36, 87, 214, .1); }
 .translation-tier-step.is-active .translation-tier-step__icon { color: #fff; background: #2457d6; }
 .translation-tier-step.is-active .translation-tier-step__state { color: #2457d6; }
-.translation-tier-step.is-default:not(.is-active)::after { position: absolute; top: 11px; right: 11px; width: 6px; height: 6px; border-radius: 50%; background: #84a9ff; content: ""; }
+.translation-tier-step.is-default:not(.is-active)::after { position: absolute; top: 9px; right: 9px; width: 6px; height: 6px; border-radius: 50%; background: #84a9ff; content: ""; }
 .translation-tier-step.is-unavailable:not(.is-active) { opacity: .55; cursor: help; }
 .translation-tier-step.is-unavailable:not(.is-active):hover { transform: none; }
 .translation-tier-note { margin: 12px 1px 0; color: #b54708; font-size: 11px; line-height: 1.5; }
@@ -366,7 +369,7 @@ code { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; }
 .optional-section__body { padding: 0 28px 28px; border-top: 1px solid #eaecf0; }
 .section-help { margin: 18px 0 0; color: #667085; font-size: 12px; line-height: 1.65; }
 
-.translation-quality-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.translation-quality-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
 .translation-quality-card {
   display: flex;
   min-height: 190px;
@@ -480,7 +483,9 @@ code { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; }
   .page-heading h1 { font-size: 26px; }
   .page-heading > .v-btn, .service-status { margin-top: 14px; }
   .upload-main, .upload-options { padding: 20px; }
-  .translation-tier-track { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .translation-tier-step { grid-template-columns: 42px minmax(0, 1fr); min-height: 104px; }
+  .translation-tier-step__icon { width: 42px; height: 42px; }
+  .translation-tier-step__state { grid-column: 2; justify-content: flex-start; }
   .drop-zone { padding: 18px; }
   .library-toolbar .v-text-field { max-width: none; }
   .document-row { grid-template-columns: 30px minmax(0, 1fr) auto; }

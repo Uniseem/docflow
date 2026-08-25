@@ -9,6 +9,7 @@ mod pipeline;
 mod r2;
 mod security;
 mod settings;
+mod translation_pool;
 mod worker;
 
 use std::sync::Arc;
@@ -58,7 +59,14 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
-    let state = Arc::new(AppState { pool, config });
+    let translation_pools = (mode == "worker")
+        .then(|| translation_pool::TranslationPools::new(&config))
+        .transpose()?;
+    let state = Arc::new(AppState {
+        pool,
+        config,
+        translation_pools,
+    });
     if mode == "compat-check" {
         let password_hash: Option<String> =
             sqlx::query_scalar("SELECT password_hash FROM admin_users WHERE id=1")

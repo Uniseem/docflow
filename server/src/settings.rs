@@ -6,6 +6,7 @@ use crate::security::{decrypt_secret, encrypt_secret};
 
 pub const MINERU_API_KEY: &str = "mineru_api_key";
 pub const MINERU_MODEL: &str = "mineru_model";
+pub const GOOGLE_TRANSLATE_API_KEY: &str = "google_translate_api_key";
 pub const DEEPSEEK_API_KEY: &str = "deepseek_api_key";
 pub const DEEPSEEK_MODEL: &str = "deepseek_model";
 pub const TRANSLATION_PROVIDER: &str = "translation_provider";
@@ -74,7 +75,7 @@ pub async fn translation_provider(pool: &PgPool, secret_key: &str) -> Result<Str
 pub async fn translation_tier(pool: &PgPool, secret_key: &str) -> Result<i16> {
     if let Some(value) = get(pool, secret_key, TRANSLATION_TIER).await?
         && let Ok(tier) = value.parse::<i16>()
-        && (1..=4).contains(&tier)
+        && (1..=3).contains(&tier)
     {
         return Ok(tier);
     }
@@ -147,6 +148,8 @@ pub struct AdminSettingsResponse {
     pub mineru_configured: bool,
     pub mineru_api_key_masked: Option<String>,
     pub mineru_model: String,
+    pub google_configured: bool,
+    pub google_api_key_masked: Option<String>,
     pub deepseek_configured: bool,
     pub deepseek_api_key_masked: Option<String>,
     pub deepseek_model: String,
