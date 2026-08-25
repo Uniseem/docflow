@@ -82,7 +82,9 @@ curl -fsSLO https://raw.githubusercontent.com/FengYuchen1314/docflow/main/docker
 docker compose up -d
 ```
 
-大多数情况下也可以直接在 VPS 上新建 `docker-compose.yml`，完整复制下面的内容，然后运行 `docker compose up -d`。以下代码块与仓库根目录的 `docker-compose.yml` 保持一致：
+### 手动创建 `docker-compose.yml`（完整内容）
+
+不需要克隆仓库。可以在 VPS 的任意空目录中手动新建 `docker-compose.yml`，完整复制下面的内容。以下代码块与仓库根目录的 `docker-compose.yml` 保持一致：
 
 ```yaml
 name: docflow
@@ -249,6 +251,13 @@ services:
         source: ./data/documents
         target: /data
         read_only: true
+```
+
+保存文件后，在同一目录启动并查看容器状态：
+
+```bash
+docker compose up -d
+docker compose ps
 ```
 
 如果部署地址不是 `185.99.135.224:8090`，可在同目录创建 `.env`，例如写入 `PUBLIC_ORIGIN=http://你的VPS公网IP:8090`；如需修改监听端口，再增加 `HTTP_PORT=新端口`。
