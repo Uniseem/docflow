@@ -14,6 +14,7 @@ const mineruKey = ref('')
 const mineruModel = ref('vlm')
 const deepseekKey = ref('')
 const deepseekModel = ref('deepseek-v4-flash')
+const translationProvider = ref<'google' | 'deepseek'>('google')
 const r2AccountId = ref('')
 const r2AccessKeyId = ref('')
 const r2SecretAccessKey = ref('')
@@ -37,15 +38,17 @@ const filteredDocuments = computed(() => {
 async function loadSettings() {
   if (!token.value) return
   try {
+    await api.ensureAdminSession()
     settings.value = await api.adminSettings()
     mineruModel.value = settings.value.mineru_model
     deepseekModel.value = settings.value.deepseek_model
+    translationProvider.value = settings.value.translation_provider
     r2AccountId.value = settings.value.r2_account_id
     r2Bucket.value = settings.value.r2_bucket
     r2PublicBaseUrl.value = settings.value.r2_public_base_url
-    documents.value = (await api.listDocuments(1, 100)).items
+    documents.value = (await api.adminListDocuments(1, 100)).items
   } catch {
-    logout()
+    await logout()
   }
 }
 
@@ -89,7 +92,8 @@ async function register() {
   }
 }
 
-function logout() {
+async function logout() {
+  await api.adminLogout().catch(() => undefined)
   localStorage.removeItem('docflow-admin-token')
   token.value = ''
   settings.value = null
@@ -111,7 +115,17 @@ async function saveDeepSeek() {
   try {
     settings.value = await api.saveDeepSeek(deepseekKey.value, deepseekModel.value)
     deepseekKey.value = ''
-    message.value = 'DeepSeek 验证成功，前台现在默认选择中文翻译。'
+    message.value = 'DeepSeek 验证成功。现在可在“全站翻译服务”中选择它；保存 Key 不会自动切换现有全站设置。'
+  } catch (reason) {
+    error.value = reason instanceof Error ? reason.message : '保存失败'
+  } finally { loading.value = false }
+}
+
+async function saveTranslator() {
+  error.value = ''; message.value = ''; loading.value = true
+  try {
+    settings.value = await api.saveTranslationProvider(translationProvider.value)
+    message.value = `全站翻译服务已切换为${translationProvider.value === 'deepseek' ? ' DeepSeek' : ' Google 免费翻译'}；已进入队列的任务继续使用创建时记录的服务。`
   } catch (reason) {
     error.value = reason instanceof Error ? reason.message : '保存失败'
   } finally { loading.value = false }
@@ -154,6 +168,19 @@ async function saveNames() {
   } finally { loading.value = false }
 }
 
+async function toggleVisibility(document: DocumentSummary) {
+  error.value = ''; message.value = ''; loading.value = true
+  try {
+    const updated = await api.updateDocumentVisibility(document.id, !document.is_public)
+    documents.value = documents.value.map((item) => item.id === updated.id ? updated : item)
+    message.value = updated.is_public
+      ? '文档已公开，匿名访问者现在可以在公开文库中查看和下载。'
+      : '文档已设为私有，匿名访问已立即关闭；管理员仍可查看。'
+  } catch (reason) {
+    error.value = reason instanceof Error ? reason.message : '修改公开状态失败'
+  } finally { loading.value = false }
+}
+
 onMounted(async () => {
   try {
     initialized.value = (await api.adminStatus()).initialized
@@ -170,7 +197,7 @@ onMounted(async () => {
       <div>
         <span class="admin-kicker">ADMIN</span>
         <h1>管理后台</h1>
-        <p>配置外部服务、存储镜像和公开文件名称。</p>
+        <p>配置全站翻译、存储服务，并查看和公开默认私有的文档。</p>
       </div>
       <v-btn v-if="token" variant="text" prepend-icon="mdi-logout" @click="logout">退出登录</v-btn>
     </header>
@@ -200,15 +227,17 @@ onMounted(async () => {
         <aside class="admin-sidebar">
           <nav aria-label="后台设置目录">
             <a href="#mineru"><v-icon icon="mdi-file-search-outline" size="17" />MinerU</a>
-            <a href="#deepseek"><v-icon icon="mdi-translate" size="17" />DeepSeek</a>
+            <a href="#translation"><v-icon icon="mdi-translate" size="17" />全站翻译</a>
+            <a href="#deepseek"><v-icon icon="mdi-key-outline" size="17" />DeepSeek</a>
             <a href="#storage"><v-icon icon="mdi-harddisk" size="17" />本地存储</a>
             <a href="#r2"><v-icon icon="mdi-cloud-outline" size="17" />R2 镜像</a>
-            <a href="#documents"><v-icon icon="mdi-file-edit-outline" size="17" />文档名称</a>
+            <a href="#documents"><v-icon icon="mdi-file-lock-outline" size="17" />文档管理</a>
           </nav>
           <div class="config-status">
             <h3>服务状态</h3>
             <div><span>MinerU</span><b :class="settings.mineru_configured ? 'ok' : 'warn'">{{ settings.mineru_configured ? '已配置' : '未配置' }}</b></div>
-            <div><span>DeepSeek</span><b :class="settings.deepseek_configured ? 'ok' : ''">{{ settings.deepseek_configured ? '已启用' : '未启用' }}</b></div>
+            <div><span>全站翻译</span><b class="ok">{{ settings.translation_provider === 'deepseek' ? 'DeepSeek' : 'Google' }}</b></div>
+            <div><span>DeepSeek</span><b :class="settings.deepseek_configured ? 'ok' : ''">{{ settings.deepseek_configured ? '已配置' : '未配置' }}</b></div>
             <div><span>本地存储</span><b class="ok">已启用</b></div>
             <div><span>R2</span><b :class="settings.r2_configured ? 'ok' : ''">{{ settings.r2_configured ? '已配置' : '可选' }}</b></div>
           </div>
@@ -225,8 +254,26 @@ onMounted(async () => {
             <div class="form-actions"><v-btn color="primary" :loading="loading" :disabled="mineruKey.length < 8" @click="saveMinerU">验证并保存</v-btn></div>
           </section>
 
+          <section id="translation" class="settings-section">
+            <header><div><h2>全站翻译服务</h2><p>所有新任务统一翻译为简体中文，前台用户不能自行切换。</p></div><span class="setting-state is-ok">{{ settings.translation_provider === 'deepseek' ? 'DeepSeek' : 'Google 免费翻译' }}</span></header>
+            <div class="provider-picker">
+              <button type="button" :class="{ 'is-selected': translationProvider === 'google' }" @click="translationProvider = 'google'">
+                <v-icon icon="mdi-google" size="20" />
+                <span><b>Google 免费翻译</b><small>默认，无需 API Key；可能受到 Google 限流</small></span>
+                <v-icon :icon="translationProvider === 'google' ? 'mdi-radiobox-marked' : 'mdi-radiobox-blank'" size="18" />
+              </button>
+              <button type="button" :disabled="!settings.deepseek_configured" :class="{ 'is-selected': translationProvider === 'deepseek' }" @click="translationProvider = 'deepseek'">
+                <v-icon icon="mdi-brain" size="20" />
+                <span><b>DeepSeek</b><small>{{ settings.deepseek_configured ? `已验证模型：${settings.deepseek_model}` : '先在下方配置并验证 API Key' }}</small></span>
+                <v-icon :icon="translationProvider === 'deepseek' ? 'mdi-radiobox-marked' : 'mdi-radiobox-blank'" size="18" />
+              </button>
+            </div>
+            <p class="section-help">服务选择会在任务创建时固定写入数据库，切换不会改变正在处理或已经完成的文档。</p>
+            <div class="form-actions"><v-btn color="primary" :loading="loading" :disabled="translationProvider === settings.translation_provider" @click="saveTranslator">保存全站翻译服务</v-btn></div>
+          </section>
+
           <section id="deepseek" class="settings-section">
-            <header><div><h2>DeepSeek 翻译</h2><p>配置成功后，前台默认选择翻译为简体中文。</p></div><span class="setting-state" :class="settings.deepseek_configured ? 'is-ok' : ''">{{ settings.deepseek_configured ? '已启用' : '可选' }}</span></header>
+            <header><div><h2>DeepSeek 配置</h2><p>配置成功后才会成为可选翻译服务，不会自动切换全站设置。</p></div><span class="setting-state" :class="settings.deepseek_configured ? 'is-ok' : ''">{{ settings.deepseek_configured ? '已配置' : '可选' }}</span></header>
             <p v-if="settings.deepseek_api_key_masked" class="current-secret">当前 Key：<code>{{ settings.deepseek_api_key_masked }}</code></p>
             <div class="form-grid form-grid--2">
               <v-text-field v-model="deepseekKey" label="新的 DeepSeek API Key" type="password" autocomplete="new-password" hide-details />
@@ -263,14 +310,16 @@ onMounted(async () => {
           </details>
 
           <section id="documents" class="settings-section document-settings">
-            <header><div><h2>文档名称</h2><p>修改网页标题和下载名称，不改动服务器物理文件。</p></div><span class="setting-state">{{ documents.length }} 份</span></header>
+            <header><div><h2>文档管理</h2><p>后台显示全部文档。新上传默认私有，只有管理员在这里公开后才进入公开文库。</p></div><span class="setting-state">{{ documents.length }} 份</span></header>
             <v-text-field v-model="documentQuery" prepend-inner-icon="mdi-magnify" placeholder="搜索文档" aria-label="搜索文档" hide-details clearable class="document-search" />
             <div v-if="filteredDocuments.length" class="admin-document-list">
               <div v-for="document in filteredDocuments" :key="document.id" class="admin-document-row">
-                <div class="admin-document-row__copy"><strong>{{ document.title }}</strong><span>{{ document.display_filename }}</span><small>{{ document.id }}</small></div>
+                <div class="admin-document-row__copy"><strong>{{ document.title }}</strong><span>{{ document.display_filename }}</span><small><i :class="document.is_public ? 'is-public' : ''">{{ document.is_public ? '公开' : '私有' }}</i> · {{ document.id }}</small></div>
                 <div class="admin-document-actions">
+                  <v-btn :to="`/documents/${document.id}`" icon="mdi-eye-outline" size="small" variant="text" title="查看文档" />
                   <v-btn :href="`/api/v1/jobs/${document.id}/bundle`" icon="mdi-folder-zip-outline" size="small" variant="text" title="下载完整归档包" />
                   <v-btn icon="mdi-pencil-outline" size="small" variant="text" title="修改展示名称" @click="beginRename(document)" />
+                  <v-btn :icon="document.is_public ? 'mdi-lock-outline' : 'mdi-earth'" size="small" :color="document.is_public ? undefined : 'primary'" variant="text" :title="document.is_public ? '设为私有' : '公开文档'" :loading="loading" @click="toggleVisibility(document)" />
                 </div>
               </div>
             </div>
@@ -285,7 +334,7 @@ onMounted(async () => {
     <v-dialog :model-value="Boolean(renameId)" max-width="580" @update:model-value="(value) => { if (!value) cancelRename() }">
       <v-card class="rename-dialog">
         <header><h2>重命名文档</h2><p>只更新数据库映射，不移动本地文件。</p></header>
-        <v-text-field v-model="renameTitle" label="网页公开标题" maxlength="512" counter />
+        <v-text-field v-model="renameTitle" label="网页展示标题" maxlength="512" counter />
         <v-text-field v-model="renameFilename" label="源文件下载名称" hint="必须保留原扩展名；允许中文、空格和常用符号" persistent-hint maxlength="512" />
         <v-card-actions class="px-0 pb-0 mt-3"><v-spacer /><v-btn variant="text" @click="cancelRename">取消</v-btn><v-btn color="primary" :loading="loading" :disabled="!renameTitle.trim() || !renameFilename.trim()" @click="saveNames">保存</v-btn></v-card-actions>
       </v-card>

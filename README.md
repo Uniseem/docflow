@@ -1,12 +1,12 @@
 # 文流（DocFlow）
 
-文流是一个可自托管的公开文档解析、中文翻译与阅读服务。用户提交 MinerU 支持的 PDF、Office 文档、图片或 HTML 后，Rust Worker 在后台完成解析、WebP 图片转换、DeepSeek 分块翻译、Markdown 规范化和 VPS 本地永久归档。Cloudflare R2 是可选镜像，不是运行前提。
+文流是一个可自托管的文档解析、中文翻译与阅读服务。用户提交 MinerU 支持的 PDF、Office 文档、图片或 HTML 后，Rust Worker 在后台完成解析、WebP 图片转换、分块翻译、Markdown 规范化和 VPS 本地永久归档。Google 免费翻译是默认的全站翻译服务；管理员验证 DeepSeek API Key 与模型后，也可以把全站统一切换为 DeepSeek。Cloudflare R2 是可选镜像，不是运行前提。
 
-站点默认公开，没有普通用户账户，也没有删除接口。管理后台固定在 `/admin`，前台不显示入口；首次访问后台的用户可以注册为唯一管理员。
+新文档默认私有，没有普通用户账户，也没有删除接口。上传响应会给当前浏览器设置每份文档独立的 HttpOnly 访问凭证；管理员在 `/admin` 能看到全部文档，并可逐份公开或恢复私有。管理后台固定在 `/admin`，前台不显示入口；首次访问后台的用户可以注册为唯一管理员。
 
 ## 架构
 
-- Rust、Axum、Tokio：公开 HTTP API、管理 API、上传流、SSE 实时进度和后台 Worker。
+- Rust、Axum、Tokio：带文档级访问控制的 HTTP API、管理 API、上传流、SSE 实时进度和后台 Worker。
 - SQLx、PostgreSQL：元数据、三种 Markdown、最终 HTML、管理员、加密配置、任务租约和不可删除的详细事件。
 - PostgreSQL 持久队列：Worker 通过 `FOR UPDATE SKIP LOCKED` 并发领取任务，不再依赖 Redis/Celery。
 - VPS 当前目录：`./data` 绑定挂载 PostgreSQL、实例密钥、源文件、MinerU ZIP、三种 Markdown、HTML、WebP、事件和归档清单，不使用 Docker 命名卷。
@@ -18,7 +18,8 @@
 
 ## 数据规则
 
-- 所有文档和任务状态默认向所有访问者公开。
+- 新文档和处理事件默认私有：只有持有该文档浏览器凭证的上传者和管理员可读取；管理员主动公开后才会出现在公开文库。
+- 文档详情、SSE 事件、Markdown、源文件、ZIP 和图片使用同一套权限判断，私有状态不是仅在列表中隐藏。
 - Markdown 永久保存：数据库和本地 `.md` 文件同时持久化 MinerU 原稿、中文译稿和规范化终稿。
 - 图片不使用 MinerU 链接：本地或远程图片会下载、去重、转成 WebP，并改写为本站稳定 API 路径。
 - 展示标题、原始上传名和可修改的下载名保存在 PostgreSQL；磁盘只使用随机 `storage_key`、UUID 目录与 `source.pdf` 等 ASCII 物理名。
@@ -34,7 +35,7 @@
 2. `5–52%`：申请 MinerU 上传地址、直传源文件、逐次轮询和页面进度。
 3. `53–64%`：校验公网地址、分块下载 ZIP、防路径穿越和解压规模检查。
 4. `65–70%`：扫描图片、逐张转 WebP、内容寻址去重、改写本站资源路径。
-5. `71–87%`：保护公式/代码/图片/链接、规划分块、DeepSeek 调用、重试和无损校验。单块三次校验仍失败时保留该块原文并继续，不再让占位符问题毁掉整个任务。
+5. `71–87%`：保护公式/代码/图片/链接、按服务限制规划分块、调用管理员指定的 Google 免费翻译或 DeepSeek、记录限流重试并进行无损校验。单块三次校验仍失败时保留该块原文并继续，不再让占位符问题毁掉整个任务。
 6. `88–93%`：统一公式定界符、中英文间距、CommonMark/GFM 解析和 HTML 白名单消毒。
 7. `94–98%`：源文件、Markdown、HTML、WebP、MinerU ZIP 与元数据写入本地永久归档并生成清单。
 8. `99–100%`：可选 R2 镜像；无 R2 或镜像失败时保留告警并正常发布，最后只清理可再生工作区。
@@ -50,8 +51,8 @@
 
 ```text
 POST /api/v1/jobs                         multipart 创建任务
-GET  /api/v1/jobs                         公开任务列表
-GET  /api/v1/jobs/{id}                    状态与最终文章
+GET  /api/v1/jobs                         管理员主动公开的任务列表
+GET  /api/v1/jobs/{id}                    状态与最终文章（私有任务需 Cookie）
 GET  /api/v1/jobs/{id}/events             永久事件增量读取
 GET  /api/v1/jobs/{id}/events/stream      SSE 实时进度
 GET  /api/v1/jobs/{id}/markdown           original/translated/normalized
@@ -63,9 +64,13 @@ GET  /api/v1/jobs/{id}/assets/{name}      本地 WebP（R2 仅作回退）
 示例：
 
 ```bash
-curl -F "file=@paper.pdf" -F "translate=true" \
+curl -c docflow.cookies -F "file=@paper.pdf" -F "title=文档标题" \
   http://185.99.135.224:8090/api/v1/jobs
 ```
+
+上传响应中的 Cookie 是该私有文档的访问凭证。命令行后续读取进度或下载时使用 `-b docflow.cookies`。网页会自动管理该凭证。全站始终翻译为中文，客户端提交的旧版 `translate` 字段会被兼容接收但忽略。
+
+默认 Google 实现使用 Google 网页客户端使用的免费翻译端点，不需要 API Key，也不是带 SLA 的 Google Cloud Translation API。它可能限流或发生兼容性变化；管线会显示每次重试并在单个分块持续失败时保留原文继续归档。需要稳定配额时，管理员可配置并切换到 DeepSeek。
 
 ## VPS 一键部署
 
@@ -259,15 +264,15 @@ services:
     └── documents/    # 源文件、Markdown、HTML、WebP、MinerU ZIP 与工作区
 ```
 
-端口等参数有默认值；如需覆盖，可在同目录创建可选 `.env`，参考仓库中的 `.env.example`。MinerU、DeepSeek 和 R2 凭据始终在 `/admin` 中配置，而不是写入 Compose 或 `.env`。
+端口等参数有默认值；如需覆盖，可在同目录创建可选 `.env`，参考仓库中的 `.env.example`。MinerU、可选 DeepSeek 和 R2 凭据始终在 `/admin` 中配置，而不是写入 Compose 或 `.env`。Google 免费翻译无需凭据。
 
 管理员访问 `http://185.99.135.224:8090/admin`：
 
 1. 首次注册唯一管理员；已有 Python 版本的 Argon2 密码可直接登录。
 2. 配置并验证 MinerU API Key 与模型。
-3. 可选配置 DeepSeek API Key 和模型；验证成功后前台默认选择中文翻译。
+3. 全站翻译默认为 Google 免费翻译。可选配置并验证 DeepSeek API Key 和模型，然后在“全站翻译服务”中切换；普通访问者没有翻译服务选择项。
 4. 如需异地镜像，可选配置 R2 Account ID、Access Key ID、Secret Access Key 和 Bucket。凭据在数据库中使用 `data/config/secret_key` 派生的 Fernet 密钥加密。
-5. 在“文档重命名”中修改公开标题与下载文件名；扩展名必须保持一致，后端物理路径不会变化。
+5. 在“文档管理”中查看全部文档、切换公开/私有状态，并修改展示标题与下载文件名；扩展名必须保持一致，后端物理路径不会变化。
 
 Cloudflare R2 凭据应仅授予目标存储桶对象读写权限。应用没有 R2 删除调用，也不配置生命周期规则。
 
@@ -294,8 +299,8 @@ docker compose start
 
 ## 安全边界
 
-- 公开是产品设定，请勿提交不能公开的材料。
-- 管理员密码使用 Argon2，管理会话为 12 小时 HS256 JWT。
+- 新上传默认私有，但当前使用的是明文 HTTP；同网段攻击者仍可能窃取 Cookie 或管理员凭据。敏感材料应在配置 HTTPS 后使用。
+- 管理员密码使用 Argon2，管理会话为 12 小时 HS256 JWT，并同步写入 HttpOnly、SameSite=Lax Cookie；数据库只保存文档访问凭证的 SHA-256 哈希。
 - ZIP 解压限制路径、条目数与总大小；外链下载拒绝私网、回环和链路本地地址。
 - HTML 由 Comrak 渲染，并经 Ammonia 白名单消毒。
 - 当前入口是明文 IP + 端口。管理员填写凭据时应使用可信网络、VPN 或 SSH 隧道；长期公网运行建议后续增加域名和 HTTPS。

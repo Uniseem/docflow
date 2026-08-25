@@ -3,11 +3,20 @@ use argon2::{
     Argon2, PasswordHash, PasswordHasher, PasswordVerifier,
     password_hash::{SaltString, rand_core::OsRng},
 };
-use axum::{extract::Request, http::header, middleware::Next, response::Response};
-use base64::{Engine, engine::general_purpose::URL_SAFE};
+use axum::{
+    extract::Request,
+    http::{HeaderMap, header},
+    middleware::Next,
+    response::Response,
+};
+use base64::{
+    Engine,
+    engine::general_purpose::{URL_SAFE, URL_SAFE_NO_PAD},
+};
 use chrono::{Duration, Utc};
 use fernet::Fernet;
 use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation, decode, encode};
+use rand::{RngCore, rngs::OsRng as TokenOsRng};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -76,7 +85,7 @@ pub fn create_token(secret_key: &str, username: &str) -> Result<String> {
     )?)
 }
 
-fn validate_token(secret_key: &str, token: &str) -> bool {
+pub fn validate_token(secret_key: &str, token: &str) -> bool {
     let mut validation = Validation::new(Algorithm::HS256);
     validation.required_spec_claims = ["exp", "sub"].into_iter().map(String::from).collect();
     decode::<Claims>(
@@ -88,17 +97,56 @@ fn validate_token(secret_key: &str, token: &str) -> bool {
     .unwrap_or(false)
 }
 
+pub fn cookie_value(headers: &HeaderMap, name: &str) -> Option<String> {
+    headers
+        .get_all(header::COOKIE)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .flat_map(|value| value.split(';'))
+        .filter_map(|pair| pair.trim().split_once('='))
+        .find_map(|(key, value)| (key == name).then(|| value.to_string()))
+}
+
+pub fn admin_token(headers: &HeaderMap) -> Option<String> {
+    headers
+        .get(header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "))
+        .map(str::to_string)
+        .or_else(|| cookie_value(headers, "docflow_admin"))
+}
+
+pub fn request_is_admin(secret_key: &str, headers: &HeaderMap) -> bool {
+    admin_token(headers).is_some_and(|token| validate_token(secret_key, &token))
+}
+
+pub fn create_document_access_token() -> String {
+    let mut bytes = [0u8; 32];
+    TokenOsRng.fill_bytes(&mut bytes);
+    URL_SAFE_NO_PAD.encode(bytes)
+}
+
+pub fn hash_document_access_token(token: &str) -> String {
+    hex::encode(Sha256::digest(token.as_bytes()))
+}
+
+pub fn verify_document_access_token(token: &str, expected_hash: &str) -> bool {
+    let candidate = hash_document_access_token(token);
+    candidate.len() == expected_hash.len()
+        && candidate
+            .as_bytes()
+            .iter()
+            .zip(expected_hash.as_bytes())
+            .fold(0u8, |difference, (left, right)| difference | (left ^ right))
+            == 0
+}
+
 pub async fn require_admin(
     axum::extract::State(state): axum::extract::State<std::sync::Arc<AppState>>,
     request: Request,
     next: Next,
 ) -> Result<Response, ApiError> {
-    let token = request
-        .headers()
-        .get(header::AUTHORIZATION)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.strip_prefix("Bearer "));
-    if !token.is_some_and(|value| validate_token(&state.config.secret_key, value)) {
+    if !request_is_admin(&state.config.secret_key, request.headers()) {
         return Err(ApiError::unauthorized("需要有效的管理员登录"));
     }
     Ok(next.run(request).await)
@@ -132,5 +180,15 @@ mod tests {
         let token = create_token("signing-key", "administrator").unwrap();
         assert!(validate_token("signing-key", &token));
         assert!(!validate_token("another-key", &token));
+    }
+
+    #[test]
+    fn document_access_tokens_are_random_and_hash_verified() {
+        let first = create_document_access_token();
+        let second = create_document_access_token();
+        assert_ne!(first, second);
+        let hash = hash_document_access_token(&first);
+        assert!(verify_document_access_token(&first, &hash));
+        assert!(!verify_document_access_token(&second, &hash));
     }
 }

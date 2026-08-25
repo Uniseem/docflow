@@ -13,13 +13,35 @@ use crate::{
     events::{self, EventInput},
 };
 
+pub enum TranslationProvider {
+    Google,
+    DeepSeek { api_key: String, model: String },
+}
+
+impl TranslationProvider {
+    fn label(&self) -> &str {
+        match self {
+            Self::Google => "Google 免费翻译",
+            Self::DeepSeek { model, .. } => model,
+        }
+    }
+
+    fn chunk_limit(&self, configured: usize) -> usize {
+        match self {
+            Self::Google => configured.min(3_500),
+            Self::DeepSeek { .. } => configured,
+        }
+        .max(500)
+    }
+}
+
 pub async fn translate(
     state: &Arc<AppState>,
     id: &str,
     markdown: &str,
-    api_key: &str,
-    model: &str,
+    provider: &TranslationProvider,
 ) -> Result<String> {
+    let chunk_limit = provider.chunk_limit(state.config.translation_chunk_chars);
     events::progress(
         &state.pool,
         id,
@@ -27,13 +49,13 @@ pub async fn translate(
         71,
         "正在保护公式、代码、图片和链接并规划翻译分块",
         Some(&format!(
-            "模型 {model}；目标分块 {} 字符；占位内容不发送给翻译模型改写",
-            state.config.translation_chunk_chars
+            "全站翻译服务：{}；目标分块 {chunk_limit} 字符；占位内容不发送给翻译服务改写",
+            provider.label()
         )),
     )
     .await?;
     let (protected, map) = protect(markdown)?;
-    let chunks = chunk(&protected, state.config.translation_chunk_chars);
+    let chunks = chunk(&protected, chunk_limit);
     events::append(
         &state.pool,
         id,
@@ -90,12 +112,13 @@ pub async fn translate(
                 &state.pool,
                 id,
                 EventInput {
-                    stage: "translation_model_call",
+                    stage: "translation_provider_call",
                     state: "running",
                     level: "info",
                     progress: 72 + ((current - 1) * 14 / count.max(1)) as i32,
                     message: &format!(
-                        "第 {current} / {count} 块：模型调用 {placeholder_attempt} / 3"
+                        "第 {current} / {count} 块：{} 调用 {placeholder_attempt} / 3",
+                        provider.label()
                     ),
                     detail: Some(if placeholder_attempt == 1 {
                         "普通翻译规则"
@@ -107,10 +130,9 @@ pub async fn translate(
                 },
             )
             .await?;
-            match call(
+            match call_provider(
                 &client,
-                api_key,
-                model,
+                provider,
                 source,
                 placeholder_attempt > 1,
                 CallProgress {
@@ -154,7 +176,7 @@ pub async fn translate(
             value
         } else {
             fallback_count += 1;
-            events::append(&state.pool,id,EventInput{stage:"translation_chunk_preserved",state:"warning",level:"warning",progress:72+(current*14/count.max(1)) as i32,message:&format!("第 {current} 块为保护公式与链接，保留原文继续发布"),detail:Some(&format!("三次模型输出均未通过无损校验；不会再因占位符破坏导致整个任务失败。最后错误：{}",last_error.chars().take(700).collect::<String>())),current:Some(current as i64),total:Some(count as i64)}).await?;
+            events::append(&state.pool,id,EventInput{stage:"translation_chunk_preserved",state:"warning",level:"warning",progress:72+(current*14/count.max(1)) as i32,message:&format!("第 {current} 块为保护公式与链接，保留原文继续发布"),detail:Some(&format!("三次翻译结果均未通过无损校验；不会再因占位符破坏导致整个任务失败。最后错误：{}",last_error.chars().take(700).collect::<String>())),current:Some(current as i64),total:Some(count as i64)}).await?;
             restore(source, &placeholders, &map).context("恢复原文保护片段失败")?
         };
         output.push(final_text);
@@ -266,7 +288,22 @@ struct CallProgress<'a> {
     total: usize,
 }
 
-async fn call(
+async fn call_provider(
+    client: &reqwest::Client,
+    provider: &TranslationProvider,
+    content: &str,
+    strict: bool,
+    progress: CallProgress<'_>,
+) -> Result<String> {
+    match provider {
+        TranslationProvider::Google => call_google(client, content, progress).await,
+        TranslationProvider::DeepSeek { api_key, model } => {
+            call_deepseek(client, api_key, model, content, strict, progress).await
+        }
+    }
+}
+
+async fn call_deepseek(
     client: &reqwest::Client,
     key: &str,
     model: &str,
@@ -341,6 +378,133 @@ async fn call(
     )
 }
 
+async fn call_google(
+    client: &reqwest::Client,
+    content: &str,
+    progress: CallProgress<'_>,
+) -> Result<String> {
+    let CallProgress {
+        state,
+        id,
+        current,
+        total,
+    } = progress;
+    let mut last = String::new();
+    for attempt in 1u32..=4 {
+        let response = client
+            .get("https://clients5.google.com/translate_a/t")
+            .query(&[
+                ("client", "dict-chrome-ex"),
+                ("sl", "auto"),
+                ("tl", "zh-CN"),
+                ("q", content),
+            ])
+            .header(
+                reqwest::header::USER_AGENT,
+                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/124 Safari/537.36",
+            )
+            .header(reqwest::header::REFERER, "https://translate.google.com/")
+            .send()
+            .await;
+        let response = match response {
+            Ok(value) => value,
+            Err(error) => {
+                last = error.to_string();
+                let delay = 2u64.pow((attempt - 1).min(3));
+                append_provider_retry(
+                    state,
+                    id,
+                    current,
+                    total,
+                    attempt,
+                    delay,
+                    "Google 免费翻译连接失败",
+                    &last,
+                )
+                .await?;
+                tokio::time::sleep(Duration::from_secs(delay)).await;
+                continue;
+            }
+        };
+        let status = response.status();
+        let body = response.text().await?;
+        if [429, 500, 502, 503, 504].contains(&status.as_u16()) {
+            last = body;
+            let delay = 2u64.pow((attempt - 1).min(3));
+            append_provider_retry(
+                state,
+                id,
+                current,
+                total,
+                attempt,
+                delay,
+                &format!("Google 免费翻译返回 HTTP {status}"),
+                &last,
+            )
+            .await?;
+            tokio::time::sleep(Duration::from_secs(delay)).await;
+            continue;
+        }
+        if !status.is_success() {
+            anyhow::bail!(
+                "Google 免费翻译 HTTP {status}：{}",
+                body.chars().take(400).collect::<String>()
+            );
+        }
+        let value: Value =
+            serde_json::from_str(&body).with_context(|| "Google 免费翻译返回了无法解析的结果")?;
+        return parse_google_response(&value);
+    }
+    anyhow::bail!(
+        "Google 免费翻译多次重试仍不可用：{}",
+        last.chars().take(300).collect::<String>()
+    )
+}
+
+async fn append_provider_retry(
+    state: &Arc<AppState>,
+    id: &str,
+    current: usize,
+    total: usize,
+    attempt: u32,
+    delay: u64,
+    reason: &str,
+    detail: &str,
+) -> Result<()> {
+    events::append(
+        &state.pool,
+        id,
+        EventInput {
+            stage: "translation_api_retry",
+            state: "warning",
+            level: "warning",
+            progress: 72 + ((current - 1) * 14 / total.max(1)) as i32,
+            message: &format!("第 {current} 块：{reason}，{delay} 秒后重试"),
+            detail: Some(&format!(
+                "服务重试 {attempt} / 4；响应 {}",
+                detail.chars().take(300).collect::<String>()
+            )),
+            current: Some(attempt as i64),
+            total: Some(4),
+        },
+    )
+    .await?;
+    Ok(())
+}
+
+fn parse_google_response(value: &Value) -> Result<String> {
+    let segments = value.as_array().context("Google 免费翻译响应不是数组")?;
+    let translated = segments
+        .iter()
+        .filter_map(|segment| segment.as_array()?.first()?.as_str())
+        .collect::<Vec<_>>()
+        .join("");
+    if translated.trim().is_empty() {
+        anyhow::bail!("Google 免费翻译返回空文本");
+    }
+    Ok(translated)
+}
+
 fn strip_wrapper(value: &str) -> String {
     let trimmed = value.trim();
     if trimmed.starts_with("```markdown") || trimmed.starts_with("```md") {
@@ -411,5 +575,11 @@ mod tests {
         let chunks = chunk("中文段落一\n\n中文段落二", 5);
         assert!(chunks.iter().all(|value| value.chars().count() <= 5));
         assert!(!chunks.is_empty());
+    }
+
+    #[test]
+    fn parses_google_chrome_dictionary_response() {
+        let value = json!([["你好世界", "en"]]);
+        assert_eq!(parse_google_response(&value).unwrap(), "你好世界");
     }
 }

@@ -457,7 +457,7 @@ async fn write_atomic(destination: &Path, bytes: &[u8]) -> Result<()> {
 }
 
 async fn load_document_metadata(state: &AppState, id: &str) -> Result<Value> {
-    let row = sqlx::query("SELECT id,title,original_filename,display_filename,storage_key,source_size,mime_type,upload_sha256,translate_requested,translated,created_at FROM documents WHERE id=$1")
+    let row = sqlx::query("SELECT id,title,original_filename,display_filename,storage_key,source_size,mime_type,upload_sha256,translate_requested,translation_provider,translated,is_public,created_at FROM documents WHERE id=$1")
         .bind(id)
         .fetch_one(&state.pool)
         .await?;
@@ -471,7 +471,9 @@ async fn load_document_metadata(state: &AppState, id: &str) -> Result<Value> {
         "mime_type": row.get::<Option<String>, _>("mime_type"),
         "upload_sha256": row.get::<Option<String>, _>("upload_sha256"),
         "translate_requested": row.get::<bool, _>("translate_requested"),
+        "translation_provider": row.get::<String, _>("translation_provider"),
         "translated": row.get::<bool, _>("translated"),
+        "is_public": row.get::<bool, _>("is_public"),
         "created_at": row.get::<chrono::DateTime<chrono::Utc>, _>("created_at"),
         "physical_names_are_internal": true,
     }))

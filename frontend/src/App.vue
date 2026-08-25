@@ -43,7 +43,7 @@ const nav = [
     <footer class="site-footer">
       <v-container class="footer-inner">
         <span>文流 DocFlow</span>
-        <span>公开文档 · 本地永久保存</span>
+        <span>默认私有 · 管理员可公开 · 本地永久保存</span>
       </v-container>
     </footer>
   </v-app>

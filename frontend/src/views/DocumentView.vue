@@ -138,6 +138,9 @@ function connect() {
 
 async function load() {
   try {
+    if (localStorage.getItem('docflow-admin-token')) {
+      await api.ensureAdminSession().catch(() => undefined)
+    }
     documentItem.value = await api.getDocument(String(route.params.id))
     await loadEvents()
     if (documentItem.value.status === 'completed') await renderMath()
@@ -172,9 +175,10 @@ onBeforeUnmount(() => {
     <header class="reader-header">
       <div class="reader-flags">
         <StatusChip :status="documentItem.status" />
+        <span class="meta-pill"><v-icon :icon="documentItem.is_public ? 'mdi-earth' : 'mdi-lock-outline'" size="14" />{{ documentItem.is_public ? '公开文档' : '私有文档' }}</span>
         <span class="meta-pill"><v-icon icon="mdi-harddisk" size="14" />本地已归档</span>
         <span v-if="documentItem.r2_mirror_status === 'archived'" class="meta-pill"><v-icon icon="mdi-cloud-check-outline" size="14" />R2 已镜像</span>
-        <span v-if="documentItem.translated" class="meta-pill"><v-icon icon="mdi-translate" size="14" />中文译文</span>
+        <span v-if="documentItem.translated" class="meta-pill"><v-icon icon="mdi-translate" size="14" />{{ documentItem.translation_provider === 'deepseek' ? 'DeepSeek 中文译文' : 'Google 中文译文' }}</span>
       </div>
       <h1>{{ documentItem.title }}</h1>
       <div class="reader-meta">
@@ -220,6 +224,7 @@ onBeforeUnmount(() => {
     <header class="task-header">
       <div class="task-header__status">
         <StatusChip :status="documentItem.status" />
+        <span class="meta-pill"><v-icon :icon="documentItem.is_public ? 'mdi-earth' : 'mdi-lock-outline'" size="14" />{{ documentItem.is_public ? '公开' : '私有' }}</span>
         <span class="connection-mark" :class="`is-${connection}`"><i />{{ connectionText }}</span>
       </div>
       <h1>{{ documentItem.title }}</h1>
@@ -239,7 +244,7 @@ onBeforeUnmount(() => {
         <dl class="progress-facts">
           <div><dt>当前阶段</dt><dd>{{ documentItem.stage }}</dd></div>
           <div><dt>源文件</dt><dd>已永久保存</dd></div>
-          <div><dt>翻译</dt><dd>{{ documentItem.translate_requested ? '已启用' : '未启用' }}</dd></div>
+          <div><dt>翻译</dt><dd>{{ documentItem.translation_provider === 'deepseek' ? 'DeepSeek' : documentItem.translation_provider === 'google' ? 'Google 免费翻译' : '未启用' }}</dd></div>
           <div><dt>本地归档</dt><dd>{{ documentItem.local_archive_status }}</dd></div>
         </dl>
         <div class="sidebar-actions">

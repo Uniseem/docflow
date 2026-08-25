@@ -3,6 +3,8 @@ export interface PublicConfig {
   mineru_configured: boolean
   translation_available: boolean
   default_translate: boolean
+  translation_provider: 'google' | 'deepseek'
+  documents_public_by_default: boolean
   r2_configured: boolean
   accepting_uploads: boolean
   max_upload_mb: number
@@ -25,7 +27,9 @@ export interface DocumentSummary {
   progress: number
   failure_reason: string | null
   translate_requested: boolean
+  translation_provider: 'google' | 'deepseek' | 'none'
   translated: boolean
+  is_public: boolean
   mineru_model: string
   pages_processed: number | null
   pages_total: number | null
@@ -83,6 +87,7 @@ export interface AdminSettings {
   deepseek_configured: boolean
   deepseek_api_key_masked: string | null
   deepseek_model: string
+  translation_provider: 'google' | 'deepseek'
   r2_configured: boolean
   r2_account_id: string
   r2_access_key_id_masked: string | null

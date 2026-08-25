@@ -11,7 +11,7 @@ import type {
 const jsonHeaders = { 'Content-Type': 'application/json' }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(path, init)
+  const response = await fetch(path, { credentials: 'same-origin', ...init })
   if (!response.ok) {
     let message = `请求失败（${response.status}）`
     try {
@@ -22,6 +22,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     }
     throw new Error(message)
   }
+  if (response.status === 204) return undefined as T
   return response.json() as Promise<T>
 }
 
@@ -50,7 +51,14 @@ export const api = {
       headers: jsonHeaders,
       body: JSON.stringify({ username, password }),
     }),
+  ensureAdminSession: () => request<void>('/api/admin/session', {
+    method: 'POST',
+    headers: adminHeaders(),
+  }),
+  adminLogout: () => request<void>('/api/admin/logout', { method: 'POST' }),
   adminSettings: () => request<AdminSettings>('/api/admin/settings', { headers: adminHeaders() }),
+  adminListDocuments: (page = 1, pageSize = 100, query = '') =>
+    request<DocumentList>(`/api/admin/documents?page=${page}&page_size=${pageSize}&q=${encodeURIComponent(query)}`, { headers: adminHeaders() }),
   saveMinerU: (apiKey: string, model: string) =>
     request<AdminSettings>('/api/admin/settings/mineru', {
       method: 'PUT',
@@ -62,6 +70,12 @@ export const api = {
       method: 'PUT',
       headers: adminHeaders(),
       body: JSON.stringify({ api_key: apiKey, model }),
+    }),
+  saveTranslationProvider: (provider: 'google' | 'deepseek') =>
+    request<AdminSettings>('/api/admin/settings/translation', {
+      method: 'PUT',
+      headers: adminHeaders(),
+      body: JSON.stringify({ provider }),
     }),
   saveR2: (accountId: string, accessKeyId: string, secretAccessKey: string, bucket: string, publicBaseUrl: string) =>
     request<AdminSettings>('/api/admin/settings/r2', {
@@ -75,6 +89,12 @@ export const api = {
       headers: adminHeaders(),
       body: JSON.stringify({ title, display_filename: displayFilename }),
     }),
+  updateDocumentVisibility: (id: string, isPublic: boolean) =>
+    request<DocumentSummary>(`/api/admin/documents/${id}/visibility`, {
+      method: 'PATCH',
+      headers: adminHeaders(),
+      body: JSON.stringify({ is_public: isPublic }),
+    }),
   streamDocumentEvents: (id: string, afterId: number, onEvent: (event: import('./types').ProcessingEvent) => void, onEnd: () => void, onError: () => void) => {
     const source = new EventSource(`/api/v1/jobs/${id}/events/stream?after_id=${afterId}`)
     source.addEventListener('progress', (message) => onEvent(JSON.parse((message as MessageEvent).data) as import('./types').ProcessingEvent))
@@ -82,14 +102,14 @@ export const api = {
     source.onerror = () => { source.close(); onError() }
     return () => source.close()
   },
-  uploadDocument: (file: File, title: string, translate: boolean, onProgress: (percent: number) => void) =>
+  uploadDocument: (file: File, title: string, onProgress: (percent: number) => void) =>
     new Promise<DocumentSummary>((resolve, reject) => {
       const form = new FormData()
       form.append('file', file)
       if (title.trim()) form.append('title', title.trim())
-      form.append('translate', String(translate))
       const xhr = new XMLHttpRequest()
       xhr.open('POST', '/api/v1/jobs')
+      xhr.withCredentials = true
       xhr.responseType = 'json'
       xhr.upload.onprogress = (event) => {
         if (event.lengthComputable) onProgress(Math.round((event.loaded / event.total) * 100))

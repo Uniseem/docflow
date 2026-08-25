@@ -12,7 +12,9 @@ const stages = computed(() => [
   { title: '图片 WebP', caption: '转换、去重并改写本站路径', start: 65, end: 70, icon: 'mdi-image-sync-outline' },
   {
     title: props.document.translate_requested ? '分段翻译' : '翻译（已跳过）',
-    caption: props.document.translate_requested ? '分块调用、重试与占位符校验' : '本任务未选择中文翻译',
+    caption: props.document.translate_requested
+      ? `${props.document.translation_provider === 'deepseek' ? 'DeepSeek' : 'Google 免费翻译'} · 分块调用、重试与占位符校验`
+      : '历史任务未启用中文翻译',
     start: 71,
     end: 87,
     icon: props.document.translate_requested ? 'mdi-translate' : 'mdi-debug-step-over',
