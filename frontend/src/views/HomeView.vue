@@ -17,13 +17,13 @@ const uploadProgress = ref(0)
 const error = ref('')
 const translationNotice = ref('')
 const fileInput = ref<HTMLInputElement | null>(null)
-const selectedTranslationTier = ref<1 | 2 | 3 | 4>(1)
+type TranslationTier = 1 | 2 | 3
+const selectedTranslationTier = ref<TranslationTier>(1)
 
 const translationTiers = [
-  { tier: 1, name: '极速', engine: 'Google', detail: '免费分块直译', icon: 'mdi-flash-outline' },
-  { tier: 2, name: '标准', engine: 'DeepSeek', detail: '大模型分块直译', icon: 'mdi-translate' },
-  { tier: 3, name: '精细', engine: 'DeepSeek', detail: '先速览全文再翻译', icon: 'mdi-book-open-page-variant-outline' },
-  { tier: 4, name: 'Agent', engine: 'DeepSeek', detail: '通读全文后逐段翻译', icon: 'mdi-robot-outline' },
+  { tier: 1, name: '极速', engine: 'Google Cloud', detail: '官方翻译 API · 高速并发', icon: 'mdi-flash-outline' },
+  { tier: 2, name: '均衡', engine: 'DeepSeek V4 Flash', detail: '非思考模式 · 自然准确', icon: 'mdi-scale-balance' },
+  { tier: 3, name: '精准', engine: 'DeepSeek V4 Flash', detail: '思考模式 · 复杂论文优先', icon: 'mdi-brain' },
 ] as const
 
 const selectedTier = computed(() => translationTiers.find((item) => item.tier === selectedTranslationTier.value) || translationTiers[0])
@@ -51,9 +51,15 @@ function handleDrop(event: DragEvent) {
   chooseFile(event.dataTransfer?.files?.[0])
 }
 
-function selectTranslationTier(tier: 1 | 2 | 3 | 4) {
-  if (tier > 1 && !config.value?.deepseek_configured) {
-    translationNotice.value = '第 2–4 档需要管理员先在后台配置并验证 DeepSeek。'
+function tierAvailable(tier: TranslationTier) {
+  return tier === 1 ? Boolean(config.value?.google_configured) : Boolean(config.value?.deepseek_configured)
+}
+
+function selectTranslationTier(tier: TranslationTier) {
+  if (!tierAvailable(tier)) {
+    translationNotice.value = tier === 1
+      ? '极速档需要管理员先在后台配置 Google Cloud Translation API Key。'
+      : '均衡档和精准档需要管理员先在后台配置 DeepSeek API Key。'
     return
   }
   selectedTranslationTier.value = tier
@@ -101,6 +107,7 @@ onMounted(async () => {
     </header>
 
     <v-alert v-if="config && !config.mineru_configured" type="warning" variant="tonal" density="compact" class="mb-4">MinerU 尚未配置，当前不能提交文档。</v-alert>
+    <v-alert v-else-if="config && !config.translation_available" type="warning" variant="tonal" density="compact" class="mb-4">尚未配置 Google Cloud Translation 或 DeepSeek，当前不能提交文档。</v-alert>
 
     <section class="upload-panel">
       <main class="upload-main">
@@ -174,29 +181,28 @@ onMounted(async () => {
               :class="{
                 'is-active': item.tier === selectedTranslationTier,
                 'is-default': item.tier === (config?.translation_tier || 1),
-                'is-unavailable': item.tier > 1 && !config?.deepseek_configured,
+                'is-unavailable': !tierAvailable(item.tier),
               }"
               role="radio"
               :aria-checked="item.tier === selectedTranslationTier"
-              :aria-disabled="item.tier > 1 && !config?.deepseek_configured"
+              :aria-disabled="!tierAvailable(item.tier)"
               @click="selectTranslationTier(item.tier)"
             >
-              <span class="translation-tier-step__top">
-                <span class="translation-tier-step__icon"><v-icon :icon="item.icon" size="20" /></span>
-                <span class="translation-tier-step__number">0{{ item.tier }}</span>
+              <span class="translation-tier-step__icon"><v-icon :icon="item.icon" size="23" /></span>
+              <span class="translation-tier-step__copy">
+                <span class="translation-tier-step__title"><b>{{ item.name }}</b><small>第 {{ item.tier }} 档 · {{ item.engine }}</small></span>
+                <em>{{ item.detail }}</em>
               </span>
-              <span class="translation-tier-step__title"><b>{{ item.name }}</b><small>{{ item.engine }}</small></span>
-              <em>{{ item.detail }}</em>
               <span class="translation-tier-step__state">
                 <template v-if="item.tier === selectedTranslationTier"><v-icon icon="mdi-check-circle" size="15" />本次选择</template>
-                <template v-else-if="item.tier > 1 && !config?.deepseek_configured"><v-icon icon="mdi-lock-outline" size="14" />尚未开放</template>
+                <template v-else-if="!tierAvailable(item.tier)"><v-icon icon="mdi-lock-outline" size="14" />尚未开放</template>
                 <template v-else-if="item.tier === config?.translation_tier">管理员默认</template>
                 <template v-else>点击选择</template>
               </span>
             </button>
           </div>
           <p v-if="translationNotice" class="translation-tier-note">{{ translationNotice }}</p>
-          <p v-else-if="!config?.deepseek_configured" class="translation-tier-note">当前仅开放第 1 档；配置 DeepSeek 后会开放第 2–4 档。</p>
+          <p v-else-if="!config?.google_configured || !config?.deepseek_configured" class="translation-tier-note">Google 与 DeepSeek 独立开放：极速档需要 Google Cloud Key；均衡、精准档需要 DeepSeek Key。</p>
           <p v-else class="translation-tier-note is-ready">已选择“{{ selectedTier.name }}”；提交后任务将固定使用第 {{ selectedTranslationTier }} 档。</p>
         </div>
 

@@ -88,7 +88,7 @@ jobs:
                     WHERE table_schema='public' AND table_name='documents'
                       AND column_name='translation_guidance'
                 )
-                AND (SELECT count(*) FROM _sqlx_migrations WHERE success) = 4")"
+                AND (SELECT count(*) FROM _sqlx_migrations WHERE success) = 5")"
           test "$schema_ok" = "t"
 
       - name: Re-run migrations without losing existing data

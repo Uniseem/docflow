@@ -98,6 +98,7 @@ pub async fn serve(state: Arc<AppState>) -> anyhow::Result<()> {
         .route("/session", post(admin_session))
         .route("/settings", get(admin_settings))
         .route("/settings/mineru", put(save_mineru))
+        .route("/settings/google", put(save_google))
         .route("/settings/deepseek", put(save_deepseek))
         .route("/settings/translation", put(save_translation_provider))
         .route("/settings/r2", put(save_r2))
@@ -170,26 +171,30 @@ async fn health() -> Json<serde_json::Value> {
 async fn public_config(State(state): State<Arc<AppState>>) -> Result<Json<PublicConfig>, ApiError> {
     let secret = &state.config.secret_key;
     let mineru = settings::configured(&state.pool, secret, settings::MINERU_API_KEY).await;
-    let deepseek = settings::configured(&state.pool, secret, settings::DEEPSEEK_API_KEY).await
-        && settings::configured(&state.pool, secret, settings::DEEPSEEK_MODEL).await;
+    let google =
+        settings::configured(&state.pool, secret, settings::GOOGLE_TRANSLATE_API_KEY).await;
+    let deepseek = settings::configured(&state.pool, secret, settings::DEEPSEEK_API_KEY).await;
     let r2 = R2Settings::load(&state.pool, secret).await?.is_some();
     let configured_tier = settings::translation_tier(&state.pool, secret).await?;
-    let translation_tier = if configured_tier > 1 && !deepseek {
-        1
-    } else {
-        configured_tier
+    let translation_tier = match configured_tier {
+        1 if google => 1,
+        2 | 3 if deepseek => configured_tier,
+        _ if google => 1,
+        _ if deepseek => 2,
+        _ => 1,
     };
     Ok(Json(PublicConfig {
         app_name: state.config.app_name.clone(),
         mineru_configured: mineru,
-        translation_available: true,
+        translation_available: google || deepseek,
         default_translate: true,
         translation_provider: settings::translation_provider_for_tier(translation_tier).into(),
         translation_tier,
+        google_configured: google,
         deepseek_configured: deepseek,
         documents_public_by_default: false,
         r2_configured: r2,
-        accepting_uploads: mineru,
+        accepting_uploads: mineru && (google || deepseek),
         max_upload_mb: state.config.max_upload_mb(),
         accepted_extensions: ACCEPTED_EXTENSIONS.to_vec(),
         api_version: "v1",
@@ -309,17 +314,18 @@ async fn load_admin_settings(state: &AppState) -> Result<AdminSettingsResponse, 
     let pool = &state.pool;
     let secret = &state.config.secret_key;
     let mineru_key = settings::get(pool, secret, settings::MINERU_API_KEY).await?;
+    let google_key = settings::get(pool, secret, settings::GOOGLE_TRANSLATE_API_KEY).await?;
     let deepseek_key = settings::get(pool, secret, settings::DEEPSEEK_API_KEY).await?;
-    let deepseek_model = settings::get(pool, secret, settings::DEEPSEEK_MODEL)
-        .await?
-        .unwrap_or_else(|| "deepseek-chat".into());
-    let deepseek_configured = deepseek_key.as_ref().is_some_and(|v| !v.trim().is_empty())
-        && !deepseek_model.trim().is_empty();
+    let google_configured = google_key.as_ref().is_some_and(|v| !v.trim().is_empty());
+    let deepseek_model = crate::translation_pool::DEEPSEEK_MODEL_ID.to_string();
+    let deepseek_configured = deepseek_key.as_ref().is_some_and(|v| !v.trim().is_empty());
     let configured_tier = settings::translation_tier(pool, secret).await?;
-    let translation_tier = if configured_tier > 1 && !deepseek_configured {
-        1
-    } else {
-        configured_tier
+    let translation_tier = match configured_tier {
+        1 if google_configured => 1,
+        2 | 3 if deepseek_configured => configured_tier,
+        _ if google_configured => 1,
+        _ if deepseek_configured => 2,
+        _ => 1,
     };
     let r2_access = settings::get(pool, secret, settings::R2_ACCESS_KEY_ID).await?;
     let r2_secret = settings::get(pool, secret, settings::R2_SECRET_ACCESS_KEY).await?;
@@ -329,6 +335,8 @@ async fn load_admin_settings(state: &AppState) -> Result<AdminSettingsResponse, 
         mineru_model: settings::get(pool, secret, settings::MINERU_MODEL)
             .await?
             .unwrap_or_else(|| "vlm".into()),
+        google_configured,
+        google_api_key_masked: settings::mask(google_key.as_deref()),
         deepseek_configured,
         deepseek_api_key_masked: settings::mask(deepseek_key.as_deref()),
         deepseek_model,
@@ -402,8 +410,56 @@ async fn save_mineru(
 }
 
 #[derive(Deserialize)]
+struct GoogleInput {
+    api_key: String,
+}
+
+async fn save_google(
+    State(state): State<Arc<AppState>>,
+    Json(input): Json<GoogleInput>,
+) -> Result<Json<AdminSettingsResponse>, ApiError> {
+    let key = input.api_key.trim();
+    if key.len() < 16 {
+        return Err(ApiError::bad_request(
+            "Google Cloud Translation API Key 格式不正确",
+        ));
+    }
+    let response = reqwest::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .no_proxy()
+        .build()
+        .map_err(ApiError::internal)?
+        .post("https://translation.googleapis.com/language/translate/v2")
+        .query(&[("key", key)])
+        .json(&json!({"q":"configuration check","target":"zh-CN","format":"text"}))
+        .send()
+        .await
+        .map_err(|error| {
+            ApiError::bad_request(format!("无法连接 Google Cloud Translation：{error}"))
+        })?;
+    if !response.status().is_success() {
+        let status = response.status();
+        let detail = response.text().await.unwrap_or_default();
+        return Err(ApiError::bad_request(format!(
+            "Google Cloud Translation 配置验证失败（HTTP {status}）：{}",
+            detail.chars().take(240).collect::<String>()
+        )));
+    }
+    settings::set(
+        &state.pool,
+        &state.config.secret_key,
+        settings::GOOGLE_TRANSLATE_API_KEY,
+        key,
+        true,
+    )
+    .await?;
+    Ok(Json(load_admin_settings(&state).await?))
+}
+
+#[derive(Deserialize)]
 struct DeepSeekInput {
     api_key: String,
+    #[serde(default)]
     model: String,
 }
 async fn save_deepseek(
@@ -411,13 +467,14 @@ async fn save_deepseek(
     Json(input): Json<DeepSeekInput>,
 ) -> Result<Json<AdminSettingsResponse>, ApiError> {
     let key = input.api_key.trim();
-    let model = input.model.trim();
-    if key.len() < 8 || model.is_empty() {
+    let _legacy_model = input.model;
+    let model = crate::translation_pool::DEEPSEEK_MODEL_ID;
+    if key.len() < 8 {
         return Err(ApiError::bad_request("DeepSeek 配置格式不正确"));
     }
     let response = reqwest::Client::builder().timeout(Duration::from_secs(45)).no_proxy().build().map_err(ApiError::internal)?
         .post("https://api.deepseek.com/chat/completions").bearer_auth(key)
-        .json(&json!({"model":model,"messages":[{"role":"user","content":"只回复：好"}],"max_tokens":8,"stream":false}))
+        .json(&json!({"model":model,"messages":[{"role":"user","content":"只回复：好"}],"thinking":{"type":"disabled"},"max_tokens":8,"stream":false}))
         .send().await.map_err(|e| ApiError::bad_request(format!("无法连接 DeepSeek：{e}")))?;
     if !response.status().is_success() {
         return Err(ApiError::bad_request(format!(
@@ -437,7 +494,7 @@ async fn save_deepseek(
         &state.pool,
         &state.config.secret_key,
         settings::DEEPSEEK_MODEL,
-        model,
+        crate::translation_pool::DEEPSEEK_MODEL_ID,
         false,
     )
     .await?;
@@ -463,26 +520,30 @@ async fn save_translation_provider(
             1
         }
     });
-    if !(1..=4).contains(&tier) {
-        return Err(ApiError::bad_request("翻译质量档位只能是 1、2、3 或 4"));
+    if !(1..=3).contains(&tier) {
+        return Err(ApiError::bad_request("翻译质量档位只能是 1、2 或 3"));
+    }
+    if tier == 1
+        && !settings::configured(
+            &state.pool,
+            &state.config.secret_key,
+            settings::GOOGLE_TRANSLATE_API_KEY,
+        )
+        .await
+    {
+        return Err(ApiError::bad_request(
+            "请先保存并验证 Google Cloud Translation API Key",
+        ));
     }
     if tier > 1
-        && !(settings::configured(
+        && !settings::configured(
             &state.pool,
             &state.config.secret_key,
             settings::DEEPSEEK_API_KEY,
         )
         .await
-            && settings::configured(
-                &state.pool,
-                &state.config.secret_key,
-                settings::DEEPSEEK_MODEL,
-            )
-            .await)
     {
-        return Err(ApiError::bad_request(
-            "请先保存并验证 DeepSeek API Key 与模型名称",
-        ));
+        return Err(ApiError::bad_request("请先保存并验证 DeepSeek API Key"));
     }
     settings::set(
         &state.pool,
@@ -943,31 +1004,41 @@ async fn create_document(
         },
         None => None,
     };
+    let google_ready = settings::configured(
+        &state.pool,
+        &state.config.secret_key,
+        settings::GOOGLE_TRANSLATE_API_KEY,
+    )
+    .await;
     let deepseek_ready = settings::configured(
         &state.pool,
         &state.config.secret_key,
         settings::DEEPSEEK_API_KEY,
     )
-    .await
-        && settings::configured(
-            &state.pool,
-            &state.config.secret_key,
-            settings::DEEPSEEK_MODEL,
-        )
-        .await;
+    .await;
+    if requested_translation_tier == Some(1) && !google_ready {
+        let _ = fs::remove_dir_all(&root).await;
+        return Err(ApiError::bad_request(
+            "极速档需要管理员先配置并验证 Google Cloud Translation API Key",
+        ));
+    }
     if requested_translation_tier.is_some_and(|tier| tier > 1) && !deepseek_ready {
         let _ = fs::remove_dir_all(&root).await;
         return Err(ApiError::bad_request(
-            "所选第 2–4 档需要管理员先配置并验证 DeepSeek API Key 与模型",
+            "所选均衡档或精准档需要管理员先配置并验证 DeepSeek API Key",
         ));
     }
-    let translation_tier = requested_translation_tier.unwrap_or({
-        if configured_tier > 1 && !deepseek_ready {
-            1
-        } else {
-            configured_tier
+    let default_tier = match configured_tier {
+        1 if google_ready => 1,
+        2 | 3 if deepseek_ready => configured_tier,
+        _ if google_ready => 1,
+        _ if deepseek_ready => 2,
+        _ => {
+            let _ = fs::remove_dir_all(&root).await;
+            return Err(ApiError::bad_request("管理员尚未配置任何可用的翻译服务"));
         }
-    });
+    };
+    let translation_tier = requested_translation_tier.unwrap_or(default_tier);
     let translation_provider = settings::translation_provider_for_tier(translation_tier);
     let access_token = security::create_document_access_token();
     let access_token_hash = security::hash_document_access_token(&access_token);
@@ -1043,10 +1114,9 @@ async fn create_document(
                 "文档默认私有；当前浏览器已取得独立访问凭证；并发 Worker 将使用 SKIP LOCKED 原子领取；本次选择的翻译档位已快照为第 {} 档（{}）",
                 translation_tier,
                 match translation_tier {
-                    1 => "极速 · Google 免费翻译",
-                    2 => "标准 · DeepSeek 直接翻译",
-                    3 => "精细 · 全文速览约束",
-                    _ => "Agent · 通读后逐段翻译",
+                    1 => "极速 · Google Cloud Translation",
+                    2 => "均衡 · deepseek-v4-flash 非思考模式",
+                    _ => "精准 · deepseek-v4-flash 思考模式",
                 }
             )),
             current: None,
@@ -1418,8 +1488,8 @@ fn valid_zip_name(name: &str) -> bool {
 
 fn parse_translation_tier(value: &str) -> Result<i16, &'static str> {
     match value.trim().parse::<i16>() {
-        Ok(tier @ 1..=4) => Ok(tier),
-        _ => Err("翻译质量档位只能是 1、2、3 或 4"),
+        Ok(tier @ 1..=3) => Ok(tier),
+        _ => Err("翻译质量档位只能是 1、2 或 3"),
     }
 }
 
@@ -1516,10 +1586,10 @@ async fn openapi(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> 
         format!("{}/api/v1", state.config.public_origin)
     };
     Json(json!({
-        "openapi":"3.1.0","info":{"title":format!("{} Open API",state.config.app_name),"version":"1.2.0","description":"文档解析、四档中文翻译、永久归档与实时进度 API。管理员设置默认档位，上传者可为本次任务选择已开放档位。新任务默认私有；上传响应设置当前浏览器专属 HttpOnly 访问 Cookie，管理员可改为公开。没有删除接口。"},
+        "openapi":"3.1.0","info":{"title":format!("{} Open API",state.config.app_name),"version":"1.3.0","description":"文档解析、三档并发中文翻译、永久归档与实时进度 API。管理员设置默认档位，上传者可为本次任务选择已开放档位。新任务默认私有；上传响应设置当前浏览器专属 HttpOnly 访问 Cookie，管理员可改为公开。没有删除接口。"},
         "servers":[{"url":server_url}],
         "paths":{
-          "/jobs":{"get":{"summary":"管理员主动公开的任务列表"},"post":{"summary":"上传文档并创建默认私有任务","description":"translation_tier 可选 1–4；不传时使用管理员默认档位，第 2–4 档仅在 DeepSeek 已配置时可用。选定档位在任务创建时快照；响应通过 Set-Cookie 赋予当前浏览器文档访问权。","requestBody":{"required":true,"content":{"multipart/form-data":{"schema":{"type":"object","required":["file"],"properties":{"file":{"type":"string","format":"binary"},"title":{"type":"string"},"translation_tier":{"type":"integer","minimum":1,"maximum":4}}}}}}}},
+          "/jobs":{"get":{"summary":"管理员主动公开的任务列表"},"post":{"summary":"上传文档并创建默认私有任务","description":"translation_tier 可选 1–3；极速档使用 Google Cloud Translation，均衡档使用 deepseek-v4-flash 非思考模式，精准档使用其思考模式。选定档位在任务创建时快照；响应通过 Set-Cookie 赋予当前浏览器文档访问权。","requestBody":{"required":true,"content":{"multipart/form-data":{"schema":{"type":"object","required":["file"],"properties":{"file":{"type":"string","format":"binary"},"title":{"type":"string"},"translation_tier":{"type":"integer","minimum":1,"maximum":3}}}}}}}},
           "/jobs/{id}":{"get":{"summary":"任务状态与文章"}},
           "/jobs/{id}/events":{"get":{"summary":"增量读取永久进度事件"}},
           "/jobs/{id}/events/stream":{"get":{"summary":"SSE 实时进度流"}},
@@ -1573,11 +1643,11 @@ mod tests {
     }
 
     #[test]
-    fn translation_tier_accepts_only_four_public_choices() {
-        for tier in 1..=4 {
+    fn translation_tier_accepts_only_three_public_choices() {
+        for tier in 1..=3 {
             assert_eq!(parse_translation_tier(&tier.to_string()).unwrap(), tier);
         }
-        for invalid in ["", "0", "5", "2.5", "agent"] {
+        for invalid in ["", "0", "4", "5", "2.5", "agent"] {
             assert!(parse_translation_tier(invalid).is_err());
         }
     }

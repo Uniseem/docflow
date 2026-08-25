@@ -118,6 +118,7 @@ pub struct PublicConfig {
     pub default_translate: bool,
     pub translation_provider: String,
     pub translation_tier: i16,
+    pub google_configured: bool,
     pub deepseek_configured: bool,
     pub documents_public_by_default: bool,
     pub r2_configured: bool,

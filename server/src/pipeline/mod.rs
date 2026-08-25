@@ -76,7 +76,14 @@ pub async fn process(state: Arc<AppState>, id: &str) -> Result<()> {
     let (translated_markdown, translation_guidance, translated) = if translate_requested {
         let translation_tier: i16 = row.get("translation_tier");
         let strategy = if translation_tier == 1 {
-            translate::TranslationStrategy::GoogleFast
+            let api_key = settings::get(
+                &state.pool,
+                &state.config.secret_key,
+                settings::GOOGLE_TRANSLATE_API_KEY,
+            )
+            .await?
+            .context("该任务指定了 Google，但 Cloud Translation API Key 不可用")?;
+            translate::TranslationStrategy::GoogleFast { api_key }
         } else {
             let api_key = settings::get(
                 &state.pool,
@@ -85,17 +92,9 @@ pub async fn process(state: Arc<AppState>, id: &str) -> Result<()> {
             )
             .await?
             .context("该任务指定了 DeepSeek，但 API Key 不可用")?;
-            let model = settings::get(
-                &state.pool,
-                &state.config.secret_key,
-                settings::DEEPSEEK_MODEL,
-            )
-            .await?
-            .context("该任务指定了 DeepSeek，但模型名称不可用")?;
             match translation_tier {
-                2 => translate::TranslationStrategy::DeepSeekDirect { api_key, model },
-                3 => translate::TranslationStrategy::DeepSeekGuided { api_key, model },
-                4 => translate::TranslationStrategy::DeepSeekAgent { api_key, model },
+                2 => translate::TranslationStrategy::DeepSeekBalanced { api_key },
+                3 => translate::TranslationStrategy::DeepSeekPrecise { api_key },
                 other => anyhow::bail!("任务翻译档位无效：{other}"),
             }
         };

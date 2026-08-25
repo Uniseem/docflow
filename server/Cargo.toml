@@ -17,6 +17,7 @@ chrono = { version = "0.4", features = ["serde"] }
 comrak = { version = "0.48", default-features = false }
 fernet = { version = "0.2", default-features = false, features = ["rustcrypto"] }
 futures = "0.3"
+html-escape = "0.2"
 hex = "0.4"
 image = { version = "0.25", default-features = false, features = ["bmp", "gif", "jpeg", "png", "tiff", "webp"] }
 jsonwebtoken = "9"

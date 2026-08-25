@@ -42,9 +42,8 @@ const formatSize = (bytes: number) => bytes < 1048576
 
 const translationLabel = (tier: number) => ({
   1: '第 1 档 · 极速 Google',
-  2: '第 2 档 · DeepSeek 标准',
-  3: '第 3 档 · DeepSeek 全文速览',
-  4: '第 4 档 · DeepSeek Agent',
+  2: '第 2 档 · DeepSeek 均衡（非思考）',
+  3: '第 3 档 · DeepSeek 精准（思考）',
 }[tier] || `第 ${tier} 档`)
 
 function elapsedText() {

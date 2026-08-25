@@ -1,6 +1,6 @@
 # 文流（DocFlow）
 
-文流是一个可自托管的文档解析、中文翻译与阅读服务。用户提交 MinerU 支持的 PDF、Office 文档、图片或 HTML 后，Rust Worker 在后台完成解析、WebP 图片转换、四档中文翻译、Markdown 规范化和 VPS 本地永久归档。管理员设置上传页默认翻译档位，用户可为单次任务选择已开放档位：第 1 档使用 Google 免费翻译；第 2 档由 DeepSeek 直接分块翻译；第 3 档先速览全文、生成简单通用约束后再翻译；第 4 档由 DeepSeek Agent 通读全文、建立蓝图并携带上下文逐段翻译。Cloudflare R2 是可选镜像，不是运行前提。
+文流是一个可自托管的文档解析、中文翻译与阅读服务。用户提交 MinerU 支持的 PDF、Office 文档、图片或 HTML 后，Rust Worker 在后台完成解析、WebP 图片转换、三档并发中文翻译、Markdown 规范化和 VPS 本地永久归档。极速档使用 Google Cloud Translation；均衡档使用 `deepseek-v4-flash` 非思考模式；精准档使用同一模型的思考模式。Google 与 DeepSeek 各有一个全站共享任务池，多篇文档可并行翻译且不会由单篇长文档独占队列。Cloudflare R2 是可选镜像，不是运行前提。
 
 新文档默认私有，没有普通用户账户，也没有删除接口。上传响应会给当前浏览器设置每份文档独立的 HttpOnly 访问凭证；管理员在 `/admin` 能看到全部文档，并可逐份公开或恢复私有。管理后台固定在 `/admin`，前台不显示入口；首次访问后台的用户可以注册为唯一管理员。
 
@@ -9,6 +9,7 @@
 - Rust、Axum、Tokio：带文档级访问控制的 HTTP API、管理 API、上传流、SSE 实时进度和后台 Worker。
 - SQLx、PostgreSQL：元数据、三种 Markdown、最终 HTML、管理员、加密配置、任务租约和不可删除的详细事件。
 - PostgreSQL 持久队列：Worker 通过 `FOR UPDATE SKIP LOCKED` 并发领取任务，不再依赖 Redis/Celery。
+- Tokio 全站翻译池：Google 与 DeepSeek 使用彼此独立的 FIFO 队列和并发执行槽；单篇文档还有独立的在途分块上限。
 - VPS 当前目录：`./data` 绑定挂载 PostgreSQL、实例密钥、源文件、MinerU ZIP、三种 Markdown、HTML、WebP、事件和归档清单，不使用 Docker 命名卷。
 - Cloudflare R2：可选的异地对象镜像；失败不会阻止本地任务发布，也不会触发本地删除。
 - Vue 3、Vuetify、Vite：提交页、公开文库、阅读页、SSE 进度页和 `/admin` 管理后台。
@@ -21,7 +22,7 @@
 - 新文档和处理事件默认私有：只有持有该文档浏览器凭证的上传者和管理员可读取；管理员主动公开后才会出现在公开文库。
 - 文档详情、SSE 事件、Markdown、源文件、ZIP 和图片使用同一套权限判断，私有状态不是仅在列表中隐藏。
 - Markdown 永久保存：数据库和本地 `.md` 文件同时持久化 MinerU 原稿、中文译稿和规范化终稿。
-- 第 3–4 档生成的全文翻译约束或 Agent 蓝图同时写入 PostgreSQL 与 `translation/guidance.md`，并随完整归档包迁移。
+- 翻译分块可以并行完成，但会按原始序号合并；每块都独立校验公式、代码、图片和链接占位符。
 - 图片不使用 MinerU 链接：本地或远程图片会下载、去重、转成 WebP，并改写为本站稳定 API 路径。
 - 展示标题、原始上传名和可修改的下载名保存在 PostgreSQL；磁盘只使用随机 `storage_key`、UUID 目录与 `source.pdf` 等 ASCII 物理名。
 - 管理员重命名只更新数据库映射，不移动或覆盖磁盘文件，也不改变图片 URL。
@@ -36,7 +37,7 @@
 2. `5–52%`：申请 MinerU 上传地址、直传源文件、逐次轮询和页面进度。
 3. `53–64%`：校验公网地址、分块下载 ZIP、防路径穿越和解压规模检查。
 4. `65–70%`：扫描图片、逐张转 WebP、内容寻址去重、改写本站资源路径。
-5. `71–87%`：执行管理员指定并在任务创建时固定的四档翻译。第 1 档 Google 分块直译；第 2 档 DeepSeek 分块直译；第 3 档逐部分速览全文、分层归并简单翻译约束并注入每块；第 4 档通读全文建立详细蓝图，随后携带上一段译文和下一段预览逐段调用 DeepSeek。所有档位都保护公式、代码、图片与链接，记录每次调用和限流重试；单块或单段三次无损校验仍失败时保留原文并继续。
+5. `71–87%`：执行任务创建时固定的三档翻译。极速档进入 Google 共享池；均衡档进入 DeepSeek 非思考池；精准档进入 DeepSeek 思考池。分块以 FIFO 排队、并行执行、按序合并；每次排队、服务调用、限流退避、占位符重译、完成数量和耗时都会写入永久事件。公式、代码、图片与链接连续三次无损校验失败时任务会明确报错，不发布损坏文章。
 6. `88–93%`：统一公式定界符、中英文间距、CommonMark/GFM 解析和 HTML 白名单消毒。
 7. `94–98%`：源文件、Markdown、HTML、WebP、MinerU ZIP 与元数据写入本地永久归档并生成清单。
 8. `99–100%`：可选 R2 镜像；无 R2 或镜像失败时保留告警并正常发布，最后只清理可再生工作区。
@@ -69,9 +70,21 @@ curl -c docflow.cookies -F "file=@paper.pdf" -F "title=文档标题" -F "transla
   http://你的服务器IP:38100/api/v1/jobs
 ```
 
-上传响应中的 Cookie 是该私有文档的访问凭证。命令行后续读取进度或下载时使用 `-b docflow.cookies`。网页会自动管理该凭证。全站始终翻译为中文；`translation_tier` 可选 1–4，不传时采用管理员默认值，最终选择会在任务创建时固定。客户端提交的旧版 `translate` 字段会被兼容接收但忽略。
+上传响应中的 Cookie 是该私有文档的访问凭证。命令行后续读取进度或下载时使用 `-b docflow.cookies`。网页会自动管理该凭证。全站始终翻译为中文；`translation_tier` 可选 1–3，不传时采用管理员默认值，最终选择会在任务创建时固定。客户端提交的旧版 `translate` 字段会被兼容接收但忽略。
 
-第 1 档的 Google 实现使用 Google 网页客户端使用的免费翻译端点，不需要 API Key，也不是带 SLA 的 Google Cloud Translation API。它可能限流或发生兼容性变化。第 2–4 档必须先由管理员验证 DeepSeek API Key 与模型；档位越高，模型调用次数、处理时间和费用通常越高。管理员设置上传页默认档位，访问者可以为本次任务选择任一已开放档位。
+极速档使用 Google Cloud Translation Basic v2 官方接口，需要管理员配置已启用 Cloud Translation API 的 Google Cloud API Key。Google 每月前 50 万字符有抵扣额度，超出后按官方定价计费。均衡档和精准档需要 DeepSeek API Key，模型固定为 `deepseek-v4-flash`，不能由前端改成语义不明的其他模型。管理员设置上传页默认档位，访问者可以为单次任务选择任一已开放档位。
+
+### 翻译并发与长度保护
+
+- Google 官方建议单次请求最多 5,000 Unicode code points；本项目固定留出 10% 余量，单块最多 4,500 字符。
+- Google Basic 默认内容配额为每项目、每用户每分钟 600 万字符，请求配额为每分钟 30 万次；项目内置限流器只使用其中 80%，即每分钟 480 万字符和 24 万次请求，并默认只开 32 个 HTTP 执行槽。
+- DeepSeek 官方给 `deepseek-v4-flash` 的账号级并发上限为 2,500。程序硬钳制在 80%（2,000），但 VPS 默认只开 64 个执行槽。
+- DeepSeek V4 Flash 上下文为 100 万 tokens，最大输出为 38.4 万 tokens。项目仍将均衡档单块限制为 12,000 字符、精准档限制为 8,000 字符，降低重试成本并为思考留出空间。
+- DeepSeek 的 `max_tokens` 包含可见译文和思考 token；均衡档显式发送 `thinking: disabled`，精准档显式发送 `thinking: enabled` 并提高输出预算。
+- 每篇文档默认最多有 8 个在途分块。服务端收到 429、5xx、网络超时或 `Retry-After` 时会指数退避并重新进入同一公平队列。
+- Worker 启动时持有 PostgreSQL advisory lock，保证整个站点只有一个任务池所有者；不要使用 `docker compose up --scale worker=...` 横向复制 Worker。
+
+以上限制依据 [Google Cloud Translation 配额](https://docs.cloud.google.com/translate/quotas)、[Google Cloud Translation 定价](https://cloud.google.com/products/translate/pricing)、[DeepSeek 限流说明](https://api-docs.deepseek.com/quick_start/rate_limit/)、[DeepSeek 模型与定价](https://api-docs.deepseek.com/quick_start/pricing) 和 [DeepSeek 思考模式](https://api-docs.deepseek.com/guides/thinking_mode/)；部署者调整并发环境变量时仍应根据自己的 VPS 资源和账号额度保守设置。
 
 ## VPS 一键部署
 
@@ -107,6 +120,10 @@ x-backend-environment: &backend_environment
   DATA_ROOT: /data
   MAX_UPLOAD_MB: ${MAX_UPLOAD_MB:-200}
   TRANSLATION_CHUNK_CHARS: ${TRANSLATION_CHUNK_CHARS:-12000}
+  TRANSLATION_PER_DOCUMENT_CONCURRENCY: ${TRANSLATION_PER_DOCUMENT_CONCURRENCY:-8}
+  TRANSLATION_QUEUE_CAPACITY: ${TRANSLATION_QUEUE_CAPACITY:-4096}
+  GOOGLE_TRANSLATION_CONCURRENCY: ${GOOGLE_TRANSLATION_CONCURRENCY:-32}
+  DEEPSEEK_TRANSLATION_CONCURRENCY: ${DEEPSEEK_TRANSLATION_CONCURRENCY:-64}
   MINERU_POLL_SECONDS: ${MINERU_POLL_SECONDS:-5}
   MINERU_MAX_WAIT_SECONDS: ${MINERU_MAX_WAIT_SECONDS:-7200}
   WEBP_QUALITY: ${WEBP_QUALITY:-88}
@@ -280,15 +297,17 @@ HTTP_PORT=9000
     └── documents/    # 源文件、Markdown、HTML、WebP、MinerU ZIP 与工作区
 ```
 
-端口等参数有默认值；如需覆盖，可在同目录创建可选 `.env`，参考仓库中的 `.env.example`。MinerU、可选 DeepSeek 和 R2 凭据始终在 `/admin` 中配置，而不是写入 Compose 或 `.env`。Google 免费翻译无需凭据。
+端口和并发等参数都有保守默认值；如需覆盖，可在同目录创建可选 `.env`，参考仓库中的 `.env.example`。MinerU、Google Cloud Translation、DeepSeek 和可选 R2 凭据始终在 `/admin` 中配置，而不是写入 Compose 或 `.env`。
 
 管理员访问 `http://你的服务器IP:38100/admin`：
 
 1. 首次注册唯一管理员；已有 Python 版本的 Argon2 密码可直接登录。
 2. 配置并验证 MinerU API Key 与模型。
-3. 默认翻译档位为第 1 档（Google 极速）。配置并验证 DeepSeek API Key 和模型后，第 2 档（DeepSeek 直译）、第 3 档（全文速览约束）和第 4 档（Agent 通读后逐段翻译）会在上传页开放；管理员设置默认值，访问者可为单次任务切换。
-4. 如需异地镜像，可选配置 R2 Account ID、Access Key ID、Secret Access Key 和 Bucket。凭据在数据库中使用 `data/config/secret_key` 派生的 Fernet 密钥加密。
-5. 在“文档管理”中查看全部文档、切换公开/私有状态，并修改展示标题与下载文件名；扩展名必须保持一致，后端物理路径不会变化。
+3. 配置并验证 Google Cloud Translation API Key 后开放极速档。
+4. 配置并验证 DeepSeek API Key 后开放均衡档（V4 Flash 非思考）和精准档（V4 Flash 思考）；模型名称由系统固定。
+5. 在“默认翻译档位”中设置上传页默认值；访问者仍可为单次任务选择其他已开放档位。
+6. 如需异地镜像，可选配置 R2 Account ID、Access Key ID、Secret Access Key 和 Bucket。凭据在数据库中使用 `data/config/secret_key` 派生的 Fernet 密钥加密。
+7. 在“文档管理”中查看全部文档、切换公开/私有状态，并修改展示标题与下载文件名；扩展名必须保持一致，后端物理路径不会变化。
 
 Cloudflare R2 凭据应仅授予目标存储桶对象读写权限。应用没有 R2 删除调用，也不配置生命周期规则。
 
