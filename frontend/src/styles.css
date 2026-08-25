@@ -114,6 +114,22 @@ code { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; }
 .upload-progress > div { display: flex; justify-content: space-between; margin-bottom: 7px; color: #475467; font-size: 12px; }
 .option-row { display: flex; align-items: center; gap: 12px; padding: 14px; border: 1px solid #dfe4eb; border-radius: 10px; background: #fff; }
 .option-row.is-disabled { opacity: .65; }
+.translation-tier-summary { padding: 14px; border: 1px solid #dfe4eb; border-radius: 10px; background: #fff; }
+.translation-tier-summary__head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.translation-tier-summary__head span:first-child, .translation-tier-summary__head strong, .translation-tier-summary__head small { display: block; }
+.translation-tier-summary__head strong { color: #344054; font-size: 12px; }
+.translation-tier-summary__head small { margin-top: 3px; color: #7a8596; font-size: 9px; }
+.translation-tier-track { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; margin-top: 14px; }
+.translation-tier-step { position: relative; min-width: 0; padding: 10px 7px; border: 1px solid #eaecf0; border-radius: 8px; color: #7a8596; background: #fbfcfe; text-align: center; }
+.translation-tier-step > span { display: grid; width: 28px; height: 28px; margin: 0 auto 6px; place-items: center; border-radius: 50%; background: #f0f2f5; }
+.translation-tier-step b, .translation-tier-step small, .translation-tier-step em { display: block; overflow: hidden; text-overflow: ellipsis; }
+.translation-tier-step b { color: #344054; font-size: 10px; }
+.translation-tier-step small { margin-top: 2px; font-size: 8px; }
+.translation-tier-step em { margin-top: 5px; font-size: 7px; font-style: normal; line-height: 1.45; white-space: normal; }
+.translation-tier-step.is-active { border-color: #84a9ff; color: #2457d6; background: #f3f6ff; box-shadow: inset 0 0 0 1px #84a9ff; }
+.translation-tier-step.is-active > span { color: #fff; background: #2457d6; }
+.translation-tier-step.is-unavailable:not(.is-active) { opacity: .45; }
+.translation-tier-note { margin: 10px 0 0; color: #b54708; font-size: 8px; }
 .option-icon { width: 34px; height: 34px; border-radius: 8px; }
 .option-copy { min-width: 0; flex: 1; }
 .option-copy strong, .option-copy small { display: block; }
@@ -402,6 +418,7 @@ code { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; }
   .page-heading h1 { font-size: 26px; }
   .page-heading > .v-btn, .service-status { margin-top: 14px; }
   .upload-main, .upload-options { padding: 20px; }
+  .translation-tier-track { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .drop-zone { padding: 18px; }
   .library-toolbar .v-text-field { max-width: none; }
   .document-row { grid-template-columns: 30px minmax(0, 1fr) auto; }

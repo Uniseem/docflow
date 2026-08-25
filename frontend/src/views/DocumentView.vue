@@ -40,6 +40,13 @@ const formatSize = (bytes: number) => bytes < 1048576
   ? `${(bytes / 1024).toFixed(0)} KB`
   : `${(bytes / 1048576).toFixed(1)} MB`
 
+const translationLabel = (tier: number) => ({
+  1: '第 1 档 · 极速 Google',
+  2: '第 2 档 · DeepSeek 标准',
+  3: '第 3 档 · DeepSeek 全文速览',
+  4: '第 4 档 · DeepSeek Agent',
+}[tier] || `第 ${tier} 档`)
+
 function elapsedText() {
   if (!documentItem.value) return ''
   const end = documentItem.value.completed_at ? new Date(documentItem.value.completed_at) : new Date()
@@ -178,7 +185,7 @@ onBeforeUnmount(() => {
         <span class="meta-pill"><v-icon :icon="documentItem.is_public ? 'mdi-earth' : 'mdi-lock-outline'" size="14" />{{ documentItem.is_public ? '公开文档' : '私有文档' }}</span>
         <span class="meta-pill"><v-icon icon="mdi-harddisk" size="14" />本地已归档</span>
         <span v-if="documentItem.r2_mirror_status === 'archived'" class="meta-pill"><v-icon icon="mdi-cloud-check-outline" size="14" />R2 已镜像</span>
-        <span v-if="documentItem.translated" class="meta-pill"><v-icon icon="mdi-translate" size="14" />{{ documentItem.translation_provider === 'deepseek' ? 'DeepSeek 中文译文' : 'Google 中文译文' }}</span>
+        <span v-if="documentItem.translated" class="meta-pill"><v-icon icon="mdi-translate" size="14" />{{ translationLabel(documentItem.translation_tier) }}</span>
       </div>
       <h1>{{ documentItem.title }}</h1>
       <div class="reader-meta">
@@ -244,7 +251,7 @@ onBeforeUnmount(() => {
         <dl class="progress-facts">
           <div><dt>当前阶段</dt><dd>{{ documentItem.stage }}</dd></div>
           <div><dt>源文件</dt><dd>已永久保存</dd></div>
-          <div><dt>翻译</dt><dd>{{ documentItem.translation_provider === 'deepseek' ? 'DeepSeek' : documentItem.translation_provider === 'google' ? 'Google 免费翻译' : '未启用' }}</dd></div>
+          <div><dt>翻译</dt><dd>{{ translationLabel(documentItem.translation_tier) }}</dd></div>
           <div><dt>本地归档</dt><dd>{{ documentItem.local_archive_status }}</dd></div>
         </dl>
         <div class="sidebar-actions">

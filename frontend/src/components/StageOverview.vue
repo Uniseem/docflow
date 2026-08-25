@@ -5,15 +5,22 @@ import type { DocumentDetail } from '../types'
 
 const props = defineProps<{ document: DocumentDetail }>()
 
+const translationCaption = computed(() => ({
+  1: '第 1 档 · Google 免费翻译 · 分块直译与占位符校验',
+  2: '第 2 档 · DeepSeek · 分块直译、重试与占位符校验',
+  3: '第 3 档 · DeepSeek · 全文速览、统一约束注入与分块翻译',
+  4: '第 4 档 · DeepSeek Agent · 全文蓝图、上下文记忆与逐段翻译',
+}[props.document.translation_tier] || '翻译档位未知'))
+
 const stages = computed(() => [
   { title: '接收与排队', caption: '上传、校验、PostgreSQL 入队', start: 0, end: 4, icon: 'mdi-database-arrow-down-outline' },
   { title: 'MinerU 解析', caption: '上传、轮询与逐页状态', start: 5, end: 52, icon: 'mdi-file-search-outline' },
   { title: '获取结果', caption: '受限下载与安全解压 ZIP', start: 53, end: 64, icon: 'mdi-archive-arrow-down-outline' },
   { title: '图片 WebP', caption: '转换、去重并改写本站路径', start: 65, end: 70, icon: 'mdi-image-sync-outline' },
   {
-    title: props.document.translate_requested ? '分段翻译' : '翻译（已跳过）',
+    title: props.document.translate_requested ? `中文翻译 · 第 ${props.document.translation_tier} 档` : '翻译（已跳过）',
     caption: props.document.translate_requested
-      ? `${props.document.translation_provider === 'deepseek' ? 'DeepSeek' : 'Google 免费翻译'} · 分块调用、重试与占位符校验`
+      ? translationCaption.value
       : '历史任务未启用中文翻译',
     start: 71,
     end: 87,

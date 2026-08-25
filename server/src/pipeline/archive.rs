@@ -24,6 +24,7 @@ pub struct ArchiveInput<'a> {
     pub final_root: &'a Path,
     pub original_markdown: &'a str,
     pub translated_markdown: Option<&'a str>,
+    pub translation_guidance: Option<&'a str>,
     pub article: &'a Article,
 }
 
@@ -94,6 +95,13 @@ pub async fn archive_and_publish(
         )
         .await?;
     }
+    if let Some(guidance) = input.translation_guidance {
+        write_atomic(
+            &archive_root.join("translation/guidance.md"),
+            guidance.as_bytes(),
+        )
+        .await?;
+    }
     write_atomic(
         &archive_root.join("markdown/normalized.md"),
         input.article.markdown.as_bytes(),
@@ -112,9 +120,9 @@ pub async fn archive_and_publish(
             state: "completed",
             level: "success",
             progress: 96,
-            message: "Markdown、HTML 与 MinerU 结果已永久落盘",
+            message: "Markdown、翻译规划、HTML 与 MinerU 结果已永久落盘",
             detail: Some(
-                "原稿、译稿、规范化稿分别使用固定 ASCII 文件名，打包时通过元数据还原展示名称",
+                "原稿、译稿、规范化稿及可选全文翻译约束分别使用固定 ASCII 文件名，打包时通过元数据还原展示名称",
             ),
             current: None,
             total: None,
@@ -457,7 +465,7 @@ async fn write_atomic(destination: &Path, bytes: &[u8]) -> Result<()> {
 }
 
 async fn load_document_metadata(state: &AppState, id: &str) -> Result<Value> {
-    let row = sqlx::query("SELECT id,title,original_filename,display_filename,storage_key,source_size,mime_type,upload_sha256,translate_requested,translation_provider,translated,is_public,created_at FROM documents WHERE id=$1")
+    let row = sqlx::query("SELECT id,title,original_filename,display_filename,storage_key,source_size,mime_type,upload_sha256,translate_requested,translation_provider,translation_tier,translation_guidance,translated,is_public,created_at FROM documents WHERE id=$1")
         .bind(id)
         .fetch_one(&state.pool)
         .await?;
@@ -472,6 +480,8 @@ async fn load_document_metadata(state: &AppState, id: &str) -> Result<Value> {
         "upload_sha256": row.get::<Option<String>, _>("upload_sha256"),
         "translate_requested": row.get::<bool, _>("translate_requested"),
         "translation_provider": row.get::<String, _>("translation_provider"),
+        "translation_tier": row.get::<i16, _>("translation_tier"),
+        "translation_guidance_available": row.get::<Option<String>, _>("translation_guidance").is_some(),
         "translated": row.get::<bool, _>("translated"),
         "is_public": row.get::<bool, _>("is_public"),
         "created_at": row.get::<chrono::DateTime<chrono::Utc>, _>("created_at"),
