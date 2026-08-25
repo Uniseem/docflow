@@ -14,7 +14,7 @@ const mineruKey = ref('')
 const mineruModel = ref('vlm')
 const deepseekKey = ref('')
 const deepseekModel = ref('deepseek-v4-flash')
-const translationProvider = ref<'google' | 'deepseek'>('google')
+const translationTier = ref<1 | 2 | 3 | 4>(1)
 const r2AccountId = ref('')
 const r2AccessKeyId = ref('')
 const r2SecretAccessKey = ref('')
@@ -42,7 +42,7 @@ async function loadSettings() {
     settings.value = await api.adminSettings()
     mineruModel.value = settings.value.mineru_model
     deepseekModel.value = settings.value.deepseek_model
-    translationProvider.value = settings.value.translation_provider
+    translationTier.value = settings.value.translation_tier
     r2AccountId.value = settings.value.r2_account_id
     r2Bucket.value = settings.value.r2_bucket
     r2PublicBaseUrl.value = settings.value.r2_public_base_url
@@ -115,7 +115,7 @@ async function saveDeepSeek() {
   try {
     settings.value = await api.saveDeepSeek(deepseekKey.value, deepseekModel.value)
     deepseekKey.value = ''
-    message.value = 'DeepSeek 验证成功。现在可在“全站翻译服务”中选择它；保存 Key 不会自动切换现有全站设置。'
+    message.value = 'DeepSeek 验证成功。现在可以选择第 2–4 档；保存 Key 不会自动切换现有全站设置。'
   } catch (reason) {
     error.value = reason instanceof Error ? reason.message : '保存失败'
   } finally { loading.value = false }
@@ -124,8 +124,8 @@ async function saveDeepSeek() {
 async function saveTranslator() {
   error.value = ''; message.value = ''; loading.value = true
   try {
-    settings.value = await api.saveTranslationProvider(translationProvider.value)
-    message.value = `全站翻译服务已切换为${translationProvider.value === 'deepseek' ? ' DeepSeek' : ' Google 免费翻译'}；已进入队列的任务继续使用创建时记录的服务。`
+    settings.value = await api.saveTranslationTier(translationTier.value)
+    message.value = `全站翻译质量已切换为第 ${translationTier.value} 档；已进入队列的任务继续使用创建时记录的档位。`
   } catch (reason) {
     error.value = reason instanceof Error ? reason.message : '保存失败'
   } finally { loading.value = false }
@@ -236,7 +236,7 @@ onMounted(async () => {
           <div class="config-status">
             <h3>服务状态</h3>
             <div><span>MinerU</span><b :class="settings.mineru_configured ? 'ok' : 'warn'">{{ settings.mineru_configured ? '已配置' : '未配置' }}</b></div>
-            <div><span>全站翻译</span><b class="ok">{{ settings.translation_provider === 'deepseek' ? 'DeepSeek' : 'Google' }}</b></div>
+            <div><span>翻译档位</span><b class="ok">第 {{ settings.translation_tier }} 档</b></div>
             <div><span>DeepSeek</span><b :class="settings.deepseek_configured ? 'ok' : ''">{{ settings.deepseek_configured ? '已配置' : '未配置' }}</b></div>
             <div><span>本地存储</span><b class="ok">已启用</b></div>
             <div><span>R2</span><b :class="settings.r2_configured ? 'ok' : ''">{{ settings.r2_configured ? '已配置' : '可选' }}</b></div>
@@ -255,25 +255,35 @@ onMounted(async () => {
           </section>
 
           <section id="translation" class="settings-section">
-            <header><div><h2>全站翻译服务</h2><p>所有新任务统一翻译为简体中文，前台用户不能自行切换。</p></div><span class="setting-state is-ok">{{ settings.translation_provider === 'deepseek' ? 'DeepSeek' : 'Google 免费翻译' }}</span></header>
+            <header><div><h2>全站翻译质量</h2><p>所有新任务统一翻译为简体中文，前台只展示当前档位，不能自行切换。</p></div><span class="setting-state is-ok">第 {{ settings.translation_tier }} 档</span></header>
             <div class="provider-picker">
-              <button type="button" :class="{ 'is-selected': translationProvider === 'google' }" @click="translationProvider = 'google'">
-                <v-icon icon="mdi-google" size="20" />
-                <span><b>Google 免费翻译</b><small>默认，无需 API Key；可能受到 Google 限流</small></span>
-                <v-icon :icon="translationProvider === 'google' ? 'mdi-radiobox-marked' : 'mdi-radiobox-blank'" size="18" />
+              <button type="button" :class="{ 'is-selected': translationTier === 1 }" @click="translationTier = 1">
+                <v-icon icon="mdi-flash-outline" size="20" />
+                <span><b>第 1 档 · 极速</b><small>Google 免费翻译；分块直译，速度最快，无需 DeepSeek</small></span>
+                <v-icon :icon="translationTier === 1 ? 'mdi-radiobox-marked' : 'mdi-radiobox-blank'" size="18" />
               </button>
-              <button type="button" :disabled="!settings.deepseek_configured" :class="{ 'is-selected': translationProvider === 'deepseek' }" @click="translationProvider = 'deepseek'">
-                <v-icon icon="mdi-brain" size="20" />
-                <span><b>DeepSeek</b><small>{{ settings.deepseek_configured ? `已验证模型：${settings.deepseek_model}` : '先在下方配置并验证 API Key' }}</small></span>
-                <v-icon :icon="translationProvider === 'deepseek' ? 'mdi-radiobox-marked' : 'mdi-radiobox-blank'" size="18" />
+              <button type="button" :disabled="!settings.deepseek_configured" :class="{ 'is-selected': translationTier === 2 }" @click="translationTier = 2">
+                <v-icon icon="mdi-translate" size="20" />
+                <span><b>第 2 档 · 标准</b><small>DeepSeek 分块直译；比 Google 更自然</small></span>
+                <v-icon :icon="translationTier === 2 ? 'mdi-radiobox-marked' : 'mdi-radiobox-blank'" size="18" />
+              </button>
+              <button type="button" :disabled="!settings.deepseek_configured" :class="{ 'is-selected': translationTier === 3 }" @click="translationTier = 3">
+                <v-icon icon="mdi-book-open-page-variant-outline" size="20" />
+                <span><b>第 3 档 · 精细</b><small>DeepSeek 先速览全文，生成统一约束后再分块翻译</small></span>
+                <v-icon :icon="translationTier === 3 ? 'mdi-radiobox-marked' : 'mdi-radiobox-blank'" size="18" />
+              </button>
+              <button type="button" :disabled="!settings.deepseek_configured" :class="{ 'is-selected': translationTier === 4 }" @click="translationTier = 4">
+                <v-icon icon="mdi-robot-outline" size="20" />
+                <span><b>第 4 档 · Agent</b><small>通读全文建立蓝图，携带前后文记忆逐段翻译；最慢最精细</small></span>
+                <v-icon :icon="translationTier === 4 ? 'mdi-radiobox-marked' : 'mdi-radiobox-blank'" size="18" />
               </button>
             </div>
-            <p class="section-help">服务选择会在任务创建时固定写入数据库，切换不会改变正在处理或已经完成的文档。</p>
-            <div class="form-actions"><v-btn color="primary" :loading="loading" :disabled="translationProvider === settings.translation_provider" @click="saveTranslator">保存全站翻译服务</v-btn></div>
+            <p class="section-help">档位会在任务创建时固定写入数据库。第 3–4 档会永久保存全文速览约束；切换不会改变正在处理或已经完成的文档。</p>
+            <div class="form-actions"><v-btn color="primary" :loading="loading" :disabled="translationTier === settings.translation_tier" @click="saveTranslator">保存全站翻译档位</v-btn></div>
           </section>
 
           <section id="deepseek" class="settings-section">
-            <header><div><h2>DeepSeek 配置</h2><p>配置成功后才会成为可选翻译服务，不会自动切换全站设置。</p></div><span class="setting-state" :class="settings.deepseek_configured ? 'is-ok' : ''">{{ settings.deepseek_configured ? '已配置' : '可选' }}</span></header>
+            <header><div><h2>DeepSeek 配置</h2><p>配置成功后开放第 2–4 档，不会自动切换全站档位。</p></div><span class="setting-state" :class="settings.deepseek_configured ? 'is-ok' : ''">{{ settings.deepseek_configured ? '已配置' : '可选' }}</span></header>
             <p v-if="settings.deepseek_api_key_masked" class="current-secret">当前 Key：<code>{{ settings.deepseek_api_key_masked }}</code></p>
             <div class="form-grid form-grid--2">
               <v-text-field v-model="deepseekKey" label="新的 DeepSeek API Key" type="password" autocomplete="new-password" hide-details />

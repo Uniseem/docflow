@@ -78,7 +78,17 @@ jobs:
                     WHERE table_schema='public' AND table_name='documents'
                       AND column_name='translation_provider'
                 )
-                AND (SELECT count(*) FROM _sqlx_migrations WHERE success) = 3")"
+                AND EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_schema='public' AND table_name='documents'
+                      AND column_name='translation_tier'
+                )
+                AND EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_schema='public' AND table_name='documents'
+                      AND column_name='translation_guidance'
+                )
+                AND (SELECT count(*) FROM _sqlx_migrations WHERE success) = 4")"
           test "$schema_ok" = "t"
 
       - name: Re-run migrations without losing existing data

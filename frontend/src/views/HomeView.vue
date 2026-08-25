@@ -17,6 +17,13 @@ const uploadProgress = ref(0)
 const error = ref('')
 const fileInput = ref<HTMLInputElement | null>(null)
 
+const translationTiers = [
+  { tier: 1, name: '极速', engine: 'Google', detail: '免费分块直译', icon: 'mdi-flash-outline' },
+  { tier: 2, name: '标准', engine: 'DeepSeek', detail: '大模型分块直译', icon: 'mdi-translate' },
+  { tier: 3, name: '精细', engine: 'DeepSeek', detail: '先速览全文再翻译', icon: 'mdi-book-open-page-variant-outline' },
+  { tier: 4, name: 'Agent', engine: 'DeepSeek', detail: '通读全文后逐段翻译', icon: 'mdi-robot-outline' },
+] as const
+
 const formatSize = (bytes: number) => bytes < 1048576 ? `${(bytes / 1024).toFixed(0)} KB` : `${(bytes / 1048576).toFixed(1)} MB`
 
 function chooseFile(selected?: File) {
@@ -139,13 +146,25 @@ onMounted(async () => {
           <span class="step-number">02</span>
         </div>
 
-        <div class="option-row">
-          <span class="option-icon"><v-icon icon="mdi-translate" size="19" /></span>
-          <span class="option-copy">
-            <strong>自动翻译为简体中文</strong>
-            <small>{{ config?.translation_provider === 'deepseek' ? '全站使用管理员配置的 DeepSeek' : '全站使用 Google 免费翻译' }}；分段处理并保护公式、代码和链接</small>
-          </span>
-          <span class="option-fixed">全站统一</span>
+        <div class="translation-tier-summary">
+          <div class="translation-tier-summary__head">
+            <span><strong>自动翻译为简体中文</strong><small>管理员全站统一设置，任务提交时固定档位</small></span>
+            <span class="option-fixed">第 {{ config?.translation_tier || 1 }} 档</span>
+          </div>
+          <div class="translation-tier-track">
+            <div
+              v-for="item in translationTiers"
+              :key="item.tier"
+              class="translation-tier-step"
+              :class="{ 'is-active': item.tier === (config?.translation_tier || 1), 'is-unavailable': item.tier > 1 && !config?.deepseek_configured }"
+            >
+              <span><v-icon :icon="item.icon" size="16" /></span>
+              <b>{{ item.name }}</b>
+              <small>{{ item.engine }}</small>
+              <em>{{ item.detail }}</em>
+            </div>
+          </div>
+          <p v-if="!config?.deepseek_configured" class="translation-tier-note">DeepSeek 尚未由管理员配置，因此当前仅开放极速档。</p>
         </div>
 
         <div class="processing-notes">

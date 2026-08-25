@@ -71,11 +71,11 @@ export const api = {
       headers: adminHeaders(),
       body: JSON.stringify({ api_key: apiKey, model }),
     }),
-  saveTranslationProvider: (provider: 'google' | 'deepseek') =>
+  saveTranslationTier: (tier: 1 | 2 | 3 | 4) =>
     request<AdminSettings>('/api/admin/settings/translation', {
       method: 'PUT',
       headers: adminHeaders(),
-      body: JSON.stringify({ provider }),
+      body: JSON.stringify({ tier }),
     }),
   saveR2: (accountId: string, accessKeyId: string, secretAccessKey: string, bucket: string, publicBaseUrl: string) =>
     request<AdminSettings>('/api/admin/settings/r2', {

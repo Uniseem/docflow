@@ -173,17 +173,20 @@ async fn public_config(State(state): State<Arc<AppState>>) -> Result<Json<Public
     let deepseek = settings::configured(&state.pool, secret, settings::DEEPSEEK_API_KEY).await
         && settings::configured(&state.pool, secret, settings::DEEPSEEK_MODEL).await;
     let r2 = R2Settings::load(&state.pool, secret).await?.is_some();
-    let provider = settings::translation_provider(&state.pool, secret).await?;
+    let configured_tier = settings::translation_tier(&state.pool, secret).await?;
+    let translation_tier = if configured_tier > 1 && !deepseek {
+        1
+    } else {
+        configured_tier
+    };
     Ok(Json(PublicConfig {
         app_name: state.config.app_name.clone(),
         mineru_configured: mineru,
         translation_available: true,
         default_translate: true,
-        translation_provider: if provider == "deepseek" && deepseek {
-            "deepseek".into()
-        } else {
-            "google".into()
-        },
+        translation_provider: settings::translation_provider_for_tier(translation_tier).into(),
+        translation_tier,
+        deepseek_configured: deepseek,
         documents_public_by_default: false,
         r2_configured: r2,
         accepting_uploads: mineru,
@@ -312,7 +315,12 @@ async fn load_admin_settings(state: &AppState) -> Result<AdminSettingsResponse, 
         .unwrap_or_else(|| "deepseek-chat".into());
     let deepseek_configured = deepseek_key.as_ref().is_some_and(|v| !v.trim().is_empty())
         && !deepseek_model.trim().is_empty();
-    let selected_provider = settings::translation_provider(pool, secret).await?;
+    let configured_tier = settings::translation_tier(pool, secret).await?;
+    let translation_tier = if configured_tier > 1 && !deepseek_configured {
+        1
+    } else {
+        configured_tier
+    };
     let r2_access = settings::get(pool, secret, settings::R2_ACCESS_KEY_ID).await?;
     let r2_secret = settings::get(pool, secret, settings::R2_SECRET_ACCESS_KEY).await?;
     Ok(AdminSettingsResponse {
@@ -324,11 +332,8 @@ async fn load_admin_settings(state: &AppState) -> Result<AdminSettingsResponse, 
         deepseek_configured,
         deepseek_api_key_masked: settings::mask(deepseek_key.as_deref()),
         deepseek_model,
-        translation_provider: if selected_provider == "deepseek" && deepseek_configured {
-            "deepseek".into()
-        } else {
-            "google".into()
-        },
+        translation_provider: settings::translation_provider_for_tier(translation_tier).into(),
+        translation_tier,
         r2_configured: R2Settings::load(pool, secret).await?.is_some(),
         r2_account_id: settings::get(pool, secret, settings::R2_ACCOUNT_ID)
             .await?
@@ -441,18 +446,27 @@ async fn save_deepseek(
 
 #[derive(Deserialize)]
 struct TranslationProviderInput {
-    provider: String,
+    #[serde(default)]
+    tier: Option<i16>,
+    #[serde(default)]
+    provider: Option<String>,
 }
 
 async fn save_translation_provider(
     State(state): State<Arc<AppState>>,
     Json(input): Json<TranslationProviderInput>,
 ) -> Result<Json<AdminSettingsResponse>, ApiError> {
-    let provider = input.provider.trim().to_ascii_lowercase();
-    if !matches!(provider.as_str(), "google" | "deepseek") {
-        return Err(ApiError::bad_request("翻译服务只能选择 google 或 deepseek"));
+    let tier = input.tier.unwrap_or_else(|| {
+        if input.provider.as_deref() == Some("deepseek") {
+            2
+        } else {
+            1
+        }
+    });
+    if !(1..=4).contains(&tier) {
+        return Err(ApiError::bad_request("翻译质量档位只能是 1、2、3 或 4"));
     }
-    if provider == "deepseek"
+    if tier > 1
         && !(settings::configured(
             &state.pool,
             &state.config.secret_key,
@@ -473,8 +487,16 @@ async fn save_translation_provider(
     settings::set(
         &state.pool,
         &state.config.secret_key,
+        settings::TRANSLATION_TIER,
+        &tier.to_string(),
+        false,
+    )
+    .await?;
+    settings::set(
+        &state.pool,
+        &state.config.secret_key,
         settings::TRANSLATION_PROVIDER,
-        &provider,
+        settings::translation_provider_for_tier(tier),
         false,
     )
     .await?;
@@ -566,7 +588,7 @@ async fn save_r2(
 }
 
 fn document_columns() -> &'static str {
-    "id,title,original_filename,display_filename,storage_key,title_custom,source_path,source_size,mime_type,status,stage,progress,failure_reason,translate_requested,translation_provider,translated,is_public,access_token_hash,mineru_task_id,mineru_model,pages_processed,pages_total,image_count,content_html,excerpt,created_at,updated_at,completed_at,markdown_original,markdown_translated,markdown_normalized,upload_sha256,queue_attempts,archive_status,archive_error,local_archive_status,local_archive_path,r2_mirror_status,r2_mirror_error,r2_prefix,source_r2_key,api_version"
+    "id,title,original_filename,display_filename,storage_key,title_custom,source_path,source_size,mime_type,status,stage,progress,failure_reason,translate_requested,translation_provider,translation_tier,translation_guidance,translated,is_public,access_token_hash,mineru_task_id,mineru_model,pages_processed,pages_total,image_count,content_html,excerpt,created_at,updated_at,completed_at,markdown_original,markdown_translated,markdown_normalized,upload_sha256,queue_attempts,archive_status,archive_error,local_archive_status,local_archive_path,r2_mirror_status,r2_mirror_error,r2_prefix,source_r2_key,api_version"
 }
 
 #[derive(Deserialize)]
@@ -905,8 +927,7 @@ async fn create_document(
         let _ = fs::remove_dir_all(&root).await;
         return Err(ApiError::bad_request("缺少文件字段"));
     };
-    let selected_provider =
-        settings::translation_provider(&state.pool, &state.config.secret_key).await?;
+    let configured_tier = settings::translation_tier(&state.pool, &state.config.secret_key).await?;
     let deepseek_ready = settings::configured(
         &state.pool,
         &state.config.secret_key,
@@ -919,11 +940,12 @@ async fn create_document(
             settings::DEEPSEEK_MODEL,
         )
         .await;
-    let translation_provider = if selected_provider == "deepseek" && deepseek_ready {
-        "deepseek"
+    let translation_tier = if configured_tier > 1 && !deepseek_ready {
+        1
     } else {
-        "google"
+        configured_tier
     };
+    let translation_provider = settings::translation_provider_for_tier(translation_tier);
     let access_token = security::create_document_access_token();
     let access_token_hash = security::hash_document_access_token(&access_token);
     let custom_title = title.as_ref().is_some_and(|value| !value.trim().is_empty());
@@ -947,7 +969,7 @@ async fn create_document(
     .await?
     .unwrap_or_else(|| "vlm".into());
     let sql = format!(
-        "INSERT INTO documents(id,title,original_filename,display_filename,storage_key,title_custom,source_path,source_size,mime_type,status,stage,progress,failure_reason,translate_requested,translation_provider,translated,is_public,access_token_hash,mineru_task_id,mineru_model,pages_processed,pages_total,image_count,content_html,excerpt,created_at,updated_at,completed_at,markdown_original,markdown_translated,markdown_normalized,upload_sha256,queue_attempts,archive_status,archive_error,archive_manifest,local_archive_status,local_archive_path,r2_mirror_status,r2_mirror_error,r2_prefix,source_r2_key,article_r2_key,mineru_r2_key,api_version,queue_available_at) VALUES($1,$2,$3,$3,$4,$5,$6,$7,$8,'queued','queued',2,NULL,true,$9,false,false,$10,NULL,$11,NULL,NULL,0,NULL,NULL,NOW(),NOW(),NULL,NULL,NULL,NULL,$12,0,'source_local',NULL,NULL,'source_saved',$13,'disabled',NULL,NULL,NULL,NULL,NULL,'v2',NOW()) RETURNING {}",
+        "INSERT INTO documents(id,title,original_filename,display_filename,storage_key,title_custom,source_path,source_size,mime_type,status,stage,progress,failure_reason,translate_requested,translation_provider,translation_tier,translation_guidance,translated,is_public,access_token_hash,mineru_task_id,mineru_model,pages_processed,pages_total,image_count,content_html,excerpt,created_at,updated_at,completed_at,markdown_original,markdown_translated,markdown_normalized,upload_sha256,queue_attempts,archive_status,archive_error,archive_manifest,local_archive_status,local_archive_path,r2_mirror_status,r2_mirror_error,r2_prefix,source_r2_key,article_r2_key,mineru_r2_key,api_version,queue_available_at) VALUES($1,$2,$3,$3,$4,$5,$6,$7,$8,'queued','queued',2,NULL,true,$9,$10,NULL,false,false,$11,NULL,$12,NULL,NULL,0,NULL,NULL,NOW(),NOW(),NULL,NULL,NULL,NULL,$13,0,'source_local',NULL,NULL,'source_saved',$14,'disabled',NULL,NULL,NULL,NULL,NULL,'v2',NOW()) RETURNING {}",
         document_columns()
     );
     let doc = sqlx::query_as::<_, Document>(&sql)
@@ -960,6 +982,7 @@ async fn create_document(
         .bind(size as i32)
         .bind(mime)
         .bind(translation_provider)
+        .bind(translation_tier)
         .bind(access_token_hash)
         .bind(model)
         .bind(sha)
@@ -994,8 +1017,14 @@ async fn create_document(
             progress: 2,
             message: "任务已写入 PostgreSQL 持久队列",
             detail: Some(&format!(
-                "文档默认私有；当前浏览器已取得独立访问凭证；并发 Worker 将使用 SKIP LOCKED 原子领取；全站翻译服务为 {}",
-                if translation_provider == "deepseek" { "DeepSeek" } else { "Google 免费翻译" }
+                "文档默认私有；当前浏览器已取得独立访问凭证；并发 Worker 将使用 SKIP LOCKED 原子领取；全站翻译档位已快照为第 {} 档（{}）",
+                translation_tier,
+                match translation_tier {
+                    1 => "极速 · Google 免费翻译",
+                    2 => "标准 · DeepSeek 直接翻译",
+                    3 => "精细 · 全文速览约束",
+                    _ => "Agent · 通读后逐段翻译",
+                }
             )),
             current: None,
             total: None,
@@ -1268,6 +1297,10 @@ fn build_bundle(
     for (name, value) in [
         ("markdown/original.md", doc.markdown_original.as_deref()),
         ("markdown/translated.md", doc.markdown_translated.as_deref()),
+        (
+            "translation/guidance.md",
+            doc.translation_guidance.as_deref(),
+        ),
         ("markdown/normalized.md", doc.markdown_normalized.as_deref()),
         ("article/article.html", doc.content_html.as_deref()),
     ] {
@@ -1298,6 +1331,8 @@ fn build_bundle(
         "local_archive_status": doc.local_archive_status,
         "r2_mirror_status": doc.r2_mirror_status,
         "translation_provider": doc.translation_provider,
+        "translation_tier": doc.translation_tier,
+        "translation_guidance_available": doc.translation_guidance.is_some(),
         "translated": doc.translated,
         "is_public": doc.is_public,
         "created_at": doc.created_at,
@@ -1451,10 +1486,10 @@ async fn openapi(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> 
         format!("{}/api/v1", state.config.public_origin)
     };
     Json(json!({
-        "openapi":"3.1.0","info":{"title":format!("{} Open API",state.config.app_name),"version":"1.1.0","description":"文档解析、全站统一中文翻译、永久归档与实时进度 API。新任务默认私有；上传响应设置当前浏览器专属 HttpOnly 访问 Cookie，管理员可改为公开。没有删除接口。"},
+        "openapi":"3.1.0","info":{"title":format!("{} Open API",state.config.app_name),"version":"1.2.0","description":"文档解析、管理员全站统一四档中文翻译、永久归档与实时进度 API。新任务默认私有；上传响应设置当前浏览器专属 HttpOnly 访问 Cookie，管理员可改为公开。没有删除接口。"},
         "servers":[{"url":server_url}],
         "paths":{
-          "/jobs":{"get":{"summary":"管理员主动公开的任务列表"},"post":{"summary":"上传文档并创建默认私有任务","description":"翻译服务由管理员全站统一指定；响应通过 Set-Cookie 赋予当前浏览器文档访问权。","requestBody":{"required":true,"content":{"multipart/form-data":{"schema":{"type":"object","required":["file"],"properties":{"file":{"type":"string","format":"binary"},"title":{"type":"string"}}}}}}}},
+          "/jobs":{"get":{"summary":"管理员主动公开的任务列表"},"post":{"summary":"上传文档并创建默认私有任务","description":"四档翻译质量由管理员全站统一指定并在创建时快照；响应通过 Set-Cookie 赋予当前浏览器文档访问权。","requestBody":{"required":true,"content":{"multipart/form-data":{"schema":{"type":"object","required":["file"],"properties":{"file":{"type":"string","format":"binary"},"title":{"type":"string"}}}}}}}},
           "/jobs/{id}":{"get":{"summary":"任务状态与文章"}},
           "/jobs/{id}/events":{"get":{"summary":"增量读取永久进度事件"}},
           "/jobs/{id}/events/stream":{"get":{"summary":"SSE 实时进度流"}},
@@ -1467,7 +1502,7 @@ async fn openapi(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> 
 
 async fn api_docs() -> Html<&'static str> {
     Html(
-        r#"<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>文流 Open API</title><style>body{font:16px/1.7 system-ui;max-width:920px;margin:48px auto;padding:0 24px;color:#17201d}code,pre{background:#f3f5f3;border-radius:8px}code{padding:2px 6px}pre{padding:18px;overflow:auto}a{color:#176b4d}</style></head><body><p><a href="/">← 返回文流</a></p><h1>文流 Open API v1</h1><p>上传无需登录，但新任务默认私有。上传响应设置当前客户端专属访问 Cookie；后续查询、SSE 与下载必须携带它。管理员可在后台公开文档。翻译服务由管理员全站统一指定，源文件与处理结果永久保存在 VPS 本地，R2 是可选镜像。</p><h2>创建私有任务并保存访问 Cookie</h2><pre>curl -c docflow.cookies -F "file=@paper.pdf" -F "title=文档标题" http://你的服务器IP:38100/api/v1/jobs</pre><h2>实时进度</h2><pre>curl -b docflow.cookies -N http://你的服务器IP:38100/api/v1/jobs/{id}/events/stream?after_id=0</pre><h2>完整打包</h2><pre>curl -b docflow.cookies -OJ http://你的服务器IP:38100/api/v1/jobs/{id}/bundle</pre><h2>机器可读规范</h2><p><a href="/api/openapi.json">OpenAPI 3.1 JSON</a></p></body></html>"#,
+        r#"<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>文流 Open API</title><style>body{font:16px/1.7 system-ui;max-width:920px;margin:48px auto;padding:0 24px;color:#17201d}code,pre{background:#f3f5f3;border-radius:8px}code{padding:2px 6px}pre{padding:18px;overflow:auto}a{color:#176b4d}</style></head><body><p><a href="/">← 返回文流</a></p><h1>文流 Open API v1</h1><p>上传无需登录，但新任务默认私有。上传响应设置当前客户端专属访问 Cookie；后续查询、SSE 与下载必须携带它。管理员可在后台公开文档。翻译质量由管理员在四档中全站统一指定，任务创建时固定；源文件与处理结果永久保存在 VPS 本地，R2 是可选镜像。</p><h2>创建私有任务并保存访问 Cookie</h2><pre>curl -c docflow.cookies -F "file=@paper.pdf" -F "title=文档标题" http://你的服务器IP:38100/api/v1/jobs</pre><h2>实时进度</h2><pre>curl -b docflow.cookies -N http://你的服务器IP:38100/api/v1/jobs/{id}/events/stream?after_id=0</pre><h2>完整打包</h2><pre>curl -b docflow.cookies -OJ http://你的服务器IP:38100/api/v1/jobs/{id}/bundle</pre><h2>机器可读规范</h2><p><a href="/api/openapi.json">OpenAPI 3.1 JSON</a></p></body></html>"#,
     )
 }
 

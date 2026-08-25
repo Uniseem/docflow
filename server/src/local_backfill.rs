@@ -21,13 +21,14 @@ struct BackfillDocument {
     local_archive_path: Option<String>,
     markdown_original: Option<String>,
     markdown_translated: Option<String>,
+    translation_guidance: Option<String>,
     markdown_normalized: Option<String>,
     content_html: Option<String>,
 }
 
 pub async fn run(pool: &PgPool, config: &Config) -> Result<()> {
     let documents = sqlx::query_as::<_, BackfillDocument>(
-        "SELECT id,title,original_filename,display_filename,storage_key,source_path,source_size,mime_type,status,local_archive_path,markdown_original,markdown_translated,markdown_normalized,content_html FROM documents ORDER BY created_at",
+        "SELECT id,title,original_filename,display_filename,storage_key,source_path,source_size,mime_type,status,local_archive_path,markdown_original,markdown_translated,translation_guidance,markdown_normalized,content_html FROM documents ORDER BY created_at",
     )
     .fetch_all(pool)
     .await?;
@@ -98,6 +99,10 @@ async fn backfill_document(
         (
             archive_root.join("markdown/translated.md"),
             document.markdown_translated.as_deref(),
+        ),
+        (
+            archive_root.join("translation/guidance.md"),
+            document.translation_guidance.as_deref(),
         ),
         (
             archive_root.join("markdown/normalized.md"),

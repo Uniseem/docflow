@@ -15,7 +15,7 @@ use sqlx::Row;
 use crate::{db::AppState, events, settings};
 
 pub async fn process(state: Arc<AppState>, id: &str) -> Result<()> {
-    let row = sqlx::query("SELECT source_path,original_filename,mime_type,translate_requested,translation_provider,mineru_model,mineru_task_id FROM documents WHERE id=$1")
+    let row = sqlx::query("SELECT source_path,original_filename,mime_type,translate_requested,translation_provider,translation_tier,mineru_model,mineru_task_id FROM documents WHERE id=$1")
         .bind(id).fetch_one(&state.pool).await?;
     let source_path: String = row.get("source_path");
     let source = Path::new("/data").join(&source_path);
@@ -73,33 +73,35 @@ pub async fn process(state: Arc<AppState>, id: &str) -> Result<()> {
     .await?;
 
     let translate_requested: bool = row.get("translate_requested");
-    let (translated_markdown, translated) = if translate_requested {
-        let provider_name: String = row.get("translation_provider");
-        let provider = match provider_name.as_str() {
-            "google" => translate::TranslationProvider::Google,
-            "deepseek" => {
-                let api_key = settings::get(
-                    &state.pool,
-                    &state.config.secret_key,
-                    settings::DEEPSEEK_API_KEY,
-                )
-                .await?
-                .context("该任务指定了 DeepSeek，但 API Key 不可用")?;
-                let model = settings::get(
-                    &state.pool,
-                    &state.config.secret_key,
-                    settings::DEEPSEEK_MODEL,
-                )
-                .await?
-                .context("该任务指定了 DeepSeek，但模型名称不可用")?;
-                translate::TranslationProvider::DeepSeek { api_key, model }
+    let (translated_markdown, translation_guidance, translated) = if translate_requested {
+        let translation_tier: i16 = row.get("translation_tier");
+        let strategy = if translation_tier == 1 {
+            translate::TranslationStrategy::GoogleFast
+        } else {
+            let api_key = settings::get(
+                &state.pool,
+                &state.config.secret_key,
+                settings::DEEPSEEK_API_KEY,
+            )
+            .await?
+            .context("该任务指定了 DeepSeek，但 API Key 不可用")?;
+            let model = settings::get(
+                &state.pool,
+                &state.config.secret_key,
+                settings::DEEPSEEK_MODEL,
+            )
+            .await?
+            .context("该任务指定了 DeepSeek，但模型名称不可用")?;
+            match translation_tier {
+                2 => translate::TranslationStrategy::DeepSeekDirect { api_key, model },
+                3 => translate::TranslationStrategy::DeepSeekGuided { api_key, model },
+                4 => translate::TranslationStrategy::DeepSeekAgent { api_key, model },
+                other => anyhow::bail!("任务翻译档位无效：{other}"),
             }
-            other => anyhow::bail!("任务翻译服务无效：{other}"),
         };
-        (
-            translate::translate(&state, id, &extraction.localized_markdown, &provider).await?,
-            true,
-        )
+        let output =
+            translate::translate(&state, id, &extraction.localized_markdown, &strategy).await?;
+        (output.markdown, output.guidance, true)
     } else {
         events::progress(
             &state.pool,
@@ -110,12 +112,13 @@ pub async fn process(state: Arc<AppState>, id: &str) -> Result<()> {
             Some("新任务始终使用管理员指定的全站翻译服务；该分支仅兼容旧数据"),
         )
         .await?;
-        (extraction.localized_markdown.clone(), false)
+        (extraction.localized_markdown.clone(), None, false)
     };
     if translated {
-        sqlx::query("UPDATE documents SET markdown_translated=$2,updated_at=NOW() WHERE id=$1")
+        sqlx::query("UPDATE documents SET markdown_translated=$2,translation_guidance=$3,updated_at=NOW() WHERE id=$1")
             .bind(id)
             .bind(&translated_markdown)
+            .bind(&translation_guidance)
             .execute(&state.pool)
             .await?;
     }
@@ -125,6 +128,9 @@ pub async fn process(state: Arc<AppState>, id: &str) -> Result<()> {
         .bind(id).bind(&article.title).bind(&article.excerpt).bind(&article.markdown).bind(&article.html).bind(translated).execute(&state.pool).await?;
     tokio::fs::write(final_root.join("article.md"), &article.markdown).await?;
     tokio::fs::write(final_root.join("article.html"), &article.html).await?;
+    if let Some(guidance) = translation_guidance.as_deref() {
+        tokio::fs::write(final_root.join("translation-guidance.md"), guidance).await?;
+    }
 
     archive::archive_and_publish(
         &state,
@@ -135,6 +141,7 @@ pub async fn process(state: Arc<AppState>, id: &str) -> Result<()> {
             final_root: &final_root,
             original_markdown: &extraction.original_markdown,
             translated_markdown: translated.then_some(translated_markdown.as_str()),
+            translation_guidance: translation_guidance.as_deref(),
             article: &article,
         },
     )

@@ -9,6 +9,7 @@ pub const MINERU_MODEL: &str = "mineru_model";
 pub const DEEPSEEK_API_KEY: &str = "deepseek_api_key";
 pub const DEEPSEEK_MODEL: &str = "deepseek_model";
 pub const TRANSLATION_PROVIDER: &str = "translation_provider";
+pub const TRANSLATION_TIER: &str = "translation_tier";
 pub const R2_ACCOUNT_ID: &str = "r2_account_id";
 pub const R2_ACCESS_KEY_ID: &str = "r2_access_key_id";
 pub const R2_SECRET_ACCESS_KEY: &str = "r2_secret_access_key";
@@ -68,6 +69,26 @@ pub async fn translation_provider(pool: &PgPool, secret_key: &str) -> Result<Str
         _ => "google",
     }
     .to_string())
+}
+
+pub async fn translation_tier(pool: &PgPool, secret_key: &str) -> Result<i16> {
+    if let Some(value) = get(pool, secret_key, TRANSLATION_TIER).await?
+        && let Ok(tier) = value.parse::<i16>()
+        && (1..=4).contains(&tier)
+    {
+        return Ok(tier);
+    }
+    Ok(
+        if translation_provider(pool, secret_key).await? == "deepseek" {
+            2
+        } else {
+            1
+        },
+    )
+}
+
+pub fn translation_provider_for_tier(tier: i16) -> &'static str {
+    if tier <= 1 { "google" } else { "deepseek" }
 }
 
 pub fn mask(value: Option<&str>) -> Option<String> {
@@ -130,6 +151,7 @@ pub struct AdminSettingsResponse {
     pub deepseek_api_key_masked: Option<String>,
     pub deepseek_model: String,
     pub translation_provider: String,
+    pub translation_tier: i16,
     pub r2_configured: bool,
     pub r2_account_id: String,
     pub r2_access_key_id_masked: Option<String>,

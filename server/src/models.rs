@@ -22,6 +22,9 @@ pub struct Document {
     pub failure_reason: Option<String>,
     pub translate_requested: bool,
     pub translation_provider: String,
+    pub translation_tier: i16,
+    #[serde(skip_serializing)]
+    pub translation_guidance: Option<String>,
     pub translated: bool,
     pub is_public: bool,
     #[serde(skip_serializing)]
@@ -114,6 +117,8 @@ pub struct PublicConfig {
     pub translation_available: bool,
     pub default_translate: bool,
     pub translation_provider: String,
+    pub translation_tier: i16,
+    pub deepseek_configured: bool,
     pub documents_public_by_default: bool,
     pub r2_configured: bool,
     pub accepting_uploads: bool,
