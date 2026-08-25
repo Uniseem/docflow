@@ -102,11 +102,12 @@ export const api = {
     source.onerror = () => { source.close(); onError() }
     return () => source.close()
   },
-  uploadDocument: (file: File, title: string, onProgress: (percent: number) => void) =>
+  uploadDocument: (file: File, title: string, translationTier: 1 | 2 | 3 | 4, onProgress: (percent: number) => void) =>
     new Promise<DocumentSummary>((resolve, reject) => {
       const form = new FormData()
       form.append('file', file)
       if (title.trim()) form.append('title', title.trim())
+      form.append('translation_tier', String(translationTier))
       const xhr = new XMLHttpRequest()
       xhr.open('POST', '/api/v1/jobs')
       xhr.withCredentials = true

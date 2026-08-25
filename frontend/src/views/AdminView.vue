@@ -132,7 +132,7 @@ async function saveDeepSeek() {
   try {
     settings.value = await api.saveDeepSeek(deepseekKey.value, deepseekModel.value)
     deepseekKey.value = ''
-    message.value = 'DeepSeek 验证成功。现在可以选择第 2–4 档；保存 Key 不会自动切换现有全站设置。'
+    message.value = 'DeepSeek 验证成功。上传页现在会开放第 2–4 档；保存 Key 不会自动切换默认档位。'
   } catch (reason) {
     error.value = reason instanceof Error ? reason.message : '保存失败'
   } finally { loading.value = false }
@@ -154,7 +154,7 @@ async function saveTranslator() {
   try {
     settings.value = await api.saveTranslationTier(translationTier.value)
     translationTier.value = settings.value.translation_tier
-    message.value = `全站翻译质量已切换为第 ${translationTier.value} 档；已进入队列的任务继续使用创建时记录的档位。`
+    message.value = `默认翻译档位已切换为第 ${translationTier.value} 档；用户仍可在上传时选择其他已开放档位。`
   } catch (reason) {
     error.value = reason instanceof Error ? reason.message : '保存失败'
   } finally { loading.value = false }
@@ -256,7 +256,7 @@ onMounted(async () => {
         <aside class="admin-sidebar">
           <nav aria-label="后台设置目录">
             <a href="#mineru"><v-icon icon="mdi-file-search-outline" size="17" />MinerU</a>
-            <a href="#translation"><v-icon icon="mdi-translate" size="17" />全站翻译</a>
+            <a href="#translation"><v-icon icon="mdi-translate" size="17" />默认翻译</a>
             <a href="#deepseek"><v-icon icon="mdi-key-outline" size="17" />DeepSeek</a>
             <a href="#storage"><v-icon icon="mdi-harddisk" size="17" />本地存储</a>
             <a href="#r2"><v-icon icon="mdi-cloud-outline" size="17" />R2 镜像</a>
@@ -265,7 +265,7 @@ onMounted(async () => {
           <div class="config-status">
             <h3>服务状态</h3>
             <div><span>MinerU</span><b :class="settings.mineru_configured ? 'ok' : 'warn'">{{ settings.mineru_configured ? '已配置' : '未配置' }}</b></div>
-            <div><span>翻译档位</span><b class="ok">第 {{ settings.translation_tier }} 档</b></div>
+            <div><span>默认档位</span><b class="ok">第 {{ settings.translation_tier }} 档</b></div>
             <div><span>DeepSeek</span><b :class="settings.deepseek_configured ? 'ok' : ''">{{ settings.deepseek_configured ? '已配置' : '未配置' }}</b></div>
             <div><span>本地存储</span><b class="ok">已启用</b></div>
             <div><span>R2</span><b :class="settings.r2_configured ? 'ok' : ''">{{ settings.r2_configured ? '已配置' : '可选' }}</b></div>
@@ -284,8 +284,8 @@ onMounted(async () => {
           </section>
 
           <section id="translation" class="settings-section">
-            <header><div><h2>全站翻译质量</h2><p>点击档位卡进行选择，再保存应用到之后创建的所有任务。</p></div><span class="setting-state is-ok">当前生效：第 {{ settings.translation_tier }} 档</span></header>
-            <div class="translation-quality-grid" role="radiogroup" aria-label="全站翻译质量档位">
+            <header><div><h2>默认翻译档位</h2><p>上传页会默认选中此档；用户可以为单次任务选择其他已开放档位。</p></div><span class="setting-state is-ok">当前默认：第 {{ settings.translation_tier }} 档</span></header>
+            <div class="translation-quality-grid" role="radiogroup" aria-label="默认翻译质量档位">
               <button
                 v-for="tier in translationTiers"
                 :key="tier.tier"
@@ -313,7 +313,7 @@ onMounted(async () => {
                 </span>
                 <span class="translation-quality-card__footer">
                   <span>{{ tier.meta }}</span>
-                  <em v-if="settings.translation_tier === tier.tier">当前档位</em>
+                  <em v-if="settings.translation_tier === tier.tier">当前默认</em>
                   <em v-else-if="tier.tier > 1 && !settings.deepseek_configured">需要 DeepSeek</em>
                   <em v-else>可选择</em>
                 </span>
@@ -322,17 +322,17 @@ onMounted(async () => {
             <div class="translation-save-bar" :class="{ 'has-change': hasPendingTranslationTier }">
               <span>
                 <v-icon :icon="hasPendingTranslationTier ? 'mdi-alert-circle-outline' : 'mdi-check-circle-outline'" size="21" />
-                <span><b>{{ hasPendingTranslationTier ? `已选择第 ${translationTier} 档，尚未保存` : `第 ${settings.translation_tier} 档正在全站生效` }}</b><small>档位在任务创建时固定；不会改变正在处理或已完成的文档。</small></span>
+                <span><b>{{ hasPendingTranslationTier ? `已选择第 ${translationTier} 档，尚未保存` : `上传页默认选择第 ${settings.translation_tier} 档` }}</b><small>用户提交时可以切换；最终选择会固定在任务中。</small></span>
               </span>
               <v-btn class="translation-save-button" color="primary" size="large" :loading="loading" :disabled="!hasPendingTranslationTier" @click="saveTranslator">
                 {{ hasPendingTranslationTier ? `保存并应用第 ${translationTier} 档` : '当前设置已保存' }}
               </v-btn>
             </div>
-            <p class="section-help">第 3–4 档会永久保存全文速览约束或 Agent 蓝图。普通用户只能看到当前档位，不能自行修改。</p>
+            <p class="section-help">第 3–4 档会永久保存全文速览约束或 Agent 蓝图。DeepSeek 配置成功后，上传者可以选择第 2–4 档。</p>
           </section>
 
           <section id="deepseek" class="settings-section">
-            <header><div><h2>DeepSeek 配置</h2><p>配置成功后开放第 2–4 档，不会自动切换全站档位。</p></div><span class="setting-state" :class="settings.deepseek_configured ? 'is-ok' : ''">{{ settings.deepseek_configured ? '已配置' : '可选' }}</span></header>
+            <header><div><h2>DeepSeek 配置</h2><p>配置成功后在上传页开放第 2–4 档，不会自动切换默认档位。</p></div><span class="setting-state" :class="settings.deepseek_configured ? 'is-ok' : ''">{{ settings.deepseek_configured ? '已配置' : '可选' }}</span></header>
             <p v-if="settings.deepseek_api_key_masked" class="current-secret">当前 Key：<code>{{ settings.deepseek_api_key_masked }}</code></p>
             <div class="form-grid form-grid--2">
               <v-text-field v-model="deepseekKey" label="新的 DeepSeek API Key" type="password" autocomplete="new-password" hide-details />

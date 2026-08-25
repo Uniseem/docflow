@@ -838,6 +838,7 @@ async fn create_document(
         .await
         .map_err(ApiError::internal)?;
     let mut title: Option<String> = None;
+    let mut requested_translation_tier: Option<String> = None;
     let mut saved: Option<(String, PathBuf, u64, String, String)> = None;
     while let Some(field) = multipart
         .next_field()
@@ -846,8 +847,12 @@ async fn create_document(
     {
         let name = field.name().unwrap_or("").to_string();
         if name == "translate" {
-            // 兼容旧客户端，但翻译服务与是否翻译均由管理员全站统一控制。
+            // 兼容旧客户端；当前所有任务均会翻译。
             let _ = field.text().await;
+            continue;
+        }
+        if name == "translation_tier" {
+            requested_translation_tier = Some(field.text().await.unwrap_or_default());
             continue;
         }
         if name == "title" {
@@ -928,6 +933,16 @@ async fn create_document(
         return Err(ApiError::bad_request("缺少文件字段"));
     };
     let configured_tier = settings::translation_tier(&state.pool, &state.config.secret_key).await?;
+    let requested_translation_tier = match requested_translation_tier {
+        Some(value) => match parse_translation_tier(&value) {
+            Ok(tier) => Some(tier),
+            Err(message) => {
+                let _ = fs::remove_dir_all(&root).await;
+                return Err(ApiError::bad_request(message));
+            }
+        },
+        None => None,
+    };
     let deepseek_ready = settings::configured(
         &state.pool,
         &state.config.secret_key,
@@ -940,11 +955,19 @@ async fn create_document(
             settings::DEEPSEEK_MODEL,
         )
         .await;
-    let translation_tier = if configured_tier > 1 && !deepseek_ready {
-        1
-    } else {
-        configured_tier
-    };
+    if requested_translation_tier.is_some_and(|tier| tier > 1) && !deepseek_ready {
+        let _ = fs::remove_dir_all(&root).await;
+        return Err(ApiError::bad_request(
+            "所选第 2–4 档需要管理员先配置并验证 DeepSeek API Key 与模型",
+        ));
+    }
+    let translation_tier = requested_translation_tier.unwrap_or_else(|| {
+        if configured_tier > 1 && !deepseek_ready {
+            1
+        } else {
+            configured_tier
+        }
+    });
     let translation_provider = settings::translation_provider_for_tier(translation_tier);
     let access_token = security::create_document_access_token();
     let access_token_hash = security::hash_document_access_token(&access_token);
@@ -1017,7 +1040,7 @@ async fn create_document(
             progress: 2,
             message: "任务已写入 PostgreSQL 持久队列",
             detail: Some(&format!(
-                "文档默认私有；当前浏览器已取得独立访问凭证；并发 Worker 将使用 SKIP LOCKED 原子领取；全站翻译档位已快照为第 {} 档（{}）",
+                "文档默认私有；当前浏览器已取得独立访问凭证；并发 Worker 将使用 SKIP LOCKED 原子领取；本次选择的翻译档位已快照为第 {} 档（{}）",
                 translation_tier,
                 match translation_tier {
                     1 => "极速 · Google 免费翻译",
@@ -1393,6 +1416,13 @@ fn valid_zip_name(name: &str) -> bool {
         && !name.split('/').any(|part| matches!(part, "" | "." | ".."))
 }
 
+fn parse_translation_tier(value: &str) -> Result<i16, &'static str> {
+    match value.trim().parse::<i16>() {
+        Ok(tier @ 1..=4) => Ok(tier),
+        _ => Err("翻译质量档位只能是 1、2、3 或 4"),
+    }
+}
+
 fn safe_data_path(data_root: &Path, relative: &str) -> Option<PathBuf> {
     let relative = Path::new(relative);
     if relative.is_absolute()
@@ -1486,10 +1516,10 @@ async fn openapi(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> 
         format!("{}/api/v1", state.config.public_origin)
     };
     Json(json!({
-        "openapi":"3.1.0","info":{"title":format!("{} Open API",state.config.app_name),"version":"1.2.0","description":"文档解析、管理员全站统一四档中文翻译、永久归档与实时进度 API。新任务默认私有；上传响应设置当前浏览器专属 HttpOnly 访问 Cookie，管理员可改为公开。没有删除接口。"},
+        "openapi":"3.1.0","info":{"title":format!("{} Open API",state.config.app_name),"version":"1.2.0","description":"文档解析、四档中文翻译、永久归档与实时进度 API。管理员设置默认档位，上传者可为本次任务选择已开放档位。新任务默认私有；上传响应设置当前浏览器专属 HttpOnly 访问 Cookie，管理员可改为公开。没有删除接口。"},
         "servers":[{"url":server_url}],
         "paths":{
-          "/jobs":{"get":{"summary":"管理员主动公开的任务列表"},"post":{"summary":"上传文档并创建默认私有任务","description":"四档翻译质量由管理员全站统一指定并在创建时快照；响应通过 Set-Cookie 赋予当前浏览器文档访问权。","requestBody":{"required":true,"content":{"multipart/form-data":{"schema":{"type":"object","required":["file"],"properties":{"file":{"type":"string","format":"binary"},"title":{"type":"string"}}}}}}}},
+          "/jobs":{"get":{"summary":"管理员主动公开的任务列表"},"post":{"summary":"上传文档并创建默认私有任务","description":"translation_tier 可选 1–4；不传时使用管理员默认档位，第 2–4 档仅在 DeepSeek 已配置时可用。选定档位在任务创建时快照；响应通过 Set-Cookie 赋予当前浏览器文档访问权。","requestBody":{"required":true,"content":{"multipart/form-data":{"schema":{"type":"object","required":["file"],"properties":{"file":{"type":"string","format":"binary"},"title":{"type":"string"},"translation_tier":{"type":"integer","minimum":1,"maximum":4}}}}}}}},
           "/jobs/{id}":{"get":{"summary":"任务状态与文章"}},
           "/jobs/{id}/events":{"get":{"summary":"增量读取永久进度事件"}},
           "/jobs/{id}/events/stream":{"get":{"summary":"SSE 实时进度流"}},
@@ -1502,7 +1532,7 @@ async fn openapi(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> 
 
 async fn api_docs() -> Html<&'static str> {
     Html(
-        r#"<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>文流 Open API</title><style>body{font:16px/1.7 system-ui;max-width:920px;margin:48px auto;padding:0 24px;color:#17201d}code,pre{background:#f3f5f3;border-radius:8px}code{padding:2px 6px}pre{padding:18px;overflow:auto}a{color:#176b4d}</style></head><body><p><a href="/">← 返回文流</a></p><h1>文流 Open API v1</h1><p>上传无需登录，但新任务默认私有。上传响应设置当前客户端专属访问 Cookie；后续查询、SSE 与下载必须携带它。管理员可在后台公开文档。翻译质量由管理员在四档中全站统一指定，任务创建时固定；源文件与处理结果永久保存在 VPS 本地，R2 是可选镜像。</p><h2>创建私有任务并保存访问 Cookie</h2><pre>curl -c docflow.cookies -F "file=@paper.pdf" -F "title=文档标题" http://你的服务器IP:38100/api/v1/jobs</pre><h2>实时进度</h2><pre>curl -b docflow.cookies -N http://你的服务器IP:38100/api/v1/jobs/{id}/events/stream?after_id=0</pre><h2>完整打包</h2><pre>curl -b docflow.cookies -OJ http://你的服务器IP:38100/api/v1/jobs/{id}/bundle</pre><h2>机器可读规范</h2><p><a href="/api/openapi.json">OpenAPI 3.1 JSON</a></p></body></html>"#,
+        r#"<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>文流 Open API</title><style>body{font:16px/1.7 system-ui;max-width:920px;margin:48px auto;padding:0 24px;color:#17201d}code,pre{background:#f3f5f3;border-radius:8px}code{padding:2px 6px}pre{padding:18px;overflow:auto}a{color:#176b4d}</style></head><body><p><a href="/">← 返回文流</a></p><h1>文流 Open API v1</h1><p>上传无需登录，但新任务默认私有。上传响应设置当前客户端专属访问 Cookie；后续查询、SSE 与下载必须携带它。管理员可在后台公开文档。管理员设置默认翻译档位，上传者可为本次任务选择已开放档位；源文件与处理结果永久保存在 VPS 本地，R2 是可选镜像。</p><h2>创建私有任务并保存访问 Cookie</h2><pre>curl -c docflow.cookies -F "file=@paper.pdf" -F "title=文档标题" -F "translation_tier=3" http://你的服务器IP:38100/api/v1/jobs</pre><h2>实时进度</h2><pre>curl -b docflow.cookies -N http://你的服务器IP:38100/api/v1/jobs/{id}/events/stream?after_id=0</pre><h2>完整打包</h2><pre>curl -b docflow.cookies -OJ http://你的服务器IP:38100/api/v1/jobs/{id}/bundle</pre><h2>机器可读规范</h2><p><a href="/api/openapi.json">OpenAPI 3.1 JSON</a></p></body></html>"#,
     )
 }
 
@@ -1539,6 +1569,16 @@ mod tests {
     fn accepted_extensions_cover_office_and_pdf() {
         for extension in [".pdf", ".docx", ".pptx", ".xlsx"] {
             assert!(ACCEPTED_EXTENSIONS.contains(&extension));
+        }
+    }
+
+    #[test]
+    fn translation_tier_accepts_only_four_public_choices() {
+        for tier in 1..=4 {
+            assert_eq!(parse_translation_tier(&tier.to_string()).unwrap(), tier);
+        }
+        for invalid in ["", "0", "5", "2.5", "agent"] {
+            assert!(parse_translation_tier(invalid).is_err());
         }
     }
 }

@@ -1,6 +1,6 @@
 # 文流（DocFlow）
 
-文流是一个可自托管的文档解析、中文翻译与阅读服务。用户提交 MinerU 支持的 PDF、Office 文档、图片或 HTML 后，Rust Worker 在后台完成解析、WebP 图片转换、四档中文翻译、Markdown 规范化和 VPS 本地永久归档。管理员全站统一指定翻译档位：第 1 档使用 Google 免费翻译；第 2 档由 DeepSeek 直接分块翻译；第 3 档先速览全文、生成简单通用约束后再翻译；第 4 档由 DeepSeek Agent 通读全文、建立蓝图并携带上下文逐段翻译。Cloudflare R2 是可选镜像，不是运行前提。
+文流是一个可自托管的文档解析、中文翻译与阅读服务。用户提交 MinerU 支持的 PDF、Office 文档、图片或 HTML 后，Rust Worker 在后台完成解析、WebP 图片转换、四档中文翻译、Markdown 规范化和 VPS 本地永久归档。管理员设置上传页默认翻译档位，用户可为单次任务选择已开放档位：第 1 档使用 Google 免费翻译；第 2 档由 DeepSeek 直接分块翻译；第 3 档先速览全文、生成简单通用约束后再翻译；第 4 档由 DeepSeek Agent 通读全文、建立蓝图并携带上下文逐段翻译。Cloudflare R2 是可选镜像，不是运行前提。
 
 新文档默认私有，没有普通用户账户，也没有删除接口。上传响应会给当前浏览器设置每份文档独立的 HttpOnly 访问凭证；管理员在 `/admin` 能看到全部文档，并可逐份公开或恢复私有。管理后台固定在 `/admin`，前台不显示入口；首次访问后台的用户可以注册为唯一管理员。
 
@@ -65,13 +65,13 @@ GET  /api/v1/jobs/{id}/assets/{name}      本地 WebP（R2 仅作回退）
 示例：
 
 ```bash
-curl -c docflow.cookies -F "file=@paper.pdf" -F "title=文档标题" \
+curl -c docflow.cookies -F "file=@paper.pdf" -F "title=文档标题" -F "translation_tier=3" \
   http://你的服务器IP:38100/api/v1/jobs
 ```
 
-上传响应中的 Cookie 是该私有文档的访问凭证。命令行后续读取进度或下载时使用 `-b docflow.cookies`。网页会自动管理该凭证。全站始终翻译为中文，翻译档位由管理员统一设置并在任务创建时固定；客户端提交的旧版 `translate` 字段会被兼容接收但忽略。
+上传响应中的 Cookie 是该私有文档的访问凭证。命令行后续读取进度或下载时使用 `-b docflow.cookies`。网页会自动管理该凭证。全站始终翻译为中文；`translation_tier` 可选 1–4，不传时采用管理员默认值，最终选择会在任务创建时固定。客户端提交的旧版 `translate` 字段会被兼容接收但忽略。
 
-第 1 档的 Google 实现使用 Google 网页客户端使用的免费翻译端点，不需要 API Key，也不是带 SLA 的 Google Cloud Translation API。它可能限流或发生兼容性变化。第 2–4 档必须先由管理员验证 DeepSeek API Key 与模型；档位越高，模型调用次数、处理时间和费用通常越高。普通访问者不能绕过管理员的全站档位设置。
+第 1 档的 Google 实现使用 Google 网页客户端使用的免费翻译端点，不需要 API Key，也不是带 SLA 的 Google Cloud Translation API。它可能限流或发生兼容性变化。第 2–4 档必须先由管理员验证 DeepSeek API Key 与模型；档位越高，模型调用次数、处理时间和费用通常越高。管理员设置上传页默认档位，访问者可以为本次任务选择任一已开放档位。
 
 ## VPS 一键部署
 
@@ -286,7 +286,7 @@ HTTP_PORT=9000
 
 1. 首次注册唯一管理员；已有 Python 版本的 Argon2 密码可直接登录。
 2. 配置并验证 MinerU API Key 与模型。
-3. 全站翻译默认第 1 档（Google 极速）。配置并验证 DeepSeek API Key 和模型后，可在“全站翻译质量”中选择第 2 档（DeepSeek 直译）、第 3 档（全文速览约束）或第 4 档（Agent 通读后逐段翻译）；普通访问者只能看到当前档位，不能切换。
+3. 默认翻译档位为第 1 档（Google 极速）。配置并验证 DeepSeek API Key 和模型后，第 2 档（DeepSeek 直译）、第 3 档（全文速览约束）和第 4 档（Agent 通读后逐段翻译）会在上传页开放；管理员设置默认值，访问者可为单次任务切换。
 4. 如需异地镜像，可选配置 R2 Account ID、Access Key ID、Secret Access Key 和 Bucket。凭据在数据库中使用 `data/config/secret_key` 派生的 Fernet 密钥加密。
 5. 在“文档管理”中查看全部文档、切换公开/私有状态，并修改展示标题与下载文件名；扩展名必须保持一致，后端物理路径不会变化。
 
