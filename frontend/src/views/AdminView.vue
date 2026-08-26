@@ -241,9 +241,9 @@ onMounted(async () => {
   <v-container class="admin-shell">
     <header class="admin-header">
       <div>
-        <span class="admin-kicker">ADMIN</span>
-        <h1>管理后台</h1>
-        <p>配置全站翻译、存储服务，并查看和公开默认私有的文档。</p>
+        <span class="eyebrow">SYSTEM CONSOLE</span>
+        <h1>管理控制台</h1>
+        <p>集中配置解析、翻译与存储服务，并管理实例中的全部私有文档。</p>
       </div>
       <v-btn v-if="token" variant="text" prepend-icon="mdi-logout" @click="logout">退出登录</v-btn>
     </header>
