@@ -114,7 +114,7 @@ async fn fail_or_retry(
                 progress: current_progress(state, id).await,
                 message: "本次处理未完成，任务已进入持久重试队列",
                 detail: Some(&format!(
-                    "第 {attempt} / 3 次尝试失败；{delay} 秒后可由任一 Worker 重新领取。原因：{}",
+                    "第 {attempt} / 3 次尝试失败；{delay} 秒后可由任一 Worker 重新领取。源文件始终保留，已经通过校验的翻译分块也已写入本地断点缓存，下次会直接复用。原因：{}",
                     detail.chars().take(900).collect::<String>()
                 )),
                 current: Some(attempt as i64),
@@ -135,7 +135,7 @@ async fn fail_or_retry(
                 progress: current_progress(state, id).await,
                 message: "三次自动尝试均未成功，任务最终停止",
                 detail: Some(&format!(
-                    "源文件和全部事件仍保留；管理员修复配置后可通过 API 重新排队。最终原因：{}",
+                    "源文件、全部事件和可复用翻译断点仍保留；管理员修复配置后可在后台文档管理中重新排队。最终原因：{}",
                     detail.chars().take(1200).collect::<String>()
                 )),
                 current: Some(attempt as i64),

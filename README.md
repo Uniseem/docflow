@@ -23,7 +23,8 @@
 - 文档详情、SSE 事件、Markdown、源文件、ZIP 和图片使用同一套权限判断，私有状态不是仅在列表中隐藏。
 - Markdown 永久保存：数据库和本地 `.md` 文件同时持久化 MinerU 原稿、中文译稿和规范化终稿。
 - PDF 在 Worker 内使用本地 Chromium 打印；KaTeX、字体和图片均来自容器或永久目录，不依赖外部 CDN。版式包含 A4 版心、衬线中英文字体、摘要区、分级标题、表格/图片分页控制、页眉和页码。
-- 翻译分块可以并行完成，但会按原始序号合并；每块都独立校验公式、代码、图片和链接占位符。
+- 翻译分块可以并行完成，但会按原始序号合并；每块都独立校验公式、代码、图片和链接占位符。常见的空格、反引号、编号改写或重复编号会按原文顺序在本地无损修复；仍无法确认时自动改为“保护内容留在本机、只翻译普通文本片段”的隔离模式。
+- 每个通过校验的译文分块都会按源文本 SHA-256 和翻译档位写入工作目录断点。网络、服务或后续步骤失败导致任务重跑时直接复用，不会重复翻译整篇文档；发布成功后才随可再生工作区一起清理。
 - 图片不使用 MinerU 链接：本地或远程图片会下载、去重、转成 WebP，并改写为本站稳定 API 路径。
 - 展示标题、原始上传名和可修改的下载名保存在 PostgreSQL；磁盘只使用随机 `storage_key`、UUID 目录与 `source.pdf` 等 ASCII 物理名。
 - 管理员重命名只更新数据库映射，不移动或覆盖磁盘文件，也不改变图片 URL。
@@ -38,7 +39,7 @@
 2. `5–52%`：申请 MinerU 上传地址、直传源文件、逐次轮询和页面进度。
 3. `53–64%`：校验公网地址、分块下载 ZIP、防路径穿越和解压规模检查。
 4. `65–70%`：扫描图片、逐张转 WebP、内容寻址去重、改写本站资源路径。
-5. `71–87%`：执行任务创建时固定的三档翻译。极速档进入 Google 共享池；均衡档进入 DeepSeek 非思考池；精准档进入 DeepSeek 思考池。分块以 FIFO 排队、并行执行、按序合并；每次排队、服务调用、限流退避、占位符重译、完成数量和耗时都会写入永久事件。公式、代码、图片与链接连续三次无损校验失败时任务会明确报错，不发布损坏文章。
+5. `71–87%`：执行任务创建时固定的三档翻译。极速档进入 Google 共享池；均衡档进入 DeepSeek 非思考池；精准档进入 DeepSeek 思考池。分块以 FIFO 排队、并行执行、按序合并；每次排队、服务调用、限流退避、标记自愈、隔离降级、断点复用、完成数量和耗时都会写入永久事件。整块翻译连续无法通过无损校验时，程序不发布损坏文章，而是把公式、代码、图片和链接留在本地，仅翻译中间的普通文本后原位拼回。
 6. `88–93%`：统一公式定界符、中英文间距、CommonMark/GFM 解析、HTML 白名单消毒，并使用本地 KaTeX 与 Chromium 生成 A4 期刊排版 PDF。
 7. `94–98%`：源文件、Markdown、PDF、打印版 HTML、WebP、MinerU ZIP 与元数据写入本地永久归档并生成清单。
 8. `99–100%`：可选 R2 镜像；无 R2 或镜像失败时保留告警并正常发布，最后只清理可再生工作区。
@@ -84,6 +85,7 @@ curl -c docflow.cookies -F "file=@paper.pdf" -F "title=文档标题" -F "transla
 - DeepSeek V4 Flash 上下文为 100 万 tokens，最大输出为 38.4 万 tokens。项目仍将均衡档单块限制为 12,000 字符、精准档限制为 8,000 字符，降低重试成本并为思考留出空间。
 - DeepSeek 的 `max_tokens` 包含可见译文和思考 token；均衡档显式发送 `thinking: disabled`，精准档显式发送 `thinking: enabled` 并提高输出预算。
 - 每篇文档默认最多有 8 个在途分块。服务端收到 429、5xx、网络超时或 `Retry-After` 时会指数退避并重新进入同一公平队列。
+- Worker 会对整份任务最多自动尝试 3 次；前次已经验证成功的翻译分块从本地断点恢复。三次都失败后源文件、事件和断点继续保留，管理员可在 `/admin` 的文档管理区修复配置并点击重试。
 - Worker 启动时持有 PostgreSQL advisory lock，保证整个站点只有一个任务池所有者；不要使用 `docker compose up --scale worker=...` 横向复制 Worker。
 
 以上限制依据 [Google Cloud Translation 配额](https://docs.cloud.google.com/translate/quotas)、[Google Cloud Translation 定价](https://cloud.google.com/products/translate/pricing)、[DeepSeek 限流说明](https://api-docs.deepseek.com/quick_start/rate_limit/)、[DeepSeek 模型与定价](https://api-docs.deepseek.com/quick_start/pricing) 和 [DeepSeek 思考模式](https://api-docs.deepseek.com/guides/thinking_mode/)；部署者调整并发环境变量时仍应根据自己的 VPS 资源和账号额度保守设置。

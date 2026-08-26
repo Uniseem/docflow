@@ -101,6 +101,11 @@ export const api = {
       headers: adminHeaders(),
       body: JSON.stringify({ is_public: isPublic }),
     }),
+  retryDocument: (id: string) =>
+    request<DocumentSummary>(`/api/admin/documents/${id}/retry`, {
+      method: 'POST',
+      headers: adminHeaders(),
+    }),
   streamDocumentEvents: (id: string, afterId: number, onEvent: (event: import('./types').ProcessingEvent) => void, onEnd: () => void, onError: () => void) => {
     const source = new EventSource(`/api/v1/jobs/${id}/events/stream?after_id=${afterId}`)
     source.addEventListener('progress', (message) => onEvent(JSON.parse((message as MessageEvent).data) as import('./types').ProcessingEvent))
