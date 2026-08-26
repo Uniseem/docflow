@@ -6,4 +6,7 @@ backend/**/*.pyc
 frontend/node_modules/
 frontend/dist/
 server/target/
+server/pdf-assets/node_modules/
 data/
+output/
+tmp/

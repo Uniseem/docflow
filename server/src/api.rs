@@ -127,6 +127,7 @@ pub async fn serve(state: Arc<AppState>) -> anyhow::Result<()> {
         .route("/documents/{id}/events/stream", get(stream_events))
         .route("/documents/{id}/download", get(download_source))
         .route("/documents/{id}/bundle", get(download_bundle))
+        .route("/documents/{id}/pdf", get(download_pdf))
         .route("/documents/{id}/markdown", get(get_markdown))
         .route("/documents/{id}/assets/{name}", get(get_asset));
 
@@ -137,6 +138,7 @@ pub async fn serve(state: Arc<AppState>) -> anyhow::Result<()> {
         .route("/jobs/{id}/events/stream", get(stream_events))
         .route("/jobs/{id}/source", get(download_source))
         .route("/jobs/{id}/bundle", get(download_bundle))
+        .route("/jobs/{id}/pdf", get(download_pdf))
         .route("/jobs/{id}/markdown", get(get_markdown))
         .route("/jobs/{id}/assets/{name}", get(get_asset));
 
@@ -649,7 +651,7 @@ async fn save_r2(
 }
 
 fn document_columns() -> &'static str {
-    "id,title,original_filename,display_filename,storage_key,title_custom,source_path,source_size,mime_type,status,stage,progress,failure_reason,translate_requested,translation_provider,translation_tier,translation_guidance,translated,is_public,access_token_hash,mineru_task_id,mineru_model,pages_processed,pages_total,image_count,content_html,excerpt,created_at,updated_at,completed_at,markdown_original,markdown_translated,markdown_normalized,upload_sha256,queue_attempts,archive_status,archive_error,local_archive_status,local_archive_path,r2_mirror_status,r2_mirror_error,r2_prefix,source_r2_key,api_version"
+    "id,title,original_filename,display_filename,storage_key,title_custom,source_path,source_size,mime_type,status,stage,progress,failure_reason,translate_requested,translation_provider,translation_tier,translation_guidance,translated,is_public,access_token_hash,mineru_task_id,mineru_model,pages_processed,pages_total,image_count,content_html,excerpt,created_at,updated_at,completed_at,markdown_original,markdown_translated,markdown_normalized,upload_sha256,queue_attempts,archive_status,archive_error,local_archive_status,local_archive_path,r2_mirror_status,r2_mirror_error,pdf_path,pdf_size,r2_prefix,source_r2_key,api_version"
 }
 
 #[derive(Deserialize)]
@@ -775,6 +777,7 @@ async fn get_document(
     let mut value = serde_json::to_value(&doc).map_err(ApiError::internal)?;
     value["content_html"] = serde_json::to_value(&doc.content_html).unwrap();
     value["markdown_available"] = json!({"original":doc.markdown_original.is_some(),"translated":doc.markdown_translated.is_some(),"normalized":doc.markdown_normalized.is_some()});
+    value["pdf_available"] = json!(doc.pdf_path.is_some());
     Ok(Json(value))
 }
 
@@ -1326,6 +1329,43 @@ async fn download_bundle(
     Ok(response)
 }
 
+async fn download_pdf(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    AxumPath(id): AxumPath<String>,
+) -> Result<Response, ApiError> {
+    let doc = find_accessible_document(&state, &headers, &id).await?;
+    let download_name = pdf_download_name(&doc.title);
+    if let Some(relative) = doc.pdf_path.as_deref()
+        && let Some(path) = safe_data_path(&state.config.data_root, relative)
+        && path.is_file()
+    {
+        let file = fs::File::open(path).await.map_err(ApiError::internal)?;
+        let mut response = Response::new(Body::from_stream(ReaderStream::new(file)));
+        response.headers_mut().insert(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("application/pdf"),
+        );
+        if let Some(value) = attachment_header(&download_name) {
+            response
+                .headers_mut()
+                .insert(header::CONTENT_DISPOSITION, value);
+        }
+        return Ok(response);
+    }
+    if doc.pdf_path.is_some()
+        && let Some(prefix) = doc.r2_prefix.as_deref()
+    {
+        return r2_response(
+            &state,
+            &format!("{prefix}/article/article.pdf"),
+            Some(&download_name),
+        )
+        .await;
+    }
+    Err(ApiError::not_found("该文档尚未生成期刊排版 PDF"))
+}
+
 fn build_bundle(
     output: &Path,
     data_root: &Path,
@@ -1412,7 +1452,7 @@ fn build_bundle(
             .is_some_and(|value| value == doc.storage_key)
     });
     let metadata = json!({
-        "schema": "docflow-export-v2",
+        "schema": "docflow-export-v3",
         "document_id": doc.id,
         "title": doc.title,
         "display_filename": doc.display_filename,
@@ -1426,6 +1466,8 @@ fn build_bundle(
         "translation_provider": doc.translation_provider,
         "translation_tier": doc.translation_tier,
         "translation_guidance_available": doc.translation_guidance.is_some(),
+        "journal_pdf_available": doc.pdf_path.is_some(),
+        "journal_pdf_size": doc.pdf_size,
         "translated": doc.translated,
         "is_public": doc.is_public,
         "created_at": doc.created_at,
@@ -1450,7 +1492,7 @@ fn build_bundle(
         &mut zip,
         options,
         "README.txt",
-        "文流本地永久归档包\n\nsource/：原始文件（固定 ASCII 物理名）\nmarkdown/：MinerU 原稿、中文译稿和规范化稿\nimages/：已本地化的 WebP 图片\narticle/：安全渲染后的 HTML\nmetadata/：当前展示名称、校验信息和完整处理事件\n\n文件展示名与服务器物理名分离，重命名不会改动归档内容。\n".as_bytes(),
+        "文流本地永久归档包\n\nsource/：原始文件（固定 ASCII 物理名）\nmarkdown/：MinerU 原稿、中文译稿和规范化稿\nimages/：已本地化的 WebP 图片\narticle/：期刊排版 PDF、安全 HTML 和可复现打印版 HTML\nmetadata/：当前展示名称、校验信息和完整处理事件\n\n文件展示名与服务器物理名分离，重命名不会改动归档内容。\n".as_bytes(),
     )?;
     zip.finish()?;
     Ok(())
@@ -1506,16 +1548,26 @@ fn safe_data_path(data_root: &Path, relative: &str) -> Option<PathBuf> {
 }
 
 fn bundle_download_name(title: &str) -> String {
-    let base = title
+    format!("{}-完整归档.zip", safe_download_stem(title))
+}
+
+fn safe_download_stem(title: &str) -> String {
+    let value = title
         .replace(['/', '\\', '\r', '\n', '\0'], "_")
         .trim()
         .chars()
         .take(120)
         .collect::<String>();
-    format!(
-        "{}-完整归档.zip",
-        if base.is_empty() { "document" } else { &base }
-    )
+    let value = value.trim_matches('_').trim();
+    if value.is_empty() {
+        "document".into()
+    } else {
+        value.into()
+    }
+}
+
+fn pdf_download_name(title: &str) -> String {
+    format!("{}-期刊排版.pdf", safe_download_stem(title))
 }
 
 async fn download_source(
@@ -1586,7 +1638,7 @@ async fn openapi(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> 
         format!("{}/api/v1", state.config.public_origin)
     };
     Json(json!({
-        "openapi":"3.1.0","info":{"title":format!("{} Open API",state.config.app_name),"version":"1.3.0","description":"文档解析、三档并发中文翻译、永久归档与实时进度 API。管理员设置默认档位，上传者可为本次任务选择已开放档位。新任务默认私有；上传响应设置当前浏览器专属 HttpOnly 访问 Cookie，管理员可改为公开。没有删除接口。"},
+        "openapi":"3.1.0","info":{"title":format!("{} Open API",state.config.app_name),"version":"1.4.0","description":"文档解析、三档并发中文翻译、期刊排版 PDF、永久归档与实时进度 API。管理员设置默认档位，上传者可为本次任务选择已开放档位。新任务默认私有；上传响应设置当前浏览器专属 HttpOnly 访问 Cookie，管理员可改为公开。没有删除接口。"},
         "servers":[{"url":server_url}],
         "paths":{
           "/jobs":{"get":{"summary":"管理员主动公开的任务列表"},"post":{"summary":"上传文档并创建默认私有任务","description":"translation_tier 可选 1–3；极速档使用 Google Cloud Translation，均衡档使用 deepseek-v4-flash 非思考模式，精准档使用其思考模式。选定档位在任务创建时快照；响应通过 Set-Cookie 赋予当前浏览器文档访问权。","requestBody":{"required":true,"content":{"multipart/form-data":{"schema":{"type":"object","required":["file"],"properties":{"file":{"type":"string","format":"binary"},"title":{"type":"string"},"translation_tier":{"type":"integer","minimum":1,"maximum":3}}}}}}}},
@@ -1595,14 +1647,15 @@ async fn openapi(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> 
           "/jobs/{id}/events/stream":{"get":{"summary":"SSE 实时进度流"}},
           "/jobs/{id}/markdown":{"get":{"summary":"读取永久 Markdown","parameters":[{"name":"variant","in":"query","schema":{"enum":["original","translated","normalized"]}}]}},
           "/jobs/{id}/source":{"get":{"summary":"按数据库展示名下载原始文件"}},
-          "/jobs/{id}/bundle":{"get":{"summary":"下载包含源文件、Markdown、WebP 与元数据的完整 ZIP"}}
+          "/jobs/{id}/bundle":{"get":{"summary":"下载包含源文件、Markdown、PDF、WebP 与元数据的完整 ZIP"}},
+          "/jobs/{id}/pdf":{"get":{"summary":"下载永久保存的期刊论文风格 PDF"}}
         }
     }))
 }
 
 async fn api_docs() -> Html<&'static str> {
     Html(
-        r#"<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>文流 Open API</title><style>body{font:16px/1.7 system-ui;max-width:920px;margin:48px auto;padding:0 24px;color:#17201d}code,pre{background:#f3f5f3;border-radius:8px}code{padding:2px 6px}pre{padding:18px;overflow:auto}a{color:#176b4d}</style></head><body><p><a href="/">← 返回文流</a></p><h1>文流 Open API v1</h1><p>上传无需登录，但新任务默认私有。上传响应设置当前客户端专属访问 Cookie；后续查询、SSE 与下载必须携带它。管理员可在后台公开文档。管理员设置默认翻译档位，上传者可为本次任务选择已开放档位；源文件与处理结果永久保存在 VPS 本地，R2 是可选镜像。</p><h2>创建私有任务并保存访问 Cookie</h2><pre>curl -c docflow.cookies -F "file=@paper.pdf" -F "title=文档标题" -F "translation_tier=3" http://你的服务器IP:38100/api/v1/jobs</pre><h2>实时进度</h2><pre>curl -b docflow.cookies -N http://你的服务器IP:38100/api/v1/jobs/{id}/events/stream?after_id=0</pre><h2>完整打包</h2><pre>curl -b docflow.cookies -OJ http://你的服务器IP:38100/api/v1/jobs/{id}/bundle</pre><h2>机器可读规范</h2><p><a href="/api/openapi.json">OpenAPI 3.1 JSON</a></p></body></html>"#,
+        r#"<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>文流 Open API</title><style>body{font:16px/1.7 system-ui;max-width:920px;margin:48px auto;padding:0 24px;color:#17201d}code,pre{background:#f3f5f3;border-radius:8px}code{padding:2px 6px}pre{padding:18px;overflow:auto}a{color:#176b4d}</style></head><body><p><a href="/">← 返回文流</a></p><h1>文流 Open API v1</h1><p>上传无需登录，但新任务默认私有。上传响应设置当前客户端专属访问 Cookie；后续查询、SSE 与下载必须携带它。管理员可在后台公开文档。管理员设置默认翻译档位，上传者可为本次任务选择已开放档位；源文件、Markdown、期刊排版 PDF 与处理结果永久保存在 VPS 本地，R2 是可选镜像。</p><h2>创建私有任务并保存访问 Cookie</h2><pre>curl -c docflow.cookies -F "file=@paper.pdf" -F "title=文档标题" -F "translation_tier=3" http://你的服务器IP:38100/api/v1/jobs</pre><h2>实时进度</h2><pre>curl -b docflow.cookies -N http://你的服务器IP:38100/api/v1/jobs/{id}/events/stream?after_id=0</pre><h2>下载期刊排版 PDF</h2><pre>curl -b docflow.cookies -OJ http://你的服务器IP:38100/api/v1/jobs/{id}/pdf</pre><h2>完整打包</h2><pre>curl -b docflow.cookies -OJ http://你的服务器IP:38100/api/v1/jobs/{id}/bundle</pre><h2>机器可读规范</h2><p><a href="/api/openapi.json">OpenAPI 3.1 JSON</a></p></body></html>"#,
     )
 }
 
@@ -1640,6 +1693,12 @@ mod tests {
         for extension in [".pdf", ".docx", ".pptx", ".xlsx"] {
             assert!(ACCEPTED_EXTENSIONS.contains(&extension));
         }
+    }
+
+    #[test]
+    fn journal_pdf_download_name_is_safe_and_keeps_chinese_title() {
+        assert_eq!(pdf_download_name("中文/论文"), "中文_论文-期刊排版.pdf");
+        assert_eq!(pdf_download_name("\r\n"), "document-期刊排版.pdf");
     }
 
     #[test]

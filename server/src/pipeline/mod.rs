@@ -1,6 +1,7 @@
 mod archive;
-mod markdown;
+pub(crate) mod markdown;
 mod mineru;
+pub(crate) mod pdf;
 mod processing;
 mod translate;
 
@@ -130,6 +131,7 @@ pub async fn process(state: Arc<AppState>, id: &str) -> Result<()> {
     if let Some(guidance) = translation_guidance.as_deref() {
         tokio::fs::write(final_root.join("translation-guidance.md"), guidance).await?;
     }
+    let pdf = pdf::render_journal_pdf(&state, id, &article, &final_root).await?;
 
     archive::archive_and_publish(
         &state,
@@ -142,6 +144,7 @@ pub async fn process(state: Arc<AppState>, id: &str) -> Result<()> {
             translated_markdown: translated.then_some(translated_markdown.as_str()),
             translation_guidance: translation_guidance.as_deref(),
             article: &article,
+            pdf: &pdf,
         },
     )
     .await?;

@@ -20,6 +20,10 @@ pub struct Config {
     pub mineru_poll_seconds: u64,
     pub mineru_max_wait_seconds: u64,
     pub webp_quality: u8,
+    pub pdf_node_binary: String,
+    pub pdf_renderer_script: PathBuf,
+    pub pdf_katex_root: PathBuf,
+    pub pdf_render_timeout_seconds: u64,
     pub worker_concurrency: usize,
     pub public_origin: String,
 }
@@ -58,6 +62,17 @@ impl Config {
             mineru_poll_seconds: parsed("MINERU_POLL_SECONDS", 5)?,
             mineru_max_wait_seconds: parsed("MINERU_MAX_WAIT_SECONDS", 7_200)?,
             webp_quality: parsed("WEBP_QUALITY", 86)?,
+            pdf_node_binary: env::var("PDF_NODE_BINARY").unwrap_or_else(|_| "node".into()),
+            pdf_renderer_script: PathBuf::from(
+                env::var("PDF_RENDERER_SCRIPT")
+                    .unwrap_or_else(|_| "/opt/docflow/pdf/render.mjs".into()),
+            ),
+            pdf_katex_root: PathBuf::from(
+                env::var("PDF_KATEX_ROOT")
+                    .unwrap_or_else(|_| "/opt/docflow/pdf/node_modules/katex/dist".into()),
+            ),
+            pdf_render_timeout_seconds: parsed::<u64>("PDF_RENDER_TIMEOUT_SECONDS", 180)?
+                .clamp(30, 900),
             worker_concurrency: parsed("WORKER_CONCURRENCY", 3)?,
             public_origin: env::var("PUBLIC_ORIGIN")
                 .unwrap_or_default()

@@ -50,7 +50,7 @@ pub async fn normalize_and_render(state: &Arc<AppState>, id: &str, input: &str) 
             stage: "markdown_normalized",
             state: "completed",
             level: "success",
-            progress: 91,
+            progress: 90,
             message: "Markdown 结构和中英文间距已规范",
             detail: Some(
                 "使用 Rust 正则保护片段并整理标题、列表、空行；不会调用模型二次改写公式或代码",
@@ -82,7 +82,7 @@ pub async fn normalize_and_render(state: &Arc<AppState>, id: &str, input: &str) 
             stage: "html_sanitized",
             state: "completed",
             level: "success",
-            progress: 93,
+            progress: 91,
             message: "CommonMark/GFM 渲染与 HTML 安全消毒完成",
             detail: Some("渲染器：comrak；白名单消毒：ammonia；危险标签、属性与协议不会进入阅读页"),
             current: Some(html.len() as i64),

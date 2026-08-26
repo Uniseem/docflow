@@ -16,7 +16,7 @@ use crate::{
     settings::R2Settings,
 };
 
-use super::{document_root, markdown::Article};
+use super::{document_root, markdown::Article, pdf::PdfArtifact};
 
 pub struct ArchiveInput<'a> {
     pub source: &'a Path,
@@ -26,6 +26,7 @@ pub struct ArchiveInput<'a> {
     pub translated_markdown: Option<&'a str>,
     pub translation_guidance: Option<&'a str>,
     pub article: &'a Article,
+    pub pdf: &'a PdfArtifact,
 }
 
 pub async fn archive_and_publish(
@@ -112,6 +113,12 @@ pub async fn archive_and_publish(
         input.article.html.as_bytes(),
     )
     .await?;
+    copy_atomic(&input.pdf.path, &archive_root.join("article/article.pdf")).await?;
+    copy_atomic(
+        &input.pdf.print_html_path,
+        &archive_root.join("article/print.html"),
+    )
+    .await?;
     events::append(
         &state.pool,
         id,
@@ -120,9 +127,9 @@ pub async fn archive_and_publish(
             state: "completed",
             level: "success",
             progress: 96,
-            message: "Markdown、翻译规划、HTML 与 MinerU 结果已永久落盘",
+            message: "Markdown、PDF、HTML、翻译规划与 MinerU 结果已永久落盘",
             detail: Some(
-                "原稿、译稿、规范化稿及可选全文翻译约束分别使用固定 ASCII 文件名，打包时通过元数据还原展示名称",
+                "期刊排版 PDF 和打印版 HTML 使用固定 ASCII 物理名；下载时由数据库标题生成中文展示文件名",
             ),
             current: None,
             total: None,
@@ -154,7 +161,14 @@ pub async fn archive_and_publish(
         .await?;
     }
 
-    let document_metadata = load_document_metadata(state, id).await?;
+    let mut document_metadata = load_document_metadata(state, id).await?;
+    document_metadata["journal_pdf"] = json!({
+        "path": "article/article.pdf",
+        "bytes": input.pdf.bytes,
+        "layout": "A4 academic journal",
+        "renderer": "Chromium",
+        "math": "KaTeX",
+    });
     write_atomic(
         &archive_root.join("metadata/document.json"),
         &serde_json::to_vec_pretty(&document_metadata)?,
@@ -177,10 +191,13 @@ pub async fn archive_and_publish(
         &serde_json::to_vec_pretty(&manifest)?,
     )
     .await?;
-    sqlx::query("UPDATE documents SET local_archive_status='archived',local_archive_path=$2,archive_status='local_archived',archive_error=NULL,archive_manifest=$3,updated_at=NOW() WHERE id=$1")
+    let relative_pdf = format!("{relative_root}/article/article.pdf");
+    sqlx::query("UPDATE documents SET local_archive_status='archived',local_archive_path=$2,archive_status='local_archived',archive_error=NULL,archive_manifest=$3,pdf_path=$4,pdf_size=$5,updated_at=NOW() WHERE id=$1")
         .bind(id)
         .bind(&relative_root)
         .bind(&manifest)
+        .bind(relative_pdf)
+        .bind(input.pdf.bytes as i64)
         .execute(&state.pool)
         .await?;
     let object_count = manifest["objects"].as_array().map_or(0, Vec::len) as i64;
@@ -267,9 +284,9 @@ pub async fn archive_and_publish(
             state: "completed",
             level: "success",
             progress: 100,
-            message: "文章已发布，本地永久归档可直接下载打包",
+            message: "文章与期刊排版 PDF 已发布，本地永久归档可直接下载打包",
             detail: Some(
-                "源文件、Markdown、HTML、WebP、MinerU 结果与审计元数据均保留在 VPS 本地；展示名与物理名已分离",
+                "源文件、Markdown、PDF、HTML、WebP、MinerU 结果与审计元数据均保留在 VPS 本地；展示名与物理名已分离",
             ),
             current: Some(100),
             total: Some(100),
