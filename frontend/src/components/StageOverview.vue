@@ -6,9 +6,9 @@ import type { DocumentDetail } from '../types'
 const props = defineProps<{ document: DocumentDetail }>()
 
 const translationCaption = computed(() => ({
-  1: '第 1 档 · Google Cloud · 共享池高速并发与占位符校验',
-  2: '第 2 档 · DeepSeek V4 Flash · 非思考模式并发翻译',
-  3: '第 3 档 · DeepSeek V4 Flash · 思考模式并发翻译',
+  1: '第 1 档 · Google Cloud · 并发翻译、标记自愈与断点续跑',
+  2: '第 2 档 · DeepSeek V4 Flash · 非思考并发、隔离降级与断点续跑',
+  3: '第 3 档 · DeepSeek V4 Flash · 思考并发、隔离降级与断点续跑',
 }[props.document.translation_tier] || '翻译档位未知'))
 
 const stages = computed(() => [

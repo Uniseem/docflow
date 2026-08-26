@@ -104,6 +104,7 @@ pub async fn serve(state: Arc<AppState>) -> anyhow::Result<()> {
         .route("/settings/r2", put(save_r2))
         .route("/documents", get(admin_list_documents))
         .route("/documents/{id}/names", patch(update_document_names))
+        .route("/documents/{id}/retry", post(retry_failed_document))
         .route(
             "/documents/{id}/visibility",
             patch(update_document_visibility),
@@ -799,6 +800,47 @@ async fn update_document_visibility(
     if result.rows_affected() != 1 {
         return Err(ApiError::not_found("文档不存在"));
     }
+    Ok(Json(find_document(&state.pool, &id).await?))
+}
+
+async fn retry_failed_document(
+    State(state): State<Arc<AppState>>,
+    AxumPath(id): AxumPath<String>,
+) -> Result<Json<Document>, ApiError> {
+    let current = find_document(&state.pool, &id).await?;
+    if current.status != "failed" {
+        return Err(ApiError::bad_request(
+            "只有已经停止的失败任务才能人工重新排队",
+        ));
+    }
+    let result = sqlx::query(
+        "UPDATE documents SET status='queued',stage='manual_retry_queued',failure_reason=NULL,\
+         queue_attempts=0,queue_available_at=NOW(),queue_locked_at=NULL,queue_locked_by=NULL,\
+         last_heartbeat_at=NULL,completed_at=NULL,updated_at=NOW() WHERE id=$1 AND status='failed'",
+    )
+    .bind(&id)
+    .execute(&state.pool)
+    .await?;
+    if result.rows_affected() != 1 {
+        return Err(ApiError::bad_request("任务状态已经变化，请刷新后重试"));
+    }
+    events::append(
+        &state.pool,
+        &id,
+        EventInput {
+            stage: "manual_retry_queued",
+            state: "warning",
+            level: "warning",
+            progress: current.progress,
+            message: "管理员已将最终失败任务重新加入持久队列",
+            detail: Some(
+                "自动尝试次数已重置；源文件、历史事件和此前通过校验的翻译分块断点均已保留，Worker 会从可复用的本地结果继续处理",
+            ),
+            current: Some(0),
+            total: Some(3),
+        },
+    )
+    .await?;
     Ok(Json(find_document(&state.pool, &id).await?))
 }
 

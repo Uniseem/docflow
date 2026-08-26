@@ -31,7 +31,9 @@ const stageLabels: Record<string, string> = {
   translation_review_reducing: '记忆归并', translation_review_consolidating: '约束整理', translation_constraints_ready: '翻译约束',
   translation_review_api_retry: '速览重试',
   translation_prepared: '翻译分块', translation_chunk_started: '翻译分块', translation_chunk_attempt: '服务调用', translation_model_call: '模型调用', translation_provider_call: '服务调用',
-  translation_placeholder_retry: '无损校验', translation_chunk_preserved: '原文保护',
+  translation_placeholder_retry: '无损校验', translation_placeholder_repaired: '标记自愈', translation_chunk_preserved: '原文保护',
+  translation_fragment_fallback: '隔离降级', translation_fragment_queued: '片段排队', translation_fragment_completed: '片段完成',
+  translation_chunk_cache_hit: '断点复用', translation_cache_warning: '断点提醒',
   translation_api_retry: '服务重试', translation_chunk_retry: '校验重试', translation_chunk_failed: '翻译失败',
   translation_chunk_completed: '翻译完成', translation_completed: '翻译合并', translation_skipped: '跳过翻译',
   formatting_started: '排版准备', formula_normalized: '公式规范', math_protected: '公式保护',
@@ -44,7 +46,7 @@ const stageLabels: Record<string, string> = {
   r2_mirror_skipped: 'R2 已跳过', r2_mirror_failed: 'R2 镜像提醒', work_cleanup: '临时清理', work_cleanup_warning: '清理提醒',
   archive_starting: '旧版 R2 归档', archive_source: '旧版 R2 源文件', archive_text: '旧版 R2 文本',
   archive_image: '旧版 R2 图片', archive_verified: '旧版 R2 校验', local_cleanup: '旧版清理', local_cleanup_warning: '旧版清理提醒',
-  retrying: '任务重试', failed: '最终失败', completed: '发布完成',
+  retrying: '任务重试', manual_retry_queued: '人工重试', failed: '最终失败', completed: '发布完成',
 }
 
 function eventColor(event: ProcessingEvent) {

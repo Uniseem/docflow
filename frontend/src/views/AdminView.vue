@@ -45,6 +45,9 @@ const loading = ref(false)
 const message = ref('')
 const error = ref('')
 const hasPendingTranslationTier = computed(() => Boolean(settings.value && translationTier.value !== settings.value.translation_tier))
+const documentStatusLabels: Record<string, string> = {
+  queued: '等待处理', processing: '处理中', retrying: '自动重试', failed: '最终失败', completed: '已完成',
+}
 
 const filteredDocuments = computed(() => {
   const query = documentQuery.value.trim().toLocaleLowerCase()
@@ -227,6 +230,17 @@ async function toggleVisibility(document: DocumentSummary) {
   } finally { loading.value = false }
 }
 
+async function retryDocument(document: DocumentSummary) {
+  error.value = ''; message.value = ''; loading.value = true
+  try {
+    const updated = await api.retryDocument(document.id)
+    documents.value = documents.value.map((item) => item.id === updated.id ? updated : item)
+    message.value = '失败任务已重新排队；源文件和已通过校验的翻译分块会继续复用。'
+  } catch (reason) {
+    error.value = reason instanceof Error ? reason.message : '重新排队失败'
+  } finally { loading.value = false }
+}
+
 onMounted(async () => {
   try {
     initialized.value = (await api.adminStatus()).initialized
@@ -401,10 +415,11 @@ onMounted(async () => {
             <v-text-field v-model="documentQuery" prepend-inner-icon="mdi-magnify" placeholder="搜索文档" aria-label="搜索文档" hide-details clearable class="document-search" />
             <div v-if="filteredDocuments.length" class="admin-document-list">
               <div v-for="document in filteredDocuments" :key="document.id" class="admin-document-row">
-                <div class="admin-document-row__copy"><strong>{{ document.title }}</strong><span>{{ document.display_filename }}</span><small><i :class="document.is_public ? 'is-public' : ''">{{ document.is_public ? '公开' : '私有' }}</i> · {{ document.id }}</small></div>
+                <div class="admin-document-row__copy"><strong>{{ document.title }}</strong><span>{{ document.display_filename }}</span><small><i :class="document.is_public ? 'is-public' : ''">{{ document.is_public ? '公开' : '私有' }}</i> · {{ documentStatusLabels[document.status] || document.status }} · {{ document.id }}</small></div>
                 <div class="admin-document-actions">
                   <v-btn :to="`/documents/${document.id}`" icon="mdi-eye-outline" size="small" variant="text" title="查看文档" />
                   <v-btn :href="`/api/v1/jobs/${document.id}/bundle`" icon="mdi-folder-zip-outline" size="small" variant="text" title="下载完整归档包" />
+                  <v-btn v-if="document.status === 'failed'" prepend-icon="mdi-restart-alert" color="error" variant="tonal" title="保留断点并重新排队" :loading="loading" @click="retryDocument(document)">重新处理</v-btn>
                   <v-btn icon="mdi-pencil-outline" size="small" variant="text" title="修改展示名称" @click="beginRename(document)" />
                   <v-btn :icon="document.is_public ? 'mdi-lock-outline' : 'mdi-earth'" size="small" :color="document.is_public ? undefined : 'primary'" variant="text" :title="document.is_public ? '设为私有' : '公开文档'" :loading="loading" @click="toggleVisibility(document)" />
                 </div>
