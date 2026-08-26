@@ -270,6 +270,7 @@ code { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; }
 .audit-title strong { color: #344054; font-size: 13px; }
 .audit-title span { margin-top: 4px; color: var(--muted); font-size: 10px; }
 .article-surface { max-width: 980px; margin: 32px auto 0; padding: 64px 76px; border: 1px solid var(--line); border-radius: 14px; background: #fff; box-shadow: var(--shadow); }
+.article-empty { max-width: 980px; margin: 32px auto 0; }
 .article-content { color: #273244; font-family: "Noto Serif SC", "Source Han Serif SC", "Songti SC", serif; font-size: 16px; line-height: 1.95; overflow-wrap: anywhere; }
 .article-content > :first-child { margin-top: 0; }
 .article-content h1, .article-content h2, .article-content h3, .article-content h4 { color: #101828; font-family: "Noto Serif SC", "Source Han Serif SC", "Songti SC", serif; line-height: 1.4; }

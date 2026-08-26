@@ -23,6 +23,7 @@ let refreshTimer: number | undefined
 
 const latestEvent = computed(() => events.value.at(-1) || null)
 const isLive = computed(() => Boolean(documentItem.value && !['completed', 'failed'].includes(documentItem.value.status)))
+const renderedMarkdownHtml = computed(() => documentItem.value?.content_html || '')
 const connectionText = computed(() => ({
   connecting: '正在连接实时进度',
   live: '实时进度已连接',
@@ -198,17 +199,9 @@ onBeforeUnmount(() => {
     </header>
 
     <nav class="document-actions" aria-label="文档下载">
-      <v-btn v-if="documentItem.pdf_available" class="download-primary" :href="`/api/v1/jobs/${documentItem.id}/pdf`" color="primary" size="large" prepend-icon="mdi-file-pdf-box">下载期刊排版 PDF</v-btn>
-      <v-btn :href="`/api/v1/jobs/${documentItem.id}/bundle`" variant="outlined" prepend-icon="mdi-folder-zip-outline">完整归档</v-btn>
-      <v-btn :href="`/api/v1/jobs/${documentItem.id}/source`" variant="outlined" prepend-icon="mdi-download">原始文件</v-btn>
-      <v-btn v-if="documentItem.markdown_available?.normalized" :href="`/api/v1/jobs/${documentItem.id}/markdown?variant=normalized`" variant="outlined" prepend-icon="mdi-language-markdown">Markdown</v-btn>
-      <v-menu>
-        <template #activator="{ props }"><v-btn v-bind="props" variant="text" icon="mdi-dots-horizontal" aria-label="更多下载选项" /></template>
-        <v-list density="compact">
-          <v-list-item v-if="documentItem.markdown_available?.original" :href="`/api/v1/jobs/${documentItem.id}/markdown?variant=original`" prepend-icon="mdi-file-code-outline" title="MinerU 原稿" />
-          <v-list-item v-if="documentItem.markdown_available?.translated" :href="`/api/v1/jobs/${documentItem.id}/markdown?variant=translated`" prepend-icon="mdi-translate" title="中文翻译稿" />
-        </v-list>
-      </v-menu>
+      <v-btn v-if="documentItem.markdown_available?.normalized" class="download-primary" :href="`/api/v1/jobs/${documentItem.id}/markdown?variant=normalized`" color="primary" size="large" prepend-icon="mdi-language-markdown">下载 Markdown</v-btn>
+      <v-btn v-if="documentItem.pdf_available" :href="`/api/v1/jobs/${documentItem.id}/pdf`" variant="outlined" prepend-icon="mdi-file-pdf-box">下载 PDF</v-btn>
+      <v-btn :href="`/api/v1/jobs/${documentItem.id}/bundle`" variant="outlined" prepend-icon="mdi-folder-zip-outline">下载所有文件</v-btn>
     </nav>
 
     <v-expansion-panels class="audit-panels">
@@ -223,7 +216,14 @@ onBeforeUnmount(() => {
       </v-expansion-panel>
     </v-expansion-panels>
 
-    <article class="article-surface article-content" v-html="documentItem.content_html" />
+    <article
+      v-if="renderedMarkdownHtml"
+      class="article-surface article-content"
+      aria-label="Markdown 正文"
+      data-render-source="markdown"
+      v-html="renderedMarkdownHtml"
+    />
+    <v-alert v-else type="info" variant="tonal" class="article-empty">规范化 Markdown 正文暂不可用。</v-alert>
   </v-container>
 
   <v-container v-else class="task-shell">
