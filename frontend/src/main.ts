@@ -18,15 +18,15 @@ const vuetify = createVuetify({
       docflow: {
         dark: false,
         colors: {
-          background: '#f7f8fa', surface: '#ffffff', primary: '#2457d6', secondary: '#344054',
-          accent: '#eef3ff', error: '#c4322b', info: '#1769aa', success: '#16825d', warning: '#a15c00',
+          background: '#f5f6f8', surface: '#ffffff', primary: '#315ee8', secondary: '#24272f',
+          accent: '#edf1ff', error: '#c43d37', info: '#2366b1', success: '#16805c', warning: '#a16207',
         },
       },
     },
   },
   defaults: {
-    VBtn: { rounded: 'lg', elevation: 0 },
-    VCard: { rounded: 'lg', elevation: 0 },
+    VBtn: { rounded: 'lg', elevation: 0, height: 44 },
+    VCard: { rounded: 'xl', elevation: 0 },
     VTextField: { variant: 'outlined', density: 'comfortable' },
   },
 })

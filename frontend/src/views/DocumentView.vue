@@ -176,9 +176,10 @@ onBeforeUnmount(() => {
   </v-container>
 
   <v-container v-else-if="documentItem.status === 'completed'" class="reader-shell">
-    <router-link class="back-link" to="/library"><v-icon icon="mdi-arrow-left" size="17" />公开文库</router-link>
+    <router-link class="back-link" to="/library"><v-icon icon="mdi-arrow-left" size="17" />返回公开文库</router-link>
 
     <header class="reader-header">
+      <span class="eyebrow">READY TO READ</span>
       <div class="reader-flags">
         <StatusChip :status="documentItem.status" />
         <span class="meta-pill"><v-icon :icon="documentItem.is_public ? 'mdi-earth' : 'mdi-lock-outline'" size="14" />{{ documentItem.is_public ? '公开文档' : '私有文档' }}</span>
@@ -197,7 +198,7 @@ onBeforeUnmount(() => {
     </header>
 
     <nav class="document-actions" aria-label="文档下载">
-      <v-btn v-if="documentItem.pdf_available" :href="`/api/v1/jobs/${documentItem.id}/pdf`" color="primary" prepend-icon="mdi-file-pdf-box">下载期刊排版 PDF</v-btn>
+      <v-btn v-if="documentItem.pdf_available" class="download-primary" :href="`/api/v1/jobs/${documentItem.id}/pdf`" color="primary" size="large" prepend-icon="mdi-file-pdf-box">下载期刊排版 PDF</v-btn>
       <v-btn :href="`/api/v1/jobs/${documentItem.id}/bundle`" variant="outlined" prepend-icon="mdi-folder-zip-outline">完整归档</v-btn>
       <v-btn :href="`/api/v1/jobs/${documentItem.id}/source`" variant="outlined" prepend-icon="mdi-download">原始文件</v-btn>
       <v-btn v-if="documentItem.markdown_available?.normalized" :href="`/api/v1/jobs/${documentItem.id}/markdown?variant=normalized`" variant="outlined" prepend-icon="mdi-language-markdown">Markdown</v-btn>
@@ -226,9 +227,10 @@ onBeforeUnmount(() => {
   </v-container>
 
   <v-container v-else class="task-shell">
-    <router-link class="back-link" to="/library"><v-icon icon="mdi-arrow-left" size="17" />公开文库</router-link>
+    <router-link class="back-link" to="/library"><v-icon icon="mdi-arrow-left" size="17" />返回公开文库</router-link>
 
     <header class="task-header">
+      <span class="eyebrow">PROCESSING WORKSPACE</span>
       <div class="task-header__status">
         <StatusChip :status="documentItem.status" />
         <span class="meta-pill"><v-icon :icon="documentItem.is_public ? 'mdi-earth' : 'mdi-lock-outline'" size="14" />{{ documentItem.is_public ? '公开' : '私有' }}</span>
@@ -243,8 +245,18 @@ onBeforeUnmount(() => {
       </div>
     </header>
 
+    <section class="task-progress-strip" :class="{ 'is-error': documentItem.status === 'failed' }">
+      <div><span>总进度</span><strong>{{ documentItem.progress }}<small>%</small></strong></div>
+      <div class="task-progress-strip__bar">
+        <v-progress-linear :model-value="documentItem.progress" :color="documentItem.status === 'failed' ? 'error' : 'primary'" height="10" rounded />
+        <span>{{ latestEvent?.message || documentItem.stage }}</span>
+      </div>
+      <div><span>事件记录</span><strong>{{ eventTotal }}</strong></div>
+    </section>
+
     <div class="task-layout">
       <aside class="progress-sidebar">
+        <span class="sidebar-label">任务概览</span>
         <div class="progress-value"><strong>{{ documentItem.progress }}</strong><span>%</span></div>
         <v-progress-linear :model-value="documentItem.progress" :color="documentItem.status === 'failed' ? 'error' : 'primary'" height="6" rounded />
         <p class="progress-stage">{{ latestEvent?.message || documentItem.stage }}</p>

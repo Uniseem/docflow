@@ -36,17 +36,19 @@ onMounted(load)
 
 <template>
   <v-container class="library-shell">
-    <header class="page-heading library-heading">
+    <header class="library-heading">
       <div>
+        <span class="eyebrow">PUBLIC LIBRARY</span>
         <h1>公开文库</h1>
-        <p>共 {{ total }} 份由管理员主动公开的文档，包含文章、原文件和完整处理记录。</p>
+        <p>只有管理员主动公开的文档才会出现在这里。文章、原文件和处理记录都可以长期访问。</p>
       </div>
-      <v-btn to="/" color="primary" prepend-icon="mdi-tray-arrow-up">提交文档</v-btn>
+      <div class="library-heading__count"><strong>{{ total }}</strong><span>份公开文档</span></div>
     </header>
 
     <section class="library-toolbar" aria-label="文库筛选">
-      <v-text-field v-model="query" prepend-inner-icon="mdi-magnify" placeholder="搜索标题或文件名" aria-label="搜索标题或文件名" hide-details clearable />
-      <v-btn icon="mdi-refresh" variant="text" aria-label="刷新文库" :loading="loading" @click="load" />
+      <v-text-field v-model="query" prepend-inner-icon="mdi-magnify" placeholder="按标题或文件名搜索" aria-label="按标题或文件名搜索" hide-details clearable />
+      <v-btn variant="outlined" prepend-icon="mdi-refresh" :loading="loading" @click="load">刷新</v-btn>
+      <v-btn to="/" color="primary" prepend-icon="mdi-tray-arrow-up">提交文档</v-btn>
     </section>
 
     <v-alert v-if="error" type="error" variant="tonal" density="compact" class="mb-4">{{ error }}</v-alert>
@@ -54,7 +56,7 @@ onMounted(load)
 
     <div v-if="items.length" class="document-list">
       <div class="document-list__head" aria-hidden="true">
-        <span>文档</span><span>状态</span><span>日期</span><span>大小</span><span />
+        <span>文档</span><span>处理状态</span><span>创建日期</span><span>源文件</span><span />
       </div>
       <DocumentCard v-for="document in items" :key="document.id" :document="document" />
     </div>
