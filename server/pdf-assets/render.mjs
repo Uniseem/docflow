@@ -23,13 +23,25 @@ if (!executablePath) {
 }
 
 const timeout = Number.parseInt(process.env.PDF_RENDER_TIMEOUT_MS || '180000', 10)
-const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'docflow-pdf-'))
+const runtimeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'docflow-pdf-'))
+const userDataDir = path.join(runtimeDir, 'profile')
+const configDir = path.join(runtimeDir, 'config')
+const cacheDir = path.join(runtimeDir, 'cache')
+for (const directory of [userDataDir, configDir, cacheDir]) {
+  fs.mkdirSync(directory, { recursive: true })
+}
 let browser
 try {
   browser = await puppeteer.launch({
     executablePath,
     headless: true,
     userDataDir,
+    env: {
+      ...process.env,
+      HOME: runtimeDir,
+      XDG_CONFIG_HOME: configDir,
+      XDG_CACHE_HOME: cacheDir,
+    },
     args: [
       '--no-sandbox',
       '--disable-setuid-sandbox',
@@ -68,6 +80,9 @@ try {
     timeout,
   })
 } finally {
-  if (browser) await browser.close()
-  fs.rmSync(userDataDir, { recursive: true, force: true })
+  try {
+    if (browser) await browser.close()
+  } finally {
+    fs.rmSync(runtimeDir, { recursive: true, force: true })
+  }
 }

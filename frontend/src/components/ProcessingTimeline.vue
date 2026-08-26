@@ -39,7 +39,7 @@ const stageLabels: Record<string, string> = {
   formatting_started: '排版准备', formula_normalized: '公式规范', math_protected: '公式保护',
   cjk_spacing: '中英文间距', markdown_formatted: 'Markdown 格式', math_restored: '公式恢复',
   unsafe_links_removed: '链接安全', html_rendered: 'HTML 渲染', html_sanitized: 'HTML 消毒',
-  pdf_layout_started: 'PDF 排版', pdf_rendered: 'PDF 生成', pdf_render_failed: 'PDF 生成提醒',
+  pdf_layout_started: 'PDF 排版', pdf_render_retry: 'PDF 重试', pdf_rendered: 'PDF 生成', pdf_render_failed: 'PDF 生成提醒',
   metadata_extracted: '元数据', local_archive_starting: '本地归档', local_archive_source: '永久源文件',
   local_archive_text: '永久文本', local_archive_image: '永久图片', local_archive_verified: '本地校验',
   r2_mirror_starting: 'R2 镜像', r2_mirror_object: 'R2 对象', r2_mirror_verified: 'R2 校验',

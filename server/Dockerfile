@@ -35,12 +35,15 @@ RUN apt-get update \
         nodejs \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --system --gid 10001 app \
-    && useradd --system --uid 10001 --gid app --home-dir /app --shell /usr/sbin/nologin app \
-    && mkdir -p /data/work \
-    && chown -R app:app /data
+    && useradd --system --uid 10001 --gid app --home-dir /app --create-home --shell /usr/sbin/nologin app \
+    && mkdir -p /data/work /app/.config /app/.cache \
+    && chown -R app:app /data /app
 COPY --from=build /build/docflow-server /usr/local/bin/docflow-server
 COPY --from=pdf-runtime /opt/docflow/pdf /opt/docflow/pdf
 ENV CHROMIUM_PATH=/usr/bin/chromium \
+    HOME=/app \
+    XDG_CONFIG_HOME=/tmp/.chromium-config \
+    XDG_CACHE_HOME=/tmp/.chromium-cache \
     PDF_NODE_BINARY=node \
     PDF_RENDERER_SCRIPT=/opt/docflow/pdf/render.mjs \
     PDF_KATEX_ROOT=/opt/docflow/pdf/node_modules/katex/dist

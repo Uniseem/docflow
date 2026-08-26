@@ -106,6 +106,16 @@ jobs:
           docker run --rm --entrypoint /bin/sh docflow-server:smoke -ec \
             "test -x /usr/bin/chromium && test -x /usr/bin/node && test -f /opt/docflow/pdf/render.mjs && test -f /opt/docflow/pdf/node_modules/katex/dist/katex.min.js"
 
+      - name: Launch Chromium and render a PDF as the production user
+        run: |
+          docker run --rm --user 10001:10001 --entrypoint /bin/sh docflow-server:smoke -ec '
+            fixture_dir="$(mktemp -d)"
+            printf "%s\n" "<!doctype html><html><head><meta charset=utf-8><title>DocFlow PDF smoke test</title></head><body><h1>文流 PDF 渲染检查</h1><p>Chromium started successfully.</p><script>globalThis.__DOCFLOW_PDF_READY__=true</script></body></html>" > "$fixture_dir/input.html"
+            node /opt/docflow/pdf/render.mjs "$fixture_dir/input.html" "$fixture_dir/output.pdf"
+            test "$(head -c 5 "$fixture_dir/output.pdf")" = "%PDF-"
+            test "$(wc -c < "$fixture_dir/output.pdf")" -gt 1024
+          '
+
       - name: Re-run migrations without losing existing data
         run: |
           docker run --rm --network host \
