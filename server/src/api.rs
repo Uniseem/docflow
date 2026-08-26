@@ -1274,6 +1274,7 @@ async fn get_markdown(
     Query(q): Query<MarkdownQuery>,
 ) -> Result<Response, ApiError> {
     let doc = find_accessible_document(&state, &headers, &id).await?;
+    let download_name = markdown_download_name(&doc.title, &q.variant);
     let text = match q.variant.as_str() {
         "original" => doc.markdown_original,
         "translated" => doc.markdown_translated,
@@ -1285,11 +1286,17 @@ async fn get_markdown(
         }
     }
     .ok_or_else(|| ApiError::not_found("该版本 Markdown 尚不可用"))?;
-    Ok((
+    let mut response = (
         [(header::CONTENT_TYPE, "text/markdown; charset=utf-8")],
         text,
     )
-        .into_response())
+        .into_response();
+    if let Some(value) = attachment_header(&download_name) {
+        response
+            .headers_mut()
+            .insert(header::CONTENT_DISPOSITION, value);
+    }
+    Ok(response)
 }
 
 async fn r2_for(state: &AppState) -> Result<R2Client, ApiError> {
@@ -1609,7 +1616,16 @@ fn safe_download_stem(title: &str) -> String {
 }
 
 fn pdf_download_name(title: &str) -> String {
-    format!("{}-期刊排版.pdf", safe_download_stem(title))
+    format!("{}.pdf", safe_download_stem(title))
+}
+
+fn markdown_download_name(title: &str, variant: &str) -> String {
+    let stem = safe_download_stem(title);
+    match variant {
+        "original" => format!("{stem}-MinerU原稿.md"),
+        "translated" => format!("{stem}-中文译稿.md"),
+        _ => format!("{stem}.md"),
+    }
 }
 
 async fn download_source(
@@ -1738,9 +1754,21 @@ mod tests {
     }
 
     #[test]
-    fn journal_pdf_download_name_is_safe_and_keeps_chinese_title() {
-        assert_eq!(pdf_download_name("中文/论文"), "中文_论文-期刊排版.pdf");
-        assert_eq!(pdf_download_name("\r\n"), "document-期刊排版.pdf");
+    fn download_names_are_safe_and_keep_chinese_title() {
+        assert_eq!(pdf_download_name("中文/论文"), "中文_论文.pdf");
+        assert_eq!(pdf_download_name("\r\n"), "document.pdf");
+        assert_eq!(
+            markdown_download_name("中文/论文", "normalized"),
+            "中文_论文.md"
+        );
+        assert_eq!(
+            markdown_download_name("论文", "original"),
+            "论文-MinerU原稿.md"
+        );
+        assert_eq!(
+            markdown_download_name("论文", "translated"),
+            "论文-中文译稿.md"
+        );
     }
 
     #[test]
