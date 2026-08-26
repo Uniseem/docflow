@@ -5,7 +5,11 @@ use serde_json::json;
 use sqlx::{FromRow, PgPool};
 use walkdir::WalkDir;
 
-use crate::{config::Config, models::ProcessingEvent};
+use crate::{
+    config::Config,
+    models::ProcessingEvent,
+    pipeline::{markdown::Article, pdf},
+};
 
 #[derive(FromRow)]
 struct BackfillDocument {
@@ -24,11 +28,12 @@ struct BackfillDocument {
     translation_guidance: Option<String>,
     markdown_normalized: Option<String>,
     content_html: Option<String>,
+    excerpt: Option<String>,
 }
 
 pub async fn run(pool: &PgPool, config: &Config) -> Result<()> {
     let documents = sqlx::query_as::<_, BackfillDocument>(
-        "SELECT id,title,original_filename,display_filename,storage_key,source_path,source_size,mime_type,status,local_archive_path,markdown_original,markdown_translated,translation_guidance,markdown_normalized,content_html FROM documents ORDER BY created_at",
+        "SELECT id,title,original_filename,display_filename,storage_key,source_path,source_size,mime_type,status,local_archive_path,markdown_original,markdown_translated,translation_guidance,markdown_normalized,content_html,excerpt FROM documents ORDER BY created_at",
     )
     .fetch_all(pool)
     .await?;
@@ -118,6 +123,24 @@ async fn backfill_document(
         }
     }
 
+    let pdf_path = archive_root.join("article/article.pdf");
+    if document.status == "completed"
+        && !pdf_path.is_file()
+        && let Some(content_html) = document.content_html.as_deref()
+    {
+        let article = Article {
+            title: document.title.clone(),
+            excerpt: document.excerpt.clone().unwrap_or_default(),
+            markdown: document.markdown_normalized.clone().unwrap_or_default(),
+            html: content_html.to_string(),
+        };
+        if let Err(error) =
+            pdf::render_archived_journal_pdf(config, &document.id, &article, &archive_root).await
+        {
+            tracing::warn!(document_id=%document.id, %error, "historical journal PDF backfill skipped");
+        }
+    }
+
     let events = sqlx::query_as::<_, ProcessingEvent>("SELECT id,document_id,stage,state,level,progress,message,detail,current,total,created_at FROM processing_events WHERE document_id=$1 ORDER BY id")
         .bind(&document.id)
         .fetch_all(pool)
@@ -172,13 +195,19 @@ async fn backfill_document(
     } else {
         "source_local"
     };
-    sqlx::query("UPDATE documents SET source_path=$2,local_archive_path=$3,local_archive_status=$4,archive_status=$5,archive_manifest=COALESCE(archive_manifest,$6),updated_at=NOW() WHERE id=$1")
+    let pdf_size = std::fs::metadata(&pdf_path)
+        .ok()
+        .map(|value| value.len() as i64);
+    let relative_pdf = pdf_size.map(|_| format!("{relative_root}/article/article.pdf"));
+    sqlx::query("UPDATE documents SET source_path=$2,local_archive_path=$3,local_archive_status=$4,archive_status=$5,archive_manifest=COALESCE(archive_manifest,$6),pdf_path=COALESCE(pdf_path,$7),pdf_size=COALESCE(pdf_size,$8),updated_at=NOW() WHERE id=$1")
         .bind(&document.id)
         .bind(relative_source)
         .bind(relative_root)
         .bind(local_status)
         .bind(archive_status)
         .bind(manifest)
+        .bind(relative_pdf)
+        .bind(pdf_size)
         .execute(pool)
         .await?;
     tracing::info!(document_id=%document.id, storage_key=%document.storage_key, "local archive backfill ready");

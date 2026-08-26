@@ -1,16 +1,16 @@
 # 文流（DocFlow）
 
-文流是一个可自托管的文档解析、中文翻译与阅读服务。用户提交 MinerU 支持的 PDF、Office 文档、图片或 HTML 后，Rust Worker 在后台完成解析、WebP 图片转换、三档并发中文翻译、Markdown 规范化和 VPS 本地永久归档。极速档使用 Google Cloud Translation；均衡档使用 `deepseek-v4-flash` 非思考模式；精准档使用同一模型的思考模式。Google 与 DeepSeek 各有一个全站共享任务池，多篇文档可并行翻译且不会由单篇长文档独占队列。Cloudflare R2 是可选镜像，不是运行前提。
+文流是一个可自托管的文档解析、中文翻译与阅读服务。用户提交 MinerU 支持的 PDF、Office 文档、图片或 HTML 后，Rust Worker 在后台完成解析、WebP 图片转换、三档并发中文翻译、Markdown 规范化、A4 期刊论文风格 PDF 排版和 VPS 本地永久归档。极速档使用 Google Cloud Translation；均衡档使用 `deepseek-v4-flash` 非思考模式；精准档使用同一模型的思考模式。Google 与 DeepSeek 各有一个全站共享任务池，多篇文档可并行翻译且不会由单篇长文档独占队列。Cloudflare R2 是可选镜像，不是运行前提。
 
 新文档默认私有，没有普通用户账户，也没有删除接口。上传响应会给当前浏览器设置每份文档独立的 HttpOnly 访问凭证；管理员在 `/admin` 能看到全部文档，并可逐份公开或恢复私有。管理后台固定在 `/admin`，前台不显示入口；首次访问后台的用户可以注册为唯一管理员。
 
 ## 架构
 
 - Rust、Axum、Tokio：带文档级访问控制的 HTTP API、管理 API、上传流、SSE 实时进度和后台 Worker。
-- SQLx、PostgreSQL：元数据、三种 Markdown、最终 HTML、管理员、加密配置、任务租约和不可删除的详细事件。
+- SQLx、PostgreSQL：元数据、三种 Markdown、最终 HTML、PDF 路径与大小、管理员、加密配置、任务租约和不可删除的详细事件。
 - PostgreSQL 持久队列：Worker 通过 `FOR UPDATE SKIP LOCKED` 并发领取任务，不再依赖 Redis/Celery。
 - Tokio 全站翻译池：Google 与 DeepSeek 使用彼此独立的 FIFO 队列和并发执行槽；单篇文档还有独立的在途分块上限。
-- VPS 当前目录：`./data` 绑定挂载 PostgreSQL、实例密钥、源文件、MinerU ZIP、三种 Markdown、HTML、WebP、事件和归档清单，不使用 Docker 命名卷。
+- VPS 当前目录：`./data` 绑定挂载 PostgreSQL、实例密钥、源文件、MinerU ZIP、三种 Markdown、期刊排版 PDF、HTML、WebP、事件和归档清单，不使用 Docker 命名卷。
 - Cloudflare R2：可选的异地对象镜像；失败不会阻止本地任务发布，也不会触发本地删除。
 - Vue 3、Vuetify、Vite：提交页、公开文库、阅读页、SSE 进度页和 `/admin` 管理后台。
 - Nginx：同源反向代理、SSE 透传和 SPA 路由。
@@ -22,11 +22,12 @@
 - 新文档和处理事件默认私有：只有持有该文档浏览器凭证的上传者和管理员可读取；管理员主动公开后才会出现在公开文库。
 - 文档详情、SSE 事件、Markdown、源文件、ZIP 和图片使用同一套权限判断，私有状态不是仅在列表中隐藏。
 - Markdown 永久保存：数据库和本地 `.md` 文件同时持久化 MinerU 原稿、中文译稿和规范化终稿。
+- PDF 在 Worker 内使用本地 Chromium 打印；KaTeX、字体和图片均来自容器或永久目录，不依赖外部 CDN。版式包含 A4 版心、衬线中英文字体、摘要区、分级标题、表格/图片分页控制、页眉和页码。
 - 翻译分块可以并行完成，但会按原始序号合并；每块都独立校验公式、代码、图片和链接占位符。
 - 图片不使用 MinerU 链接：本地或远程图片会下载、去重、转成 WebP，并改写为本站稳定 API 路径。
 - 展示标题、原始上传名和可修改的下载名保存在 PostgreSQL；磁盘只使用随机 `storage_key`、UUID 目录与 `source.pdf` 等 ASCII 物理名。
 - 管理员重命名只更新数据库映射，不移动或覆盖磁盘文件，也不改变图片 URL。
-- `GET /api/v1/jobs/{id}/bundle` 按需生成完整 ZIP，统一包含源文件、Markdown、HTML、WebP 与元数据。
+- `GET /api/v1/jobs/{id}/pdf` 下载永久保存的期刊排版 PDF；`GET /api/v1/jobs/{id}/bundle` 按需生成完整 ZIP，统一包含源文件、Markdown、PDF、打印版 HTML、WebP 与元数据。
 - 发布完成后只删除 `/data/work/{文档 UUID}` 中可再生的 MinerU 解压临时目录；`/data/archives` 永不自动清理。
 - R2 未配置时照常上传和处理；配置后在本地归档完成后追加镜像与 `HeadObject` 校验。
 - 历史 Redis 卷不会在升级中删除，但新架构不再挂载或运行 Redis。
@@ -38,8 +39,8 @@
 3. `53–64%`：校验公网地址、分块下载 ZIP、防路径穿越和解压规模检查。
 4. `65–70%`：扫描图片、逐张转 WebP、内容寻址去重、改写本站资源路径。
 5. `71–87%`：执行任务创建时固定的三档翻译。极速档进入 Google 共享池；均衡档进入 DeepSeek 非思考池；精准档进入 DeepSeek 思考池。分块以 FIFO 排队、并行执行、按序合并；每次排队、服务调用、限流退避、占位符重译、完成数量和耗时都会写入永久事件。公式、代码、图片与链接连续三次无损校验失败时任务会明确报错，不发布损坏文章。
-6. `88–93%`：统一公式定界符、中英文间距、CommonMark/GFM 解析和 HTML 白名单消毒。
-7. `94–98%`：源文件、Markdown、HTML、WebP、MinerU ZIP 与元数据写入本地永久归档并生成清单。
+6. `88–93%`：统一公式定界符、中英文间距、CommonMark/GFM 解析、HTML 白名单消毒，并使用本地 KaTeX 与 Chromium 生成 A4 期刊排版 PDF。
+7. `94–98%`：源文件、Markdown、PDF、打印版 HTML、WebP、MinerU ZIP 与元数据写入本地永久归档并生成清单。
 8. `99–100%`：可选 R2 镜像；无 R2 或镜像失败时保留告警并正常发布，最后只清理可再生工作区。
 
 每个细分步骤都会追加到 `processing_events`。网页通过 SSE 接收实时事件；REST 增量接口可在断线后从任意事件 ID 恢复。
@@ -58,8 +59,9 @@ GET  /api/v1/jobs/{id}                    状态与最终文章（私有任务�
 GET  /api/v1/jobs/{id}/events             永久事件增量读取
 GET  /api/v1/jobs/{id}/events/stream      SSE 实时进度
 GET  /api/v1/jobs/{id}/markdown           original/translated/normalized
+GET  /api/v1/jobs/{id}/pdf                期刊论文风格 PDF
 GET  /api/v1/jobs/{id}/source             原始文件
-GET  /api/v1/jobs/{id}/bundle             完整本地归档 ZIP
+GET  /api/v1/jobs/{id}/bundle             含 PDF 的完整本地归档 ZIP
 GET  /api/v1/jobs/{id}/assets/{name}      本地 WebP（R2 仅作回退）
 ```
 
@@ -127,6 +129,7 @@ x-backend-environment: &backend_environment
   MINERU_POLL_SECONDS: ${MINERU_POLL_SECONDS:-5}
   MINERU_MAX_WAIT_SECONDS: ${MINERU_MAX_WAIT_SECONDS:-7200}
   WEBP_QUALITY: ${WEBP_QUALITY:-88}
+  PDF_RENDER_TIMEOUT_SECONDS: ${PDF_RENDER_TIMEOUT_SECONDS:-180}
   DATABASE_POOL_SIZE: ${DATABASE_POOL_SIZE:-20}
   PUBLIC_ORIGIN: "${PUBLIC_ORIGIN:-}"
   RUST_LOG: ${RUST_LOG:-docflow_server=info,tower_http=info}
@@ -294,7 +297,7 @@ HTTP_PORT=9000
 └── data/
     ├── config/       # 实例密钥与 PostgreSQL 密码
     ├── postgres/     # 完整 PostgreSQL 数据目录
-    └── documents/    # 源文件、Markdown、HTML、WebP、MinerU ZIP 与工作区
+    └── documents/    # 源文件、Markdown、PDF、HTML、WebP、MinerU ZIP 与工作区
 ```
 
 端口和并发等参数都有保守默认值；如需覆盖，可在同目录创建可选 `.env`，参考仓库中的 `.env.example`。MinerU、Google Cloud Translation、DeepSeek 和可选 R2 凭据始终在 `/admin` 中配置，而不是写入 Compose 或 `.env`。

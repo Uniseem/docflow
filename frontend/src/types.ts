@@ -47,6 +47,7 @@ export interface DocumentSummary {
   local_archive_status: string
   r2_mirror_status: string
   r2_mirror_error: string | null
+  pdf_size: number | null
   upload_sha256: string | null
   api_version: string
 }
@@ -54,6 +55,7 @@ export interface DocumentSummary {
 export interface DocumentDetail extends DocumentSummary {
   content_html: string | null
   markdown_available?: { original: boolean; translated: boolean; normalized: boolean }
+  pdf_available?: boolean
 }
 
 export interface ProcessingEvent {

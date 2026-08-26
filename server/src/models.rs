@@ -56,6 +56,9 @@ pub struct Document {
     pub r2_mirror_status: String,
     pub r2_mirror_error: Option<String>,
     #[serde(skip_serializing)]
+    pub pdf_path: Option<String>,
+    pub pdf_size: Option<i64>,
+    #[serde(skip_serializing)]
     pub r2_prefix: Option<String>,
     #[serde(skip_serializing)]
     pub source_r2_key: Option<String>,

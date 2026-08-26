@@ -197,7 +197,8 @@ onBeforeUnmount(() => {
     </header>
 
     <nav class="document-actions" aria-label="文档下载">
-      <v-btn :href="`/api/v1/jobs/${documentItem.id}/bundle`" color="primary" prepend-icon="mdi-folder-zip-outline">下载完整归档</v-btn>
+      <v-btn v-if="documentItem.pdf_available" :href="`/api/v1/jobs/${documentItem.id}/pdf`" color="primary" prepend-icon="mdi-file-pdf-box">下载期刊排版 PDF</v-btn>
+      <v-btn :href="`/api/v1/jobs/${documentItem.id}/bundle`" variant="outlined" prepend-icon="mdi-folder-zip-outline">完整归档</v-btn>
       <v-btn :href="`/api/v1/jobs/${documentItem.id}/source`" variant="outlined" prepend-icon="mdi-download">原始文件</v-btn>
       <v-btn v-if="documentItem.markdown_available?.normalized" :href="`/api/v1/jobs/${documentItem.id}/markdown?variant=normalized`" variant="outlined" prepend-icon="mdi-language-markdown">Markdown</v-btn>
       <v-menu>
@@ -251,6 +252,7 @@ onBeforeUnmount(() => {
           <div><dt>当前阶段</dt><dd>{{ documentItem.stage }}</dd></div>
           <div><dt>源文件</dt><dd>已永久保存</dd></div>
           <div><dt>翻译</dt><dd>{{ translationLabel(documentItem.translation_tier) }}</dd></div>
+          <div><dt>期刊 PDF</dt><dd>{{ documentItem.pdf_available ? '已生成' : '等待生成' }}</dd></div>
           <div><dt>本地归档</dt><dd>{{ documentItem.local_archive_status }}</dd></div>
         </dl>
         <div class="sidebar-actions">

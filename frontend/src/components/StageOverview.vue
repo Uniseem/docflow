@@ -25,8 +25,8 @@ const stages = computed(() => [
     end: 87,
     icon: props.document.translate_requested ? 'mdi-translate' : 'mdi-debug-step-over',
   },
-  { title: '规范化与渲染', caption: '公式、间距、CommonMark、消毒', start: 88, end: 93, icon: 'mdi-code-tags-check' },
-  { title: '本地永久归档', caption: '源文件、Markdown、HTML、WebP 与清单', start: 94, end: 98, icon: 'mdi-harddisk' },
+  { title: '规范化与学术排版', caption: '公式、CommonMark、HTML 消毒、A4 期刊 PDF', start: 88, end: 93, icon: 'mdi-file-pdf-box' },
+  { title: '本地永久归档', caption: '源文件、Markdown、PDF、HTML、WebP 与清单', start: 94, end: 98, icon: 'mdi-harddisk' },
   { title: '镜像与发布', caption: props.document.r2_mirror_status === 'archived' ? 'R2 镜像已校验，本地主副本保留' : 'R2 可选；本地归档直接发布', start: 99, end: 100, icon: 'mdi-check-decagram-outline' },
 ])
 

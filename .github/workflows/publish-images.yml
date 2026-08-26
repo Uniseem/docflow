@@ -88,8 +88,23 @@ jobs:
                     WHERE table_schema='public' AND table_name='documents'
                       AND column_name='translation_guidance'
                 )
-                AND (SELECT count(*) FROM _sqlx_migrations WHERE success) = 5")"
+                AND EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_schema='public' AND table_name='documents'
+                      AND column_name='pdf_path'
+                )
+                AND EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_schema='public' AND table_name='documents'
+                      AND column_name='pdf_size'
+                )
+                AND (SELECT count(*) FROM _sqlx_migrations WHERE success) = 6")"
           test "$schema_ok" = "t"
+
+      - name: Verify journal PDF runtime is bundled
+        run: |
+          docker run --rm --entrypoint /bin/sh docflow-server:smoke -ec \
+            "test -x /usr/bin/chromium && test -x /usr/bin/node && test -f /opt/docflow/pdf/render.mjs && test -f /opt/docflow/pdf/node_modules/katex/dist/katex.min.js"
 
       - name: Re-run migrations without losing existing data
         run: |

@@ -1,0 +1,10 @@
+{
+  "name": "docflow-pdf-runtime",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "dependencies": {
+    "katex": "0.18.4",
+    "puppeteer-core": "24.17.0"
+  }
+}
