@@ -41,7 +41,39 @@ pub async fn render_journal_pdf(
     )
     .await?;
 
-    let artifact = render_pdf_artifact(&state.config, id, article, final_root).await?;
+    let mut attempt = 0_i64;
+    let artifact = loop {
+        attempt += 1;
+        match render_pdf_artifact(&state.config, id, article, final_root).await {
+            Ok(artifact) => break artifact,
+            Err(error) if attempt < 3 => {
+                let delay = attempt * 2;
+                let detail = format!(
+                    "第 {attempt} / 3 次 Chromium 渲染失败；{delay} 秒后使用全新的浏览器配置、缓存和用户数据目录重试。原因：{:#}",
+                    error
+                );
+                events::append(
+                    &state.pool,
+                    id,
+                    EventInput {
+                        stage: "pdf_render_retry",
+                        state: "warning",
+                        level: "warning",
+                        progress: 92,
+                        message: "PDF 渲染器异常退出，正在进行阶段内恢复",
+                        detail: Some(&detail),
+                        current: Some(attempt),
+                        total: Some(3),
+                    },
+                )
+                .await?;
+                tokio::time::sleep(Duration::from_secs(delay as u64)).await;
+            }
+            Err(error) => {
+                return Err(error).context("PDF 渲染连续 3 次失败");
+            }
+        }
+    };
     events::append(
         &state.pool,
         id,
@@ -83,6 +115,7 @@ async fn render_pdf_artifact(
     let print_html_path = article_root.join("print.html");
     let pdf_path = article_root.join("article.pdf");
     let partial_path = article_root.join("article.pdf.partial");
+    let _ = tokio::fs::remove_file(&partial_path).await;
     let print_html = build_print_html(
         id,
         article,
