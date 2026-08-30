@@ -1,0 +1,25 @@
+# Isolated from pdf2zh-next: its PyMuPDF upper bound conflicts with this engine.
+# Pin the engine and ABI-/layout-critical libraries. CUDA extras are not used.
+babeldoc==0.6.4
+PyMuPDF==1.26.7
+numpy==2.2.6
+onnx==1.21.0
+onnxruntime==1.23.2
+opencv-python-headless==4.12.0.88
+cryptography==46.0.7
+httpx[socks]==0.28.1
+tiktoken==0.9.0
+hyperscan==0.7.13
+rtree==1.4.1
+freetype-py==2.5.1
+uharfbuzz==0.50.2
+fonttools==4.61.1
+scipy==1.15.3
+scikit-learn==1.7.1
+joblib==1.5.3
+pydantic==2.11.7
+openai==1.99.9
+huggingface-hub==0.34.4
+peewee==3.18.2
+xsdata[cli,lxml,soap]==25.7
+orjson==3.11.3

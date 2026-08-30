@@ -62,10 +62,12 @@ async fn main() -> Result<()> {
     let translation_pools = (mode == "worker")
         .then(|| translation_pool::TranslationPools::new(&config))
         .transpose()?;
+    let native_pdf_slots = Arc::new(tokio::sync::Semaphore::new(config.pdf2zh_concurrency));
     let state = Arc::new(AppState {
         pool,
         config,
         translation_pools,
+        native_pdf_slots,
     });
     if mode == "compat-check" {
         let password_hash: Option<String> =

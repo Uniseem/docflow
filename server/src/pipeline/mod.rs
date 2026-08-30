@@ -2,6 +2,7 @@ mod archive;
 pub(crate) mod markdown;
 mod mineru;
 pub(crate) mod pdf;
+mod pdf2zh;
 mod processing;
 mod translate;
 
@@ -16,10 +17,10 @@ use sqlx::Row;
 use crate::{db::AppState, events, settings};
 
 pub async fn process(state: Arc<AppState>, id: &str) -> Result<()> {
-    let row = sqlx::query("SELECT source_path,original_filename,mime_type,translate_requested,translation_provider,translation_tier,mineru_model,mineru_task_id FROM documents WHERE id=$1")
+    let row = sqlx::query("SELECT source_path,original_filename,mime_type,translate_requested,translation_provider,translation_tier,mineru_model,mineru_task_id,processing_mode FROM documents WHERE id=$1")
         .bind(id).fetch_one(&state.pool).await?;
     let source_path: String = row.get("source_path");
-    let source = Path::new("/data").join(&source_path);
+    let source = state.config.data_root.join(&source_path);
     if !source.is_file() {
         anyhow::bail!("本地源文件不存在：{}", source.display());
     }
@@ -36,6 +37,12 @@ pub async fn process(state: Arc<AppState>, id: &str) -> Result<()> {
         )),
     )
     .await?;
+
+    let processing_mode: String = row.get("processing_mode");
+    if processing_mode == "pdf2zh" {
+        return pdf2zh::process(&state, id, &source, row.get("translation_tier")).await;
+    }
+    anyhow::ensure!(processing_mode == "mineru", "任务处理方式无效");
 
     let mineru_key = settings::get(
         &state.pool,
@@ -136,7 +143,7 @@ pub async fn process(state: Arc<AppState>, id: &str) -> Result<()> {
     archive::archive_and_publish(
         &state,
         id,
-        archive::ArchiveInput {
+        archive::ArchiveInput::Mineru {
             source: &source,
             mineru_zip: &mineru_zip,
             final_root: &final_root,

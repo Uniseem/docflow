@@ -5,10 +5,19 @@ import type {
   DocumentList,
   DocumentSummary,
   ProcessingEventList,
+  ProcessingMode,
   PublicConfig,
+  TranslationRuntime,
 } from './types'
 
 const jsonHeaders = { 'Content-Type': 'application/json' }
+
+export class ApiError extends Error {
+  constructor(message: string, readonly status: number) {
+    super(message)
+    this.name = 'ApiError'
+  }
+}
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, { credentials: 'same-origin', ...init })
@@ -16,11 +25,11 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     let message = `请求失败（${response.status}）`
     try {
       const body = await response.json()
-      message = body.detail || message
+      if (typeof body.detail === 'string' && body.detail) message = body.detail
     } catch {
       // Keep the HTTP status fallback.
     }
-    throw new Error(message)
+    throw new ApiError(message, response.status)
   }
   if (response.status === 204) return undefined as T
   return response.json() as Promise<T>
@@ -83,6 +92,12 @@ export const api = {
       headers: adminHeaders(),
       body: JSON.stringify({ tier }),
     }),
+  saveTranslationRuntime: (runtime: TranslationRuntime) =>
+    request<AdminSettings>('/api/admin/settings/translation-runtime', {
+      method: 'PUT',
+      headers: adminHeaders(),
+      body: JSON.stringify(runtime),
+    }),
   saveR2: (accountId: string, accessKeyId: string, secretAccessKey: string, bucket: string, publicBaseUrl: string) =>
     request<AdminSettings>('/api/admin/settings/r2', {
       method: 'PUT',
@@ -106,19 +121,29 @@ export const api = {
       method: 'POST',
       headers: adminHeaders(),
     }),
-  streamDocumentEvents: (id: string, afterId: number, onEvent: (event: import('./types').ProcessingEvent) => void, onEnd: () => void, onError: () => void) => {
+  streamDocumentEvents: (id: string, afterId: number, onEvent: (event: import('./types').ProcessingEvent) => void, onEnd: () => void, onError: () => void, onOpen?: () => void) => {
     const source = new EventSource(`/api/v1/jobs/${id}/events/stream?after_id=${afterId}`)
-    source.addEventListener('progress', (message) => onEvent(JSON.parse((message as MessageEvent).data) as import('./types').ProcessingEvent))
-    source.addEventListener('end', () => { source.close(); onEnd() })
-    source.onerror = () => { source.close(); onError() }
-    return () => source.close()
+    let closed = false
+    const fail = () => { if (closed) return; closed = true; source.close(); onError() }
+    source.onopen = () => { if (!closed) onOpen?.() }
+    source.addEventListener('progress', (message) => {
+      if (closed) return
+      let event: import('./types').ProcessingEvent
+      try { event = JSON.parse((message as MessageEvent).data) as import('./types').ProcessingEvent }
+      catch { fail(); return }
+      onEvent(event)
+    })
+    source.addEventListener('end', () => { if (closed) return; closed = true; source.close(); onEnd() })
+    source.onerror = fail
+    return () => { closed = true; source.close() }
   },
-  uploadDocument: (file: File, title: string, translationTier: 1 | 2 | 3, onProgress: (percent: number) => void) =>
+  uploadDocument: (file: File, title: string, translationTier: 1 | 2 | 3, processingMode: ProcessingMode, onProgress: (percent: number) => void) =>
     new Promise<DocumentSummary>((resolve, reject) => {
       const form = new FormData()
       form.append('file', file)
       if (title.trim()) form.append('title', title.trim())
       form.append('translation_tier', String(translationTier))
+      form.append('processing_mode', processingMode)
       const xhr = new XMLHttpRequest()
       xhr.open('POST', '/api/v1/jobs')
       xhr.withCredentials = true

@@ -10,7 +10,9 @@ use anyhow::Context;
 use axum::{
     Json, Router,
     body::Body,
-    extract::{DefaultBodyLimit, Multipart, Path as AxumPath, Query, State},
+    extract::{
+        DefaultBodyLimit, Multipart, Path as AxumPath, Query, State, rejection::JsonRejection,
+    },
     http::{HeaderMap, HeaderValue, StatusCode, header},
     middleware,
     response::{
@@ -23,7 +25,10 @@ use serde::Deserialize;
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use sqlx::Row;
-use tokio::{fs, io::AsyncWriteExt};
+use tokio::{
+    fs,
+    io::{AsyncReadExt, AsyncWriteExt},
+};
 use tokio_util::io::ReaderStream;
 use tower_http::{
     cors::{Any, CorsLayer},
@@ -35,18 +40,65 @@ use crate::{
     db::AppState,
     events::{self, EventInput},
     models::{
-        Document, DocumentList, EventList, LoginRequest, ProcessingEvent, PublicConfig,
-        RegisterRequest, TokenResponse,
+        Document, DocumentList, EventList, LoginRequest, ProcessingEvent, ProcessingModeCapability,
+        ProcessingModes, PublicConfig, RegisterRequest, TokenResponse,
     },
     r2::R2Client,
     security,
-    settings::{self, AdminSettingsResponse, R2Settings},
+    settings::{
+        self, AdminSettingsResponse, R2Settings, TranslationRuntimeLimits,
+        TranslationRuntimeSettings,
+    },
 };
 
 pub const ACCEPTED_EXTENSIONS: &[&str] = &[
     ".pdf", ".doc", ".docx", ".ppt", ".pptx", ".xls", ".xlsx", ".png", ".jpg", ".jpeg", ".jp2",
     ".webp", ".gif", ".bmp", ".html", ".htm",
 ];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProcessingMode {
+    Mineru,
+    Pdf2zh,
+}
+
+impl ProcessingMode {
+    fn parse(value: &str) -> Result<Self, ApiError> {
+        match value.trim() {
+            "mineru" => Ok(Self::Mineru),
+            "pdf2zh" => Ok(Self::Pdf2zh),
+            _ => Err(ApiError::bad_request(
+                "processing_mode 只能是 mineru 或 pdf2zh",
+            )),
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Mineru => "mineru",
+            Self::Pdf2zh => "pdf2zh",
+        }
+    }
+}
+
+fn processing_capabilities(
+    mineru_configured: bool,
+    translation_available: bool,
+    pdf2zh_available: bool,
+) -> ProcessingModes {
+    ProcessingModes {
+        mineru: ProcessingModeCapability {
+            available: mineru_configured && translation_available,
+            accepted_extensions: ACCEPTED_EXTENSIONS.to_vec(),
+            native_pdf_only: false,
+        },
+        pdf2zh: ProcessingModeCapability {
+            available: pdf2zh_available && translation_available,
+            accepted_extensions: vec![".pdf"],
+            native_pdf_only: true,
+        },
+    }
+}
 
 #[derive(Debug)]
 pub struct ApiError {
@@ -101,6 +153,10 @@ pub async fn serve(state: Arc<AppState>) -> anyhow::Result<()> {
         .route("/settings/google", put(save_google))
         .route("/settings/deepseek", put(save_deepseek))
         .route("/settings/translation", put(save_translation_provider))
+        .route(
+            "/settings/translation-runtime",
+            put(save_translation_runtime).layer(DefaultBodyLimit::max(256 * 1024)),
+        )
         .route("/settings/r2", put(save_r2))
         .route("/documents", get(admin_list_documents))
         .route("/documents/{id}/names", patch(update_document_names))
@@ -197,7 +253,14 @@ async fn public_config(State(state): State<Arc<AppState>>) -> Result<Json<Public
         deepseek_configured: deepseek,
         documents_public_by_default: false,
         r2_configured: r2,
+        // Legacy clients omit processing_mode and therefore still use MinerU.
         accepting_uploads: mineru && (google || deepseek),
+        default_processing_mode: "mineru",
+        processing_modes: processing_capabilities(
+            mineru,
+            google || deepseek,
+            state.config.pdf2zh_available(),
+        ),
         max_upload_mb: state.config.max_upload_mb(),
         accepted_extensions: ACCEPTED_EXTENSIONS.to_vec(),
         api_version: "v1",
@@ -345,6 +408,9 @@ async fn load_admin_settings(state: &AppState) -> Result<AdminSettingsResponse, 
         deepseek_model,
         translation_provider: settings::translation_provider_for_tier(translation_tier).into(),
         translation_tier,
+        translation_runtime: settings::load_translation_runtime(pool, &state.config).await?,
+        translation_runtime_defaults: TranslationRuntimeSettings::defaults(&state.config),
+        translation_runtime_limits: TranslationRuntimeLimits::default(),
         r2_configured: R2Settings::load(pool, secret).await?.is_some(),
         r2_account_id: settings::get(pool, secret, settings::R2_ACCOUNT_ID)
             .await?
@@ -363,6 +429,28 @@ async fn load_admin_settings(state: &AppState) -> Result<AdminSettingsResponse, 
 async fn admin_settings(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<AdminSettingsResponse>, ApiError> {
+    Ok(Json(load_admin_settings(&state).await?))
+}
+
+async fn save_translation_runtime(
+    State(state): State<Arc<AppState>>,
+    input: Result<Json<TranslationRuntimeSettings>, JsonRejection>,
+) -> Result<Json<AdminSettingsResponse>, ApiError> {
+    let Json(input) = input.map_err(|error| {
+        ApiError::bad_request(format!("翻译运行参数格式不正确：{}", error.body_text()))
+    })?;
+    input
+        .validate()
+        .map_err(|error| ApiError::bad_request(error.to_string()))?;
+    // One JSON setting avoids partially-applied changes across workers.
+    settings::set(
+        &state.pool,
+        &state.config.secret_key,
+        settings::TRANSLATION_RUNTIME,
+        &serde_json::to_string(&input).map_err(ApiError::internal)?,
+        false,
+    )
+    .await?;
     Ok(Json(load_admin_settings(&state).await?))
 }
 
@@ -652,7 +740,7 @@ async fn save_r2(
 }
 
 fn document_columns() -> &'static str {
-    "id,title,original_filename,display_filename,storage_key,title_custom,source_path,source_size,mime_type,status,stage,progress,failure_reason,translate_requested,translation_provider,translation_tier,translation_guidance,translated,is_public,access_token_hash,mineru_task_id,mineru_model,pages_processed,pages_total,image_count,content_html,excerpt,created_at,updated_at,completed_at,markdown_original,markdown_translated,markdown_normalized,upload_sha256,queue_attempts,archive_status,archive_error,local_archive_status,local_archive_path,r2_mirror_status,r2_mirror_error,pdf_path,pdf_size,r2_prefix,source_r2_key,api_version"
+    "id,title,original_filename,display_filename,storage_key,title_custom,source_path,source_size,mime_type,processing_mode,status,stage,progress,failure_reason,translate_requested,translation_provider,translation_tier,translation_guidance,translated,is_public,access_token_hash,mineru_task_id,mineru_model,pages_processed,pages_total,image_count,content_html,excerpt,created_at,updated_at,completed_at,markdown_original,markdown_translated,markdown_normalized,upload_sha256,queue_attempts,archive_status,archive_error,local_archive_status,local_archive_path,r2_mirror_status,r2_mirror_error,pdf_path,pdf_size,dual_pdf_path,dual_pdf_size,r2_prefix,source_r2_key,api_version"
 }
 
 #[derive(Deserialize)]
@@ -747,8 +835,12 @@ fn document_access_cookie(id: &str, token: &str) -> Result<HeaderValue, ApiError
 }
 
 fn request_can_access_document(state: &AppState, headers: &HeaderMap, doc: &Document) -> bool {
+    document_access_allowed(&state.config.secret_key, headers, doc)
+}
+
+fn document_access_allowed(secret_key: &str, headers: &HeaderMap, doc: &Document) -> bool {
     doc.is_public
-        || security::request_is_admin(&state.config.secret_key, headers)
+        || security::request_is_admin(secret_key, headers)
         || doc.access_token_hash.as_deref().is_some_and(|expected| {
             document_cookie_name(&doc.id)
                 .ok()
@@ -779,6 +871,7 @@ async fn get_document(
     value["content_html"] = serde_json::to_value(&doc.content_html).unwrap();
     value["markdown_available"] = json!({"original":doc.markdown_original.is_some(),"translated":doc.markdown_translated.is_some(),"normalized":doc.markdown_normalized.is_some()});
     value["pdf_available"] = json!(doc.pdf_path.is_some());
+    value["pdf_variants_available"] = pdf_variants_available(&doc);
     Ok(Json(value))
 }
 
@@ -813,12 +906,15 @@ async fn retry_failed_document(
             "只有已经停止的失败任务才能人工重新排队",
         ));
     }
+    let runtime = settings::load_translation_runtime(&state.pool, &state.config).await?;
     let result = sqlx::query(
         "UPDATE documents SET status='queued',stage='manual_retry_queued',failure_reason=NULL,\
          queue_attempts=0,queue_available_at=NOW(),queue_locked_at=NULL,queue_locked_by=NULL,\
-         last_heartbeat_at=NULL,completed_at=NULL,updated_at=NOW() WHERE id=$1 AND status='failed'",
+         last_heartbeat_at=NULL,completed_at=NULL,updated_at=NOW(),translation_runtime_snapshot=$2 \
+         WHERE id=$1 AND status='failed'",
     )
     .bind(&id)
+    .bind(serde_json::to_value(&runtime).map_err(ApiError::internal)?)
     .execute(&state.pool)
     .await?;
     if result.rows_affected() != 1 {
@@ -834,7 +930,7 @@ async fn retry_failed_document(
             progress: current.progress,
             message: "管理员已将最终失败任务重新加入持久队列",
             detail: Some(
-                "自动尝试次数已重置；源文件、历史事件和此前通过校验的翻译分块断点均已保留，Worker 会从可复用的本地结果继续处理",
+                "自动尝试次数已重置；最新翻译参数与提示词已固定为新的任务快照；源文件、历史事件和已校验的翻译分块均已保留，只有与本次参数和输入一致的缓存会被复用",
             ),
             current: Some(0),
             total: Some(3),
@@ -922,29 +1018,48 @@ fn clean_filename(value: &str) -> String {
 
 async fn create_document(
     State(state): State<Arc<AppState>>,
-    mut multipart: Multipart,
+    multipart: Multipart,
 ) -> Result<Response, ApiError> {
-    if !settings::configured(
-        &state.pool,
-        &state.config.secret_key,
-        settings::MINERU_API_KEY,
-    )
-    .await
-    {
-        return Err(ApiError::new(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "管理员尚未配置 MinerU",
-        ));
-    }
     let id = Uuid::new_v4().to_string();
     let storage_key = Uuid::new_v4().simple().to_string();
     let root = state.config.archive_root.join(&storage_key);
+    // create_dir, rather than create_dir_all, establishes that this request owns
+    // a new directory. Rejected forms can only clean up this request's files.
+    fs::create_dir(&root).await.map_err(ApiError::internal)?;
+    let mut insertion_started = false;
+    let result = create_document_upload(
+        &state,
+        multipart,
+        &id,
+        &storage_key,
+        &root,
+        &mut insertion_started,
+    )
+    .await;
+    if result.is_err()
+        && !insertion_started
+        && let Err(error) = fs::remove_dir_all(&root).await
+    {
+        tracing::warn!(document_id=%id, %error, "rejected upload cleanup failed");
+    }
+    result
+}
+
+async fn create_document_upload(
+    state: &Arc<AppState>,
+    mut multipart: Multipart,
+    id: &str,
+    storage_key: &str,
+    root: &Path,
+    insertion_started: &mut bool,
+) -> Result<Response, ApiError> {
     let source_dir = root.join("source");
     fs::create_dir_all(&source_dir)
         .await
         .map_err(ApiError::internal)?;
     let mut title: Option<String> = None;
     let mut requested_translation_tier: Option<String> = None;
+    let mut requested_processing_mode: Option<String> = None;
     let mut saved: Option<(String, PathBuf, u64, String, String)> = None;
     while let Some(field) = multipart
         .next_field()
@@ -959,6 +1074,16 @@ async fn create_document(
         }
         if name == "translation_tier" {
             requested_translation_tier = Some(field.text().await.unwrap_or_default());
+            continue;
+        }
+        if name == "processing_mode" {
+            if requested_processing_mode.is_some() {
+                return Err(ApiError::bad_request("processing_mode 只能提交一次"));
+            }
+            requested_processing_mode =
+                Some(field.text().await.map_err(|error| {
+                    ApiError::bad_request(format!("处理模式字段无效：{error}"))
+                })?);
             continue;
         }
         if name == "title" {
@@ -1008,7 +1133,6 @@ async fn create_document(
         {
             size += chunk.len() as u64;
             if size > state.config.max_upload_bytes {
-                let _ = fs::remove_dir_all(&root).await;
                 return Err(ApiError::new(
                     StatusCode::PAYLOAD_TOO_LARGE,
                     format!("文件不能超过 {} MB", state.config.max_upload_mb()),
@@ -1020,7 +1144,6 @@ async fn create_document(
         output.flush().await.map_err(ApiError::internal)?;
         drop(output);
         if size == 0 {
-            let _ = fs::remove_dir_all(&root).await;
             return Err(ApiError::bad_request("文件为空"));
         }
         fs::rename(&partial, &final_path)
@@ -1034,16 +1157,59 @@ async fn create_document(
             hex::encode(sha.finalize()),
         ));
     }
-    let Some((filename, path, size, mime, sha)) = saved else {
-        let _ = fs::remove_dir_all(&root).await;
+    let Some((filename, path, size, mut mime, sha)) = saved else {
         return Err(ApiError::bad_request("缺少文件字段"));
     };
+    // Multipart field order is not significant. Only validate the chosen mode
+    // after every field has been read, even when the file arrived first.
+    let processing_mode = resolve_processing_mode(requested_processing_mode.as_deref())?;
+    validate_mode_filename(processing_mode, &filename)?;
+    match processing_mode {
+        ProcessingMode::Mineru => {
+            if !settings::configured(
+                &state.pool,
+                &state.config.secret_key,
+                settings::MINERU_API_KEY,
+            )
+            .await
+            {
+                return Err(ApiError::new(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "管理员尚未配置 MinerU",
+                ));
+            }
+        }
+        ProcessingMode::Pdf2zh => {
+            if !state.config.pdf2zh_available() {
+                return Err(ApiError::new(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "原版式 PDF 翻译运行环境尚未就绪",
+                ));
+            }
+            let mut prefix = Vec::with_capacity(1024);
+            fs::File::open(&path)
+                .await
+                .map_err(ApiError::internal)?
+                .take(1024)
+                .read_to_end(&mut prefix)
+                .await
+                .map_err(ApiError::internal)?;
+            if !has_pdf_header(&prefix) {
+                return Err(ApiError::new(
+                    StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                    "原版式模式只接受有效的 PDF 文件；扫描件请使用 MinerU 模式",
+                ));
+            }
+            // The worker performs the full PDF/text-layer preflight before any
+            // translation request. Client-supplied MIME is not a PDF validator.
+            mime = "application/pdf".into();
+        }
+    }
     let configured_tier = settings::translation_tier(&state.pool, &state.config.secret_key).await?;
     let requested_translation_tier = match requested_translation_tier {
         Some(value) => match parse_translation_tier(&value) {
             Ok(tier) => Some(tier),
             Err(message) => {
-                let _ = fs::remove_dir_all(&root).await;
                 return Err(ApiError::bad_request(message));
             }
         },
@@ -1062,13 +1228,11 @@ async fn create_document(
     )
     .await;
     if requested_translation_tier == Some(1) && !google_ready {
-        let _ = fs::remove_dir_all(&root).await;
         return Err(ApiError::bad_request(
             "极速档需要管理员先配置并验证 Google Cloud Translation API Key",
         ));
     }
     if requested_translation_tier.is_some_and(|tier| tier > 1) && !deepseek_ready {
-        let _ = fs::remove_dir_all(&root).await;
         return Err(ApiError::bad_request(
             "所选均衡档或精准档需要管理员先配置并验证 DeepSeek API Key",
         ));
@@ -1079,7 +1243,6 @@ async fn create_document(
         _ if google_ready => 1,
         _ if deepseek_ready => 2,
         _ => {
-            let _ = fs::remove_dir_all(&root).await;
             return Err(ApiError::bad_request("管理员尚未配置任何可用的翻译服务"));
         }
     };
@@ -1100,22 +1263,33 @@ async fn create_document(
         .unwrap_or(&path)
         .to_string_lossy()
         .replace('\\', "/");
-    let model = settings::get(
-        &state.pool,
-        &state.config.secret_key,
-        settings::MINERU_MODEL,
-    )
-    .await?
-    .unwrap_or_else(|| "vlm".into());
+    let model = if processing_mode == ProcessingMode::Mineru {
+        settings::get(
+            &state.pool,
+            &state.config.secret_key,
+            settings::MINERU_MODEL,
+        )
+        .await?
+        .unwrap_or_else(|| "vlm".into())
+    } else {
+        // This legacy non-null column is unused by native-layout jobs.
+        "vlm".into()
+    };
+    let runtime = settings::load_translation_runtime(&state.pool, &state.config).await?;
+    let runtime_snapshot = serde_json::to_value(&runtime).map_err(ApiError::internal)?;
     let sql = format!(
-        "INSERT INTO documents(id,title,original_filename,display_filename,storage_key,title_custom,source_path,source_size,mime_type,status,stage,progress,failure_reason,translate_requested,translation_provider,translation_tier,translation_guidance,translated,is_public,access_token_hash,mineru_task_id,mineru_model,pages_processed,pages_total,image_count,content_html,excerpt,created_at,updated_at,completed_at,markdown_original,markdown_translated,markdown_normalized,upload_sha256,queue_attempts,archive_status,archive_error,archive_manifest,local_archive_status,local_archive_path,r2_mirror_status,r2_mirror_error,r2_prefix,source_r2_key,article_r2_key,mineru_r2_key,api_version,queue_available_at) VALUES($1,$2,$3,$3,$4,$5,$6,$7,$8,'queued','queued',2,NULL,true,$9,$10,NULL,false,false,$11,NULL,$12,NULL,NULL,0,NULL,NULL,NOW(),NOW(),NULL,NULL,NULL,NULL,$13,0,'source_local',NULL,NULL,'source_saved',$14,'disabled',NULL,NULL,NULL,NULL,NULL,'v2',NOW()) RETURNING {}",
+        "INSERT INTO documents(id,title,original_filename,display_filename,storage_key,title_custom,source_path,source_size,mime_type,status,stage,progress,failure_reason,translate_requested,translation_provider,translation_tier,translation_guidance,translated,is_public,access_token_hash,mineru_task_id,mineru_model,pages_processed,pages_total,image_count,content_html,excerpt,created_at,updated_at,completed_at,markdown_original,markdown_translated,markdown_normalized,upload_sha256,queue_attempts,archive_status,archive_error,archive_manifest,local_archive_status,local_archive_path,r2_mirror_status,r2_mirror_error,r2_prefix,source_r2_key,article_r2_key,mineru_r2_key,api_version,queue_available_at,translation_runtime_snapshot,processing_mode) VALUES($1,$2,$3,$3,$4,$5,$6,$7,$8,'queued','queued',2,NULL,true,$9,$10,NULL,false,false,$11,NULL,$12,NULL,NULL,0,NULL,NULL,NOW(),NOW(),NULL,NULL,NULL,NULL,$13,0,'source_local',NULL,NULL,'source_saved',$14,'disabled',NULL,NULL,NULL,NULL,NULL,'v2',NOW(),$15,$16) RETURNING {}",
         document_columns()
     );
+    // Once INSERT is sent, a connection error may leave its commit outcome
+    // unknown. Preserve the source from this point onward, including failures
+    // while writing events or constructing the accepted response.
+    *insertion_started = true;
     let doc = sqlx::query_as::<_, Document>(&sql)
-        .bind(&id)
+        .bind(id)
         .bind(display.trim().chars().take(512).collect::<String>())
         .bind(&filename)
-        .bind(&storage_key)
+        .bind(storage_key)
         .bind(custom_title)
         .bind(source_path)
         .bind(size as i32)
@@ -1126,11 +1300,13 @@ async fn create_document(
         .bind(model)
         .bind(sha)
         .bind(format!("archives/{storage_key}"))
+        .bind(runtime_snapshot)
+        .bind(processing_mode.as_str())
         .fetch_one(&state.pool)
         .await?;
     events::append(
         &state.pool,
-        &id,
+        id,
         EventInput {
             stage: "source_saved",
             state: "completed",
@@ -1148,7 +1324,7 @@ async fn create_document(
     .map_err(ApiError::internal)?;
     events::append(
         &state.pool,
-        &id,
+        id,
         EventInput {
             stage: "queued",
             state: "running",
@@ -1156,7 +1332,8 @@ async fn create_document(
             progress: 2,
             message: "任务已写入 PostgreSQL 持久队列",
             detail: Some(&format!(
-                "文档默认私有；当前浏览器已取得独立访问凭证；并发 Worker 将使用 SKIP LOCKED 原子领取；本次选择的翻译档位已快照为第 {} 档（{}）",
+                "文档默认私有；当前浏览器已取得独立访问凭证；处理模式固定为 {}；并发 Worker 将使用 SKIP LOCKED 原子领取；本次选择的翻译档位已快照为第 {} 档（{}）；翻译分段参数与提示词也已固定，自动重试保持一致",
+                processing_mode.as_str(),
                 translation_tier,
                 match translation_tier {
                     1 => "极速 · Google Cloud Translation",
@@ -1174,7 +1351,7 @@ async fn create_document(
         StatusCode::ACCEPTED,
         [(
             header::SET_COOKIE,
-            document_access_cookie(&id, &access_token)?,
+            document_access_cookie(id, &access_token)?,
         )],
         Json(doc),
     )
@@ -1307,9 +1484,14 @@ async fn r2_for(state: &AppState) -> Result<R2Client, ApiError> {
 }
 
 fn attachment_header(name: &str) -> Option<HeaderValue> {
+    disposition_header(name, false)
+}
+
+fn disposition_header(name: &str, inline: bool) -> Option<HeaderValue> {
     let safe = name.replace(['\r', '\n', '"'], "_");
     HeaderValue::from_str(&format!(
-        "attachment; filename*=UTF-8''{}",
+        "{}; filename*=UTF-8''{}",
+        if inline { "inline" } else { "attachment" },
         url::form_urlencoded::byte_serialize(safe.as_bytes()).collect::<String>()
     ))
     .ok()
@@ -1378,41 +1560,129 @@ async fn download_bundle(
     Ok(response)
 }
 
+#[derive(Debug, Deserialize, Default)]
+struct PdfQuery {
+    variant: Option<String>,
+    #[serde(default)]
+    inline: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PdfVariant {
+    Journal,
+    Mono,
+    Dual,
+}
+
+impl PdfVariant {
+    fn archive_path(self) -> &'static str {
+        match self {
+            Self::Journal => "article/article.pdf",
+            Self::Mono => "pdf2zh/mono.pdf",
+            Self::Dual => "pdf2zh/dual.pdf",
+        }
+    }
+
+    fn document_path(self, document: &Document) -> Option<&str> {
+        match self {
+            Self::Journal | Self::Mono => document.pdf_path.as_deref(),
+            Self::Dual => document.dual_pdf_path.as_deref(),
+        }
+    }
+}
+
+fn select_pdf_variant(mode: &str, requested: Option<&str>) -> Result<PdfVariant, ApiError> {
+    let variant = match requested {
+        None => match mode {
+            "mineru" => PdfVariant::Journal,
+            "pdf2zh" => PdfVariant::Mono,
+            _ => return Err(ApiError::not_found("该文档的 PDF 模式不可用")),
+        },
+        Some("journal") => PdfVariant::Journal,
+        Some("mono") => PdfVariant::Mono,
+        Some("dual") => PdfVariant::Dual,
+        _ => {
+            return Err(ApiError::bad_request(
+                "variant 只能是 journal、mono 或 dual",
+            ));
+        }
+    };
+    if !matches!(
+        (mode, variant),
+        ("mineru", PdfVariant::Journal) | ("pdf2zh", PdfVariant::Mono | PdfVariant::Dual)
+    ) {
+        return Err(ApiError::not_found("该处理模式不提供所选 PDF 版本"));
+    }
+    Ok(variant)
+}
+
+fn pdf_variants_available(document: &Document) -> serde_json::Value {
+    json!({
+        "journal": document.processing_mode == "mineru" && document.pdf_path.is_some(),
+        "mono": document.processing_mode == "pdf2zh" && document.pdf_path.is_some(),
+        "dual": document.processing_mode == "pdf2zh" && document.dual_pdf_path.is_some(),
+    })
+}
+
+fn pdf_variant_download_name(title: &str, variant: PdfVariant) -> String {
+    match variant {
+        PdfVariant::Journal => pdf_download_name(title),
+        PdfVariant::Mono => format!("{}-中文译文.pdf", safe_download_stem(title)),
+        PdfVariant::Dual => format!("{}-双语对照.pdf", safe_download_stem(title)),
+    }
+}
+
+fn pdf_response(mut response: Response, name: &str, inline: bool) -> Response {
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/pdf"),
+    );
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("private, no-store"),
+    );
+    response.headers_mut().insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
+    if let Some(value) = disposition_header(name, inline) {
+        response
+            .headers_mut()
+            .insert(header::CONTENT_DISPOSITION, value);
+    }
+    response
+}
+
 async fn download_pdf(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     AxumPath(id): AxumPath<String>,
+    Query(query): Query<PdfQuery>,
 ) -> Result<Response, ApiError> {
     let doc = find_accessible_document(&state, &headers, &id).await?;
-    let download_name = pdf_download_name(&doc.title);
-    if let Some(relative) = doc.pdf_path.as_deref()
+    let variant = select_pdf_variant(&doc.processing_mode, query.variant.as_deref())?;
+    let download_name = pdf_variant_download_name(&doc.title, variant);
+    let relative = variant.document_path(&doc);
+    if let Some(relative) = relative
         && let Some(path) = safe_data_path(&state.config.data_root, relative)
         && path.is_file()
     {
         let file = fs::File::open(path).await.map_err(ApiError::internal)?;
-        let mut response = Response::new(Body::from_stream(ReaderStream::new(file)));
-        response.headers_mut().insert(
-            header::CONTENT_TYPE,
-            HeaderValue::from_static("application/pdf"),
-        );
-        if let Some(value) = attachment_header(&download_name) {
-            response
-                .headers_mut()
-                .insert(header::CONTENT_DISPOSITION, value);
-        }
-        return Ok(response);
+        let response = Response::new(Body::from_stream(ReaderStream::new(file)));
+        return Ok(pdf_response(response, &download_name, query.inline));
     }
-    if doc.pdf_path.is_some()
+    if relative.is_some()
         && let Some(prefix) = doc.r2_prefix.as_deref()
     {
-        return r2_response(
+        let response = r2_response(
             &state,
-            &format!("{prefix}/article/article.pdf"),
-            Some(&download_name),
+            &format!("{prefix}/{}", variant.archive_path()),
+            None,
         )
-        .await;
+        .await?;
+        return Ok(pdf_response(response, &download_name, query.inline));
     }
-    Err(ApiError::not_found("该文档尚未生成期刊排版 PDF"))
+    Err(ApiError::not_found("该文档尚未生成所选 PDF 版本"))
 }
 
 fn build_bundle(
@@ -1508,6 +1778,7 @@ fn build_bundle(
         "original_filename": doc.original_filename,
         "source_size": doc.source_size,
         "mime_type": doc.mime_type,
+        "processing_mode": doc.processing_mode,
         "sha256": doc.upload_sha256,
         "status": doc.status,
         "local_archive_status": doc.local_archive_status,
@@ -1515,8 +1786,12 @@ fn build_bundle(
         "translation_provider": doc.translation_provider,
         "translation_tier": doc.translation_tier,
         "translation_guidance_available": doc.translation_guidance.is_some(),
-        "journal_pdf_available": doc.pdf_path.is_some(),
-        "journal_pdf_size": doc.pdf_size,
+        "pdf_available": doc.pdf_path.is_some(),
+        "pdf_variants_available": pdf_variants_available(doc),
+        "pdf_size": doc.pdf_size,
+        "dual_pdf_size": doc.dual_pdf_size,
+        "journal_pdf_available": doc.processing_mode == "mineru" && doc.pdf_path.is_some(),
+        "journal_pdf_size": if doc.processing_mode == "mineru" { doc.pdf_size } else { None },
         "translated": doc.translated,
         "is_public": doc.is_public,
         "created_at": doc.created_at,
@@ -1541,7 +1816,7 @@ fn build_bundle(
         &mut zip,
         options,
         "README.txt",
-        "文流本地永久归档包\n\nsource/：原始文件（固定 ASCII 物理名）\nmarkdown/：MinerU 原稿、中文译稿和规范化稿\nimages/：已本地化的 WebP 图片\narticle/：期刊排版 PDF、安全 HTML 和可复现打印版 HTML\nmetadata/：当前展示名称、校验信息和完整处理事件\n\n文件展示名与服务器物理名分离，重命名不会改动归档内容。\n".as_bytes(),
+        "文流本地永久归档包\n\nsource/：原始文件（固定 ASCII 物理名）\nmetadata/：处理模式、当前展示名称、校验信息和完整处理事件\n\nMinerU 模式：\nmarkdown/：MinerU 原稿、中文译稿和规范化稿\nimages/：已本地化的 WebP 图片\narticle/：期刊排版 PDF、安全 HTML 和可复现打印版 HTML\n\n原版式 pdf2zh 模式：\npdf2zh/mono.pdf：保留原版式的中文译文\npdf2zh/dual.pdf：原文与译文双语对照\n此模式不生成 Markdown 或期刊排版 HTML。\n\n归档包仅包含当前任务已有的文件；处理模式见 metadata/document.json。文件展示名与服务器物理名分离，重命名不会改动归档内容。\n".as_bytes(),
     )?;
     zip.finish()?;
     Ok(())
@@ -1582,6 +1857,34 @@ fn parse_translation_tier(value: &str) -> Result<i16, &'static str> {
         Ok(tier @ 1..=3) => Ok(tier),
         _ => Err("翻译质量档位只能是 1、2 或 3"),
     }
+}
+
+fn validate_mode_filename(mode: ProcessingMode, filename: &str) -> Result<(), ApiError> {
+    let extension = Path::new(filename)
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(str::to_ascii_lowercase)
+        .unwrap_or_default();
+    if mode == ProcessingMode::Pdf2zh && extension != "pdf" {
+        return Err(ApiError::new(
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "原版式模式只接受带文本层的 PDF；Office 文档、图片和扫描件请使用 MinerU 模式",
+        ));
+    }
+    Ok(())
+}
+
+fn resolve_processing_mode(value: Option<&str>) -> Result<ProcessingMode, ApiError> {
+    Ok(value
+        .map(ProcessingMode::parse)
+        .transpose()?
+        .unwrap_or(ProcessingMode::Mineru))
+}
+
+fn has_pdf_header(prefix: &[u8]) -> bool {
+    prefix[..prefix.len().min(1024)]
+        .windows(5)
+        .any(|window| window == b"%PDF-")
 }
 
 fn safe_data_path(data_root: &Path, relative: &str) -> Option<PathBuf> {
@@ -1696,30 +1999,110 @@ async fn openapi(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> 
         format!("{}/api/v1", state.config.public_origin)
     };
     Json(json!({
-        "openapi":"3.1.0","info":{"title":format!("{} Open API",state.config.app_name),"version":"1.4.0","description":"文档解析、三档并发中文翻译、期刊排版 PDF、永久归档与实时进度 API。管理员设置默认档位，上传者可为本次任务选择已开放档位。新任务默认私有；上传响应设置当前浏览器专属 HttpOnly 访问 Cookie，管理员可改为公开。没有删除接口。"},
+        "openapi":"3.1.0","info":{"title":format!("{} Open API",state.config.app_name),"version":"1.5.0","description":"MinerU 文档解析或 pdf2zh 原版式 PDF 翻译，共享三档翻译服务、全站任务池与管理员运行参数。通过 /api/config/public 的 processing_modes 查询各模式能力。新任务默认私有；上传响应设置当前浏览器专属 HttpOnly 访问 Cookie，查询、下载及 inline 预览均需该权限，管理员可改为公开。源文件与结果永久归档，没有删除接口。兼容别名 /api/documents 与 /api/documents/{id}/pdf 使用同一模式、变体和鉴权规则。"},
         "servers":[{"url":server_url}],
         "paths":{
-          "/jobs":{"get":{"summary":"管理员主动公开的任务列表"},"post":{"summary":"上传文档并创建默认私有任务","description":"translation_tier 可选 1–3；极速档使用 Google Cloud Translation，均衡档使用 deepseek-v4-flash 非思考模式，精准档使用其思考模式。选定档位在任务创建时快照；响应通过 Set-Cookie 赋予当前浏览器文档访问权。","requestBody":{"required":true,"content":{"multipart/form-data":{"schema":{"type":"object","required":["file"],"properties":{"file":{"type":"string","format":"binary"},"title":{"type":"string"},"translation_tier":{"type":"integer","minimum":1,"maximum":3}}}}}}}},
-          "/jobs/{id}":{"get":{"summary":"任务状态与文章"}},
+          "/jobs":{"get":{"summary":"管理员主动公开的任务列表"},"post":{"summary":"上传文档并创建默认私有任务","description":"processing_mode 默认 mineru；pdf2zh 仅接受带文本层的 PDF，不需要 MinerU Key，不生成 Markdown。字段顺序任意，处理模式创建后不可变。translation_tier 可选 1–3；极速档使用 Google Cloud Translation，均衡档使用 deepseek-v4-flash 非思考模式，精准档使用其思考模式。模式、档位、分段参数与提示词在任务创建时快照；响应通过 Set-Cookie 赋予当前浏览器文档访问权。","requestBody":{"required":true,"content":{"multipart/form-data":{"schema":{"type":"object","required":["file"],"properties":{"file":{"type":"string","format":"binary"},"title":{"type":"string"},"processing_mode":{"type":"string","enum":["mineru","pdf2zh"],"default":"mineru"},"translation_tier":{"type":"integer","minimum":1,"maximum":3}}}}}}}},
+          "/jobs/{id}":{"get":{"summary":"任务状态与产物能力","description":"返回 processing_mode、主 PDF 的 pdf_available、pdf_variants_available:{journal,mono,dual} 和 markdown_available。原版式任务的 content_html 与 Markdown 可以为空，这不代表处理失败。磁盘路径和 R2 对象键不对外返回。"}},
           "/jobs/{id}/events":{"get":{"summary":"增量读取永久进度事件"}},
           "/jobs/{id}/events/stream":{"get":{"summary":"SSE 实时进度流"}},
-          "/jobs/{id}/markdown":{"get":{"summary":"读取永久 Markdown","parameters":[{"name":"variant","in":"query","schema":{"enum":["original","translated","normalized"]}}]}},
+          "/jobs/{id}/markdown":{"get":{"summary":"读取已有的永久 Markdown","description":"仅在对应 Markdown 产物存在时返回；pdf2zh 原版式任务不生成 Markdown，因此通常返回 404。","parameters":[{"name":"variant","in":"query","schema":{"enum":["original","translated","normalized"]}}]}},
           "/jobs/{id}/source":{"get":{"summary":"按数据库展示名下载原始文件"}},
-          "/jobs/{id}/bundle":{"get":{"summary":"下载包含源文件、Markdown、PDF、WebP 与元数据的完整 ZIP"}},
-          "/jobs/{id}/pdf":{"get":{"summary":"下载永久保存的期刊论文风格 PDF"}}
+          "/jobs/{id}/bundle":{"get":{"summary":"下载源文件、该模式已有产物与元数据的完整 ZIP","description":"MinerU 包含 Markdown、期刊 PDF 等已有产物；pdf2zh 包含 pdf2zh/mono.pdf 和 pdf2zh/dual.pdf。Markdown、HTML、图片不是所有模式的必需产物。"}},
+          "/jobs/{id}/pdf":{"get":{"summary":"下载或预览指定 PDF 版本","description":"省略 variant 时下载主产物：MinerU 为期刊版 journal，pdf2zh 为中文单语版 mono。dual 仅用于 pdf2zh。inline=true 仅修改 Content-Disposition，不放宽访问权限。","parameters":[{"name":"variant","in":"query","schema":{"type":"string","enum":["journal","mono","dual"]}},{"name":"inline","in":"query","schema":{"type":"boolean","default":false}}],"responses":{"200":{"description":"PDF 文件","content":{"application/pdf":{}}},"400":{"description":"无效查询参数"},"404":{"description":"文档无访问权限或该模式没有所选产物"}}}}
         }
     }))
 }
 
 async fn api_docs() -> Html<&'static str> {
     Html(
-        r#"<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>文流 Open API</title><style>body{font:16px/1.7 system-ui;max-width:920px;margin:48px auto;padding:0 24px;color:#17201d}code,pre{background:#f3f5f3;border-radius:8px}code{padding:2px 6px}pre{padding:18px;overflow:auto}a{color:#176b4d}</style></head><body><p><a href="/">← 返回文流</a></p><h1>文流 Open API v1</h1><p>上传无需登录，但新任务默认私有。上传响应设置当前客户端专属访问 Cookie；后续查询、SSE 与下载必须携带它。管理员可在后台公开文档。管理员设置默认翻译档位，上传者可为本次任务选择已开放档位；源文件、Markdown、期刊排版 PDF 与处理结果永久保存在 VPS 本地，R2 是可选镜像。</p><h2>创建私有任务并保存访问 Cookie</h2><pre>curl -c docflow.cookies -F "file=@paper.pdf" -F "title=文档标题" -F "translation_tier=3" http://你的服务器IP:38100/api/v1/jobs</pre><h2>实时进度</h2><pre>curl -b docflow.cookies -N http://你的服务器IP:38100/api/v1/jobs/{id}/events/stream?after_id=0</pre><h2>下载期刊排版 PDF</h2><pre>curl -b docflow.cookies -OJ http://你的服务器IP:38100/api/v1/jobs/{id}/pdf</pre><h2>完整打包</h2><pre>curl -b docflow.cookies -OJ http://你的服务器IP:38100/api/v1/jobs/{id}/bundle</pre><h2>机器可读规范</h2><p><a href="/api/openapi.json">OpenAPI 3.1 JSON</a></p></body></html>"#,
+        r#"<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>文流 Open API</title><style>body{font:16px/1.7 system-ui;max-width:920px;margin:48px auto;padding:0 24px;color:#17201d}code,pre{background:#f3f5f3;border-radius:8px}code{padding:2px 6px}pre{padding:18px;overflow:auto}a{color:#176b4d}</style></head><body><p><a href="/">← 返回文流</a></p><h1>文流 Open API v1</h1><p>上传无需登录，但新任务默认私有。上传响应设置当前客户端专属访问 Cookie；后续查询、SSE、下载与 PDF 预览必须携带它。管理员可在后台公开文档。所有模式共享管理员配置的三档翻译服务、全站任务池、分段参数与提示词；源文件与处理结果永久保存在 VPS 本地，R2 是可选镜像。</p><h2>选择处理模式</h2><p><code>processing_mode=mineru</code> 为默认模式，支持 PDF、Office、图片与 HTML，输出 Markdown、HTML 和期刊排版 PDF。<code>processing_mode=pdf2zh</code> 只接受带文本层的原生 PDF，保留原版式，输出中文单语 PDF 和双语对照 PDF；不需要 MinerU Key，也不生成 Markdown。扫描件请使用 MinerU。各模式是否可用以及允许的扩展名，见 <a href="/api/config/public">公开能力配置</a> 的 <code>processing_modes</code>；旧字段 <code>accepting_uploads</code> 仅表示默认 MinerU 模式可用。</p><h2>创建私有任务并保存访问 Cookie</h2><pre>curl -c docflow.cookies -F "file=@paper.pdf" -F "title=文档标题" -F "processing_mode=pdf2zh" -F "translation_tier=3" http://你的服务器IP:38100/api/v1/jobs</pre><p>表单字段顺序任意。处理模式和翻译档位在创建时固定；自动重试沿用参数快照，管理员手动重试会更新分段参数与提示词快照。</p><h2>实时进度</h2><pre>curl -b docflow.cookies -N http://你的服务器IP:38100/api/v1/jobs/{id}/events/stream?after_id=0</pre><h2>下载主 PDF 或双语对照</h2><pre>curl -b docflow.cookies -OJ http://你的服务器IP:38100/api/v1/jobs/{id}/pdf
+curl -b docflow.cookies -OJ "http://你的服务器IP:38100/api/v1/jobs/{id}/pdf?variant=dual"</pre><p>省略 <code>variant</code> 时，MinerU 返回期刊版，pdf2zh 返回中文单语版。可显式选择 <code>journal</code>、<code>mono</code> 或 <code>dual</code>，但不能跨处理模式选择。需要浏览器新窗口预览时，可使用 <code>?variant=mono&amp;inline=true</code>；预览与下载使用相同鉴权，不会公开文档。</p><h2>完整打包</h2><pre>curl -b docflow.cookies -OJ http://你的服务器IP:38100/api/v1/jobs/{id}/bundle</pre><p>归档包含源文件、本任务已有产物和审计元数据。原版式任务未生成 Markdown 是正常情况；对应 Markdown 请求会返回 404。详情接口的 <code>pdf_variants_available</code> 与 <code>markdown_available</code> 可用于判断哪些产物已经生成。</p><h2>兼容接口与规范</h2><p><code>/api/documents</code> 及其详情、下载接口继续使用同一处理模式和鉴权规则；原始文件的兼容下载路径为 <code>/api/documents/{id}/download</code>。<a href="/api/openapi.json">OpenAPI 3.1 JSON</a></p></body></html>"#,
     )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn document_fixture(mode: &str) -> Document {
+        let root = "archives/0123456789abcdef0123456789abcdef";
+        Document {
+            id: Uuid::nil().to_string(),
+            title: "中文/论文".into(),
+            original_filename: "original.pdf".into(),
+            display_filename: "论文.pdf".into(),
+            storage_key: "0123456789abcdef0123456789abcdef".into(),
+            title_custom: true,
+            source_path: format!("{root}/source/source.pdf"),
+            source_size: 20,
+            mime_type: Some("application/pdf".into()),
+            processing_mode: mode.into(),
+            status: "completed".into(),
+            stage: "completed".into(),
+            progress: 100,
+            failure_reason: None,
+            translate_requested: true,
+            translation_provider: "google".into(),
+            translation_tier: 1,
+            translation_guidance: None,
+            translated: true,
+            is_public: false,
+            access_token_hash: Some(security::hash_document_access_token("fixture-access-token")),
+            mineru_task_id: None,
+            mineru_model: "vlm".into(),
+            pages_processed: Some(1),
+            pages_total: Some(1),
+            image_count: 0,
+            content_html: None,
+            excerpt: None,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+            completed_at: Some(chrono::Utc::now()),
+            markdown_original: None,
+            markdown_translated: None,
+            markdown_normalized: None,
+            upload_sha256: None,
+            queue_attempts: 1,
+            archive_status: "local_archived".into(),
+            archive_error: None,
+            local_archive_status: "archived".into(),
+            local_archive_path: Some(root.into()),
+            r2_mirror_status: "disabled".into(),
+            r2_mirror_error: None,
+            pdf_path: Some(format!(
+                "{root}/{}",
+                if mode == "pdf2zh" {
+                    "pdf2zh/mono.pdf"
+                } else {
+                    "article/article.pdf"
+                }
+            )),
+            pdf_size: Some(20),
+            dual_pdf_path: (mode == "pdf2zh").then(|| format!("{root}/pdf2zh/dual.pdf")),
+            dual_pdf_size: (mode == "pdf2zh").then_some(40),
+            r2_prefix: None,
+            source_r2_key: None,
+            api_version: "v2".into(),
+        }
+    }
+
+    struct TestDirectory(PathBuf);
+
+    impl TestDirectory {
+        fn new() -> Self {
+            let path =
+                std::env::temp_dir().join(format!("docflow-api-test-{}", Uuid::new_v4().simple()));
+            std::fs::create_dir(&path).unwrap();
+            Self(path)
+        }
+    }
+
+    impl Drop for TestDirectory {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
 
     #[test]
     fn filename_cleanup_drops_paths_and_control_characters() {
@@ -1779,5 +2162,233 @@ mod tests {
         for invalid in ["", "0", "4", "5", "2.5", "agent"] {
             assert!(parse_translation_tier(invalid).is_err());
         }
+    }
+
+    #[test]
+    fn processing_mode_is_explicit_and_legacy_default_stays_mineru() {
+        assert_eq!(
+            resolve_processing_mode(None).unwrap(),
+            ProcessingMode::Mineru
+        );
+        assert_eq!(
+            resolve_processing_mode(Some("mineru")).unwrap(),
+            ProcessingMode::Mineru
+        );
+        assert_eq!(
+            resolve_processing_mode(Some("pdf2zh")).unwrap(),
+            ProcessingMode::Pdf2zh
+        );
+        for invalid in ["", "native", "auto", "PDF2ZH", "../mineru"] {
+            assert_eq!(
+                resolve_processing_mode(Some(invalid)).unwrap_err().status,
+                StatusCode::BAD_REQUEST
+            );
+        }
+    }
+
+    #[test]
+    fn native_capability_does_not_depend_on_mineru_key() {
+        let native_only = processing_capabilities(false, true, true);
+        assert!(!native_only.mineru.available);
+        assert!(native_only.pdf2zh.available);
+        assert_eq!(native_only.pdf2zh.accepted_extensions, vec![".pdf"]);
+        assert!(native_only.pdf2zh.native_pdf_only);
+        assert!(!native_only.mineru.native_pdf_only);
+        let no_translation = processing_capabilities(true, false, true);
+        assert!(!no_translation.mineru.available && !no_translation.pdf2zh.available);
+        let no_runtime = processing_capabilities(true, true, false);
+        assert!(no_runtime.mineru.available && !no_runtime.pdf2zh.available);
+    }
+
+    #[test]
+    fn native_uploads_require_pdf_extension_and_a_pdf_header() {
+        assert!(validate_mode_filename(ProcessingMode::Pdf2zh, "论文.PDF").is_ok());
+        for filename in ["document.docx", "image.png", "no-extension"] {
+            assert_eq!(
+                validate_mode_filename(ProcessingMode::Pdf2zh, filename)
+                    .unwrap_err()
+                    .status,
+                StatusCode::UNSUPPORTED_MEDIA_TYPE
+            );
+        }
+        assert!(validate_mode_filename(ProcessingMode::Mineru, "document.docx").is_ok());
+        assert!(has_pdf_header(b"%PDF-1.7\n"));
+        assert!(has_pdf_header(b"\n%PDF-1.4\n"));
+        assert!(!has_pdf_header(b"not a PDF"));
+        assert!(!has_pdf_header(b""));
+        let mut late_header = vec![b' '; 1024];
+        late_header.extend_from_slice(b"%PDF-");
+        assert!(!has_pdf_header(&late_header));
+    }
+
+    #[test]
+    fn pdf_variants_have_strict_mode_and_storage_mappings() {
+        assert_eq!(
+            select_pdf_variant("mineru", None).unwrap(),
+            PdfVariant::Journal
+        );
+        assert_eq!(
+            select_pdf_variant("pdf2zh", None).unwrap(),
+            PdfVariant::Mono
+        );
+        assert_eq!(
+            select_pdf_variant("pdf2zh", Some("dual")).unwrap(),
+            PdfVariant::Dual
+        );
+        assert_eq!(PdfVariant::Journal.archive_path(), "article/article.pdf");
+        assert_eq!(PdfVariant::Mono.archive_path(), "pdf2zh/mono.pdf");
+        assert_eq!(PdfVariant::Dual.archive_path(), "pdf2zh/dual.pdf");
+        for (mode, variant) in [
+            ("mineru", "mono"),
+            ("mineru", "dual"),
+            ("pdf2zh", "journal"),
+        ] {
+            assert_eq!(
+                select_pdf_variant(mode, Some(variant)).unwrap_err().status,
+                StatusCode::NOT_FOUND
+            );
+        }
+        for invalid in ["", "primary", "../../secret", "mono.pdf"] {
+            assert_eq!(
+                select_pdf_variant("pdf2zh", Some(invalid))
+                    .unwrap_err()
+                    .status,
+                StatusCode::BAD_REQUEST
+            );
+        }
+        let native = document_fixture("pdf2zh");
+        assert_eq!(
+            PdfVariant::Mono.document_path(&native),
+            native.pdf_path.as_deref()
+        );
+        assert_eq!(
+            PdfVariant::Dual.document_path(&native),
+            native.dual_pdf_path.as_deref()
+        );
+        assert_eq!(
+            pdf_variants_available(&native),
+            json!({"journal": false, "mono": true, "dual": true})
+        );
+        let mut mineru = document_fixture("mineru");
+        mineru.dual_pdf_path = Some("unused-stale-field.pdf".into());
+        assert_eq!(
+            pdf_variants_available(&mineru),
+            json!({"journal": true, "mono": false, "dual": false})
+        );
+    }
+
+    #[test]
+    fn inline_pdf_changes_disposition_without_public_cache_headers() {
+        let name = pdf_variant_download_name("中文/论文\r\n", PdfVariant::Dual);
+        assert_eq!(name, "中文_论文-双语对照.pdf");
+        for inline in [false, true] {
+            let response = pdf_response(Response::new(Body::empty()), &name, inline);
+            let disposition = response.headers()[header::CONTENT_DISPOSITION]
+                .to_str()
+                .unwrap();
+            assert!(disposition.starts_with(if inline { "inline;" } else { "attachment;" }));
+            assert!(!disposition.contains('\r') && !disposition.contains('\n'));
+            assert_eq!(response.headers()[header::CONTENT_TYPE], "application/pdf");
+            assert_eq!(
+                response.headers()[header::CACHE_CONTROL],
+                "private, no-store"
+            );
+            assert_eq!(
+                response.headers()[header::X_CONTENT_TYPE_OPTIONS],
+                "nosniff"
+            );
+        }
+        let defaults: PdfQuery = serde_json::from_value(json!({})).unwrap();
+        assert!(defaults.variant.is_none() && !defaults.inline);
+    }
+
+    #[test]
+    fn native_documents_keep_the_existing_private_capability_rules() {
+        let secret = "fixture-site-secret";
+        let mut doc = document_fixture("pdf2zh");
+        let mut headers = HeaderMap::new();
+        assert!(!document_access_allowed(secret, &headers, &doc));
+        headers.insert(
+            header::COOKIE,
+            HeaderValue::from_str(&format!("{}=wrong", document_cookie_name(&doc.id).unwrap()))
+                .unwrap(),
+        );
+        assert!(!document_access_allowed(secret, &headers, &doc));
+        headers.insert(
+            header::COOKIE,
+            HeaderValue::from_str(&format!(
+                "{}=fixture-access-token",
+                document_cookie_name(&doc.id).unwrap()
+            ))
+            .unwrap(),
+        );
+        assert!(document_access_allowed(secret, &headers, &doc));
+        headers.clear();
+        let token = security::create_token(secret, "admin").unwrap();
+        headers.insert(
+            header::AUTHORIZATION,
+            HeaderValue::from_str(&format!("Bearer {token}")).unwrap(),
+        );
+        assert!(document_access_allowed(secret, &headers, &doc));
+        headers.clear();
+        doc.is_public = true;
+        assert!(document_access_allowed(secret, &headers, &doc));
+    }
+
+    #[test]
+    fn native_document_json_never_exposes_disk_paths_or_access_secrets() {
+        let value = serde_json::to_value(document_fixture("pdf2zh")).unwrap();
+        assert_eq!(value["processing_mode"], "pdf2zh");
+        assert_eq!(value["dual_pdf_size"], 40);
+        for private_field in [
+            "source_path",
+            "pdf_path",
+            "dual_pdf_path",
+            "local_archive_path",
+            "storage_key",
+            "access_token_hash",
+            "r2_prefix",
+        ] {
+            assert!(value.get(private_field).is_none(), "{private_field} leaked");
+        }
+    }
+
+    #[test]
+    fn native_bundle_contains_both_pdfs_without_mandatory_markdown() {
+        let temporary = TestDirectory::new();
+        let doc = document_fixture("pdf2zh");
+        let archive_root = temporary.0.join(doc.local_archive_path.as_deref().unwrap());
+        for name in ["source/source.pdf", "pdf2zh/mono.pdf", "pdf2zh/dual.pdf"] {
+            let destination = archive_root.join(name);
+            std::fs::create_dir_all(destination.parent().unwrap()).unwrap();
+            std::fs::write(destination, b"%PDF-1.7\nfixture\n%%EOF\n").unwrap();
+        }
+        let output = temporary.0.join("bundle.zip");
+        build_bundle(&output, &temporary.0, &doc, &[]).unwrap();
+        let mut bundle = zip::ZipArchive::new(std::fs::File::open(output).unwrap()).unwrap();
+        for name in [
+            "source/source.pdf",
+            "pdf2zh/mono.pdf",
+            "pdf2zh/dual.pdf",
+            "metadata/events.json",
+        ] {
+            assert!(bundle.by_name(name).is_ok(), "missing {name}");
+        }
+        assert!(bundle.by_name("markdown/normalized.md").is_err());
+        assert!(bundle.by_name("article/article.pdf").is_err());
+        let mut metadata = String::new();
+        std::io::Read::read_to_string(
+            &mut bundle.by_name("metadata/document.json").unwrap(),
+            &mut metadata,
+        )
+        .unwrap();
+        let metadata: serde_json::Value = serde_json::from_str(&metadata).unwrap();
+        assert_eq!(metadata["processing_mode"], "pdf2zh");
+        assert_eq!(
+            metadata["pdf_variants_available"],
+            json!({"journal": false, "mono": true, "dual": true})
+        );
+        assert_eq!(metadata["journal_pdf_available"], false);
+        assert_eq!(metadata["journal_pdf_size"], serde_json::Value::Null);
     }
 }

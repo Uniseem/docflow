@@ -6,6 +6,7 @@ use std::{
 use anyhow::{Context, Result};
 use serde_json::{Value, json};
 use sqlx::Row;
+use tokio::io::AsyncReadExt;
 use walkdir::WalkDir;
 
 use crate::{
@@ -18,15 +19,49 @@ use crate::{
 
 use super::{document_root, markdown::Article, pdf::PdfArtifact};
 
-pub struct ArchiveInput<'a> {
-    pub source: &'a Path,
-    pub mineru_zip: &'a Path,
-    pub final_root: &'a Path,
-    pub original_markdown: &'a str,
-    pub translated_markdown: Option<&'a str>,
-    pub translation_guidance: Option<&'a str>,
-    pub article: &'a Article,
-    pub pdf: &'a PdfArtifact,
+pub enum ArchiveInput<'a> {
+    Mineru {
+        source: &'a Path,
+        mineru_zip: &'a Path,
+        final_root: &'a Path,
+        original_markdown: &'a str,
+        translated_markdown: Option<&'a str>,
+        translation_guidance: Option<&'a str>,
+        article: &'a Article,
+        pdf: &'a PdfArtifact,
+    },
+    Pdf2zh {
+        source: &'a Path,
+        final_root: &'a Path,
+        mono_pdf: &'a Path,
+        dual_pdf: &'a Path,
+        mono_bytes: u64,
+        dual_bytes: u64,
+        pages: i32,
+    },
+}
+
+impl ArchiveInput<'_> {
+    fn processing_mode(&self) -> &'static str {
+        match self {
+            Self::Mineru { .. } => "mineru",
+            Self::Pdf2zh { .. } => "pdf2zh",
+        }
+    }
+
+    fn source(&self) -> &Path {
+        match self {
+            Self::Mineru { source, .. } | Self::Pdf2zh { source, .. } => source,
+        }
+    }
+}
+
+struct ArchivedOutputs {
+    primary_path: &'static str,
+    primary_bytes: u64,
+    dual_bytes: Option<u64>,
+    pages: Option<i32>,
+    metadata: Value,
 }
 
 pub async fn archive_and_publish(
@@ -34,10 +69,16 @@ pub async fn archive_and_publish(
     id: &str,
     input: ArchiveInput<'_>,
 ) -> Result<()> {
-    let storage_key: String = sqlx::query_scalar("SELECT storage_key FROM documents WHERE id=$1")
+    let row = sqlx::query("SELECT storage_key,processing_mode FROM documents WHERE id=$1")
         .bind(id)
         .fetch_one(&state.pool)
         .await?;
+    let storage_key: String = row.get("storage_key");
+    let processing_mode = input.processing_mode();
+    let stored_mode: String = row.get("processing_mode");
+    if stored_mode != processing_mode {
+        anyhow::bail!("归档处理模式与任务快照不一致");
+    }
     let archive_root = archive_root(state, &storage_key)?;
     let relative_root = format!("archives/{storage_key}");
 
@@ -54,7 +95,7 @@ pub async fn archive_and_publish(
     .await?;
 
     let source_extension = input
-        .source
+        .source()
         .extension()
         .and_then(|value| value.to_str())
         .filter(|value| value.chars().all(|ch| ch.is_ascii_alphanumeric()))
@@ -63,7 +104,7 @@ pub async fn archive_and_publish(
     let source_destination = archive_root
         .join("source")
         .join(format!("source.{source_extension}"));
-    copy_atomic(input.source, &source_destination).await?;
+    copy_atomic(input.source(), &source_destination).await?;
     let source_bytes = tokio::fs::metadata(&source_destination).await?.len() as i64;
     events::append(
         &state.pool,
@@ -83,92 +124,13 @@ pub async fn archive_and_publish(
     )
     .await?;
 
-    copy_atomic(input.mineru_zip, &archive_root.join("mineru/result.zip")).await?;
-    write_atomic(
-        &archive_root.join("markdown/original.md"),
-        input.original_markdown.as_bytes(),
-    )
-    .await?;
-    if let Some(translated) = input.translated_markdown {
-        write_atomic(
-            &archive_root.join("markdown/translated.md"),
-            translated.as_bytes(),
-        )
-        .await?;
-    }
-    if let Some(guidance) = input.translation_guidance {
-        write_atomic(
-            &archive_root.join("translation/guidance.md"),
-            guidance.as_bytes(),
-        )
-        .await?;
-    }
-    write_atomic(
-        &archive_root.join("markdown/normalized.md"),
-        input.article.markdown.as_bytes(),
-    )
-    .await?;
-    write_atomic(
-        &archive_root.join("article/article.html"),
-        input.article.html.as_bytes(),
-    )
-    .await?;
-    copy_atomic(&input.pdf.path, &archive_root.join("article/article.pdf")).await?;
-    copy_atomic(
-        &input.pdf.print_html_path,
-        &archive_root.join("article/print.html"),
-    )
-    .await?;
-    events::append(
-        &state.pool,
-        id,
-        EventInput {
-            stage: "local_archive_text",
-            state: "completed",
-            level: "success",
-            progress: 96,
-            message: "Markdown、PDF、HTML、翻译规划与 MinerU 结果已永久落盘",
-            detail: Some(
-                "期刊排版 PDF 和打印版 HTML 使用固定 ASCII 物理名；下载时由数据库标题生成中文展示文件名",
-            ),
-            current: None,
-            total: None,
-        },
-    )
-    .await?;
-
-    let images = files_below(&input.final_root.join("images"))?;
-    for (index, image) in images.iter().enumerate() {
-        let name = image.file_name().context("WebP 文件缺少名称")?;
-        copy_atomic(image, &archive_root.join("images").join(name)).await?;
-        events::append(
-            &state.pool,
-            id,
-            EventInput {
-                stage: "local_archive_image",
-                state: "completed",
-                level: "success",
-                progress: 96 + (((index + 1) * 2 / images.len().max(1)) as i32),
-                message: &format!("本地图片归档 {}/{}", index + 1, images.len()),
-                detail: Some(&format!(
-                    "{} 已作为 WebP 写入永久目录；原图片格式不进入归档",
-                    name.to_string_lossy()
-                )),
-                current: Some((index + 1) as i64),
-                total: Some(images.len() as i64),
-            },
-        )
-        .await?;
-    }
-
+    let outputs = archive_outputs(state, id, &archive_root, input).await?;
     let mut document_metadata = load_document_metadata(state, id).await?;
-    document_metadata["journal_pdf"] = json!({
-        "path": "article/article.pdf",
-        "bytes": input.pdf.bytes,
-        "layout": "A4 academic journal",
-        "renderer": "Chromium",
-        "math": "KaTeX",
-    });
+    if let Some(values) = outputs.metadata.as_object() {
+        for (key, value) in values {
+            document_metadata[key] = value.clone();
+        }
+    }
     write_atomic(
         &archive_root.join("metadata/document.json"),
         &serde_json::to_vec_pretty(&document_metadata)?,
@@ -181,6 +143,7 @@ pub async fn archive_and_publish(
         "schema": "docflow-local-archive-v2",
         "document_id": id,
         "storage_key": storage_key,
+        "processing_mode": processing_mode,
         "created_at": chrono::Utc::now(),
         "retention": "permanent-no-delete-api",
         "naming": "physical-ascii-database-display-name",
@@ -191,13 +154,19 @@ pub async fn archive_and_publish(
         &serde_json::to_vec_pretty(&manifest)?,
     )
     .await?;
-    let relative_pdf = format!("{relative_root}/article/article.pdf");
-    sqlx::query("UPDATE documents SET local_archive_status='archived',local_archive_path=$2,archive_status='local_archived',archive_error=NULL,archive_manifest=$3,pdf_path=$4,pdf_size=$5,updated_at=NOW() WHERE id=$1")
+    let relative_pdf = format!("{relative_root}/{}", outputs.primary_path);
+    let relative_dual_pdf = outputs
+        .dual_bytes
+        .map(|_| format!("{relative_root}/pdf2zh/dual.pdf"));
+    sqlx::query("UPDATE documents SET local_archive_status='archived',local_archive_path=$2,archive_status='local_archived',archive_error=NULL,archive_manifest=$3,pdf_path=$4,pdf_size=$5,dual_pdf_path=$6,dual_pdf_size=$7,pages_processed=COALESCE($8,pages_processed),pages_total=COALESCE($8,pages_total),translated=CASE WHEN processing_mode='pdf2zh' THEN true ELSE translated END,updated_at=NOW() WHERE id=$1")
         .bind(id)
         .bind(&relative_root)
         .bind(&manifest)
         .bind(relative_pdf)
-        .bind(input.pdf.bytes as i64)
+        .bind(outputs.primary_bytes as i64)
+        .bind(relative_dual_pdf)
+        .bind(outputs.dual_bytes.map(|bytes| bytes as i64))
+        .bind(outputs.pages)
         .execute(&state.pool)
         .await?;
     let object_count = manifest["objects"].as_array().map_or(0, Vec::len) as i64;
@@ -284,10 +253,16 @@ pub async fn archive_and_publish(
             state: "completed",
             level: "success",
             progress: 100,
-            message: "文章与期刊排版 PDF 已发布，本地永久归档可直接下载打包",
-            detail: Some(
-                "源文件、Markdown、PDF、HTML、WebP、MinerU 结果与审计元数据均保留在 VPS 本地；展示名与物理名已分离",
-            ),
+            message: if processing_mode == "pdf2zh" {
+                "原版式中文 PDF 与双语对照 PDF 已完成，可下载本地永久归档"
+            } else {
+                "文章与期刊排版 PDF 已发布，本地永久归档可直接下载打包"
+            },
+            detail: Some(if processing_mode == "pdf2zh" {
+                "源文件、单语 PDF、双语 PDF 与审计元数据均保留在 VPS 本地；此模式不生成 Markdown，下载与预览仍需文档访问权限"
+            } else {
+                "源文件、Markdown、PDF、HTML、WebP、MinerU 结果与审计元数据均保留在 VPS 本地；展示名与物理名已分离"
+            }),
             current: Some(100),
             total: Some(100),
         },
@@ -308,7 +283,7 @@ pub async fn archive_and_publish(
                         progress: 100,
                         message: "可再生工作区已清理",
                         detail: Some(
-                            "仅删除 MinerU 解压等临时中间目录；/data/archives 下的永久文件完全保留",
+                            "仅删除本任务可再生的处理工作区；/data/archives 下的永久文件完全保留",
                         ),
                         current: None,
                         total: None,
@@ -337,6 +312,224 @@ pub async fn archive_and_publish(
     }
     write_current_events(state, id, &archive_root).await?;
     Ok(())
+}
+
+async fn archive_outputs(
+    state: &AppState,
+    id: &str,
+    archive_root: &Path,
+    input: ArchiveInput<'_>,
+) -> Result<ArchivedOutputs> {
+    match input {
+        ArchiveInput::Mineru {
+            mineru_zip,
+            final_root,
+            original_markdown,
+            translated_markdown,
+            translation_guidance,
+            article,
+            pdf,
+            ..
+        } => {
+            copy_atomic(mineru_zip, &archive_root.join("mineru/result.zip")).await?;
+            write_atomic(
+                &archive_root.join("markdown/original.md"),
+                original_markdown.as_bytes(),
+            )
+            .await?;
+            if let Some(translated) = translated_markdown {
+                write_atomic(
+                    &archive_root.join("markdown/translated.md"),
+                    translated.as_bytes(),
+                )
+                .await?;
+            }
+            if let Some(guidance) = translation_guidance {
+                write_atomic(
+                    &archive_root.join("translation/guidance.md"),
+                    guidance.as_bytes(),
+                )
+                .await?;
+            }
+            write_atomic(
+                &archive_root.join("markdown/normalized.md"),
+                article.markdown.as_bytes(),
+            )
+            .await?;
+            write_atomic(
+                &archive_root.join("article/article.html"),
+                article.html.as_bytes(),
+            )
+            .await?;
+            copy_atomic(&pdf.path, &archive_root.join("article/article.pdf")).await?;
+            copy_atomic(
+                &pdf.print_html_path,
+                &archive_root.join("article/print.html"),
+            )
+            .await?;
+            events::append(
+                &state.pool,
+                id,
+                EventInput {
+                    stage: "local_archive_text",
+                    state: "completed",
+                    level: "success",
+                    progress: 96,
+                    message: "Markdown、PDF、HTML、翻译规划与 MinerU 结果已永久落盘",
+                    detail: Some("期刊排版 PDF 和打印版 HTML 使用固定 ASCII 物理名；下载时由数据库标题生成中文展示文件名"),
+                    current: None,
+                    total: None,
+                },
+            )
+            .await?;
+            let images = files_below(&final_root.join("images"))?;
+            for (index, image) in images.iter().enumerate() {
+                let name = image.file_name().context("WebP 文件缺少名称")?;
+                copy_atomic(image, &archive_root.join("images").join(name)).await?;
+                events::append(
+                    &state.pool,
+                    id,
+                    EventInput {
+                        stage: "local_archive_image",
+                        state: "completed",
+                        level: "success",
+                        progress: 96 + (((index + 1) * 2 / images.len().max(1)) as i32),
+                        message: &format!("本地图片归档 {}/{}", index + 1, images.len()),
+                        detail: Some(&format!(
+                            "{} 已作为 WebP 写入永久目录；原图片格式不进入归档",
+                            name.to_string_lossy()
+                        )),
+                        current: Some((index + 1) as i64),
+                        total: Some(images.len() as i64),
+                    },
+                )
+                .await?;
+            }
+            Ok(ArchivedOutputs {
+                primary_path: "article/article.pdf",
+                primary_bytes: pdf.bytes,
+                dual_bytes: None,
+                pages: None,
+                metadata: json!({
+                    "journal_pdf": {
+                        "path": "article/article.pdf",
+                        "bytes": pdf.bytes,
+                        "layout": "A4 academic journal",
+                        "renderer": "Chromium",
+                        "math": "KaTeX",
+                    },
+                    "pdf_variants": {
+                        "journal": { "path": "article/article.pdf", "bytes": pdf.bytes },
+                    },
+                }),
+            })
+        }
+        ArchiveInput::Pdf2zh {
+            final_root,
+            mono_pdf,
+            dual_pdf,
+            mono_bytes,
+            dual_bytes,
+            pages,
+            ..
+        } => {
+            let outputs = write_native_outputs(
+                archive_root,
+                final_root,
+                mono_pdf,
+                dual_pdf,
+                mono_bytes,
+                dual_bytes,
+                pages,
+            )
+            .await?;
+            events::append(
+                &state.pool,
+                id,
+                EventInput {
+                    stage: "local_archive_pdf2zh",
+                    state: "completed",
+                    level: "success",
+                    progress: 97,
+                    message: "原版式中文 PDF 与双语对照 PDF 已永久落盘",
+                    detail: Some("两份 PDF 均已校验并使用固定 ASCII 物理名；临时配置和工作文件不进入归档，此模式不生成 Markdown"),
+                    current: Some(2),
+                    total: Some(2),
+                },
+            )
+            .await?;
+            Ok(outputs)
+        }
+    }
+}
+
+async fn write_native_outputs(
+    archive_root: &Path,
+    final_root: &Path,
+    mono_pdf: &Path,
+    dual_pdf: &Path,
+    mono_bytes: u64,
+    dual_bytes: u64,
+    pages: i32,
+) -> Result<ArchivedOutputs> {
+    if pages <= 0 {
+        anyhow::bail!("原版式 PDF 页数无效");
+    }
+    let final_root = tokio::fs::canonicalize(final_root)
+        .await
+        .context("原版式输出目录不存在")?;
+    // Validate both artifacts before copying either. Never archive arbitrary
+    // files named by a subprocess, or its complete working/config directory.
+    let mono = verified_native_pdf(&final_root, mono_pdf, mono_bytes).await?;
+    let dual = verified_native_pdf(&final_root, dual_pdf, dual_bytes).await?;
+    if mono == dual {
+        anyhow::bail!("单语 PDF 与双语 PDF 必须是独立文件");
+    }
+    copy_atomic(&mono, &archive_root.join("pdf2zh/mono.pdf")).await?;
+    copy_atomic(&dual, &archive_root.join("pdf2zh/dual.pdf")).await?;
+    Ok(ArchivedOutputs {
+        primary_path: "pdf2zh/mono.pdf",
+        primary_bytes: mono_bytes,
+        dual_bytes: Some(dual_bytes),
+        pages: Some(pages),
+        metadata: json!({
+            "translated": true,
+            "pages_processed": pages,
+            "pages_total": pages,
+            "native_pdf": { "engine": "pdf2zh", "layout": "native", "pages": pages },
+            "pdf_variants": {
+                "mono": { "path": "pdf2zh/mono.pdf", "bytes": mono_bytes },
+                "dual": { "path": "pdf2zh/dual.pdf", "bytes": dual_bytes },
+            },
+        }),
+    })
+}
+
+async fn verified_native_pdf(
+    final_root: &Path,
+    path: &Path,
+    expected_bytes: u64,
+) -> Result<PathBuf> {
+    let metadata = tokio::fs::symlink_metadata(path)
+        .await
+        .context("原版式 PDF 输出不存在")?;
+    if !metadata.file_type().is_file() || expected_bytes < 5 || metadata.len() != expected_bytes {
+        anyhow::bail!("原版式 PDF 输出类型或大小校验失败");
+    }
+    let canonical = tokio::fs::canonicalize(path).await?;
+    if !canonical.starts_with(final_root) || canonical == final_root {
+        anyhow::bail!("原版式 PDF 输出越过任务目录");
+    }
+    let mut prefix = Vec::with_capacity(1024);
+    tokio::fs::File::open(&canonical)
+        .await?
+        .take(1024)
+        .read_to_end(&mut prefix)
+        .await?;
+    if !prefix.windows(5).any(|window| window == b"%PDF-") {
+        anyhow::bail!("原版式输出不是 PDF 文件");
+    }
+    Ok(canonical)
 }
 
 async fn mirror_r2(
@@ -392,8 +585,14 @@ async fn mirror_r2(
         .await?;
     }
     let source_key = format!("{prefix}/source/source.{source_extension}");
-    let article_key = format!("{prefix}/markdown/normalized.md");
-    let mineru_key = format!("{prefix}/mineru/result.zip");
+    let article_key = archive_root
+        .join("markdown/normalized.md")
+        .is_file()
+        .then(|| format!("{prefix}/markdown/normalized.md"));
+    let mineru_key = archive_root
+        .join("mineru/result.zip")
+        .is_file()
+        .then(|| format!("{prefix}/mineru/result.zip"));
     sqlx::query("UPDATE documents SET r2_mirror_status='archived',r2_mirror_error=NULL,r2_prefix=$2,source_r2_key=$3,article_r2_key=$4,mineru_r2_key=$5 WHERE id=$1")
         .bind(id)
         .bind(&prefix)
@@ -482,7 +681,7 @@ async fn write_atomic(destination: &Path, bytes: &[u8]) -> Result<()> {
 }
 
 async fn load_document_metadata(state: &AppState, id: &str) -> Result<Value> {
-    let row = sqlx::query("SELECT id,title,original_filename,display_filename,storage_key,source_size,mime_type,upload_sha256,translate_requested,translation_provider,translation_tier,translation_guidance,translated,is_public,created_at FROM documents WHERE id=$1")
+    let row = sqlx::query("SELECT id,title,original_filename,display_filename,storage_key,source_size,mime_type,processing_mode,upload_sha256,translate_requested,translation_provider,translation_tier,translation_guidance,translated,is_public,created_at FROM documents WHERE id=$1")
         .bind(id)
         .fetch_one(&state.pool)
         .await?;
@@ -494,6 +693,7 @@ async fn load_document_metadata(state: &AppState, id: &str) -> Result<Value> {
         "storage_key": row.get::<String, _>("storage_key"),
         "source_size": row.get::<i32, _>("source_size"),
         "mime_type": row.get::<Option<String>, _>("mime_type"),
+        "processing_mode": row.get::<String, _>("processing_mode"),
         "upload_sha256": row.get::<Option<String>, _>("upload_sha256"),
         "translate_requested": row.get::<bool, _>("translate_requested"),
         "translation_provider": row.get::<String, _>("translation_provider"),
@@ -516,4 +716,186 @@ async fn write_current_events(state: &AppState, id: &str, archive_root: &Path) -
         &serde_json::to_vec_pretty(&current_events)?,
     )
     .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct TestDirectory(PathBuf);
+
+    impl TestDirectory {
+        fn new() -> Self {
+            let path = std::env::temp_dir().join(format!(
+                "docflow-native-archive-test-{}",
+                uuid::Uuid::new_v4().simple()
+            ));
+            std::fs::create_dir(&path).unwrap();
+            Self(path)
+        }
+    }
+
+    impl Drop for TestDirectory {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    const MONO_PDF: &[u8] = b"%PDF-1.7\nmono fixture\n%%EOF\n";
+    const DUAL_PDF: &[u8] = b"%PDF-1.7\ndual fixture with source\n%%EOF\n";
+
+    #[tokio::test]
+    async fn native_archive_copies_only_verified_mono_and_dual_outputs() {
+        let temporary = TestDirectory::new();
+        let final_root = temporary.0.join("final");
+        let archive_root = temporary.0.join("archive");
+        tokio::fs::create_dir(&final_root).await.unwrap();
+        let mono = final_root.join("mono.pdf");
+        let dual = final_root.join("dual.pdf");
+        tokio::fs::write(&mono, MONO_PDF).await.unwrap();
+        tokio::fs::write(&dual, DUAL_PDF).await.unwrap();
+        tokio::fs::write(
+            final_root.join("worker-config.json"),
+            b"private runtime configuration",
+        )
+        .await
+        .unwrap();
+        tokio::fs::write(final_root.join("result.md"), b"not a declared output")
+            .await
+            .unwrap();
+        let result = write_native_outputs(
+            &archive_root,
+            &final_root,
+            &mono,
+            &dual,
+            MONO_PDF.len() as u64,
+            DUAL_PDF.len() as u64,
+            1,
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.primary_path, "pdf2zh/mono.pdf");
+        assert_eq!(result.primary_bytes, MONO_PDF.len() as u64);
+        assert_eq!(result.dual_bytes, Some(DUAL_PDF.len() as u64));
+        assert_eq!(result.pages, Some(1));
+        assert_eq!(
+            tokio::fs::read(archive_root.join("pdf2zh/mono.pdf"))
+                .await
+                .unwrap(),
+            MONO_PDF
+        );
+        assert_eq!(
+            tokio::fs::read(archive_root.join("pdf2zh/dual.pdf"))
+                .await
+                .unwrap(),
+            DUAL_PDF
+        );
+        assert_eq!(files_below(&archive_root).unwrap().len(), 2);
+        assert!(!archive_root.join("worker-config.json").exists());
+        assert!(!archive_root.join("markdown").exists());
+        assert!(!archive_root.join("article").exists());
+        assert!(result.metadata.get("journal_pdf").is_none());
+        assert_eq!(result.metadata["translated"], true);
+        assert_eq!(result.metadata["native_pdf"]["pages"], 1);
+    }
+
+    #[tokio::test]
+    async fn native_archive_validates_both_files_before_publishing_either() {
+        let temporary = TestDirectory::new();
+        let final_root = temporary.0.join("final");
+        let archive_root = temporary.0.join("archive");
+        tokio::fs::create_dir(&final_root).await.unwrap();
+        let mono = final_root.join("mono.pdf");
+        let dual = final_root.join("dual.pdf");
+        tokio::fs::write(&mono, MONO_PDF).await.unwrap();
+        tokio::fs::write(&dual, b"not a PDF").await.unwrap();
+        assert!(
+            write_native_outputs(
+                &archive_root,
+                &final_root,
+                &mono,
+                &dual,
+                MONO_PDF.len() as u64,
+                9,
+                1,
+            )
+            .await
+            .is_err()
+        );
+        assert!(!archive_root.exists());
+        tokio::fs::write(&dual, DUAL_PDF).await.unwrap();
+        assert!(
+            write_native_outputs(
+                &archive_root,
+                &final_root,
+                &mono,
+                &dual,
+                MONO_PDF.len() as u64,
+                DUAL_PDF.len() as u64 + 1,
+                1,
+            )
+            .await
+            .is_err()
+        );
+        assert!(!archive_root.exists());
+        assert!(
+            write_native_outputs(
+                &archive_root,
+                &final_root,
+                &mono,
+                &mono,
+                MONO_PDF.len() as u64,
+                MONO_PDF.len() as u64,
+                1,
+            )
+            .await
+            .is_err()
+        );
+        assert!(!archive_root.exists());
+        assert!(
+            write_native_outputs(
+                &archive_root,
+                &final_root,
+                &mono,
+                &dual,
+                MONO_PDF.len() as u64,
+                DUAL_PDF.len() as u64,
+                0,
+            )
+            .await
+            .is_err()
+        );
+        assert!(!archive_root.exists());
+    }
+
+    #[tokio::test]
+    async fn native_output_paths_cannot_escape_the_final_directory() {
+        let temporary = TestDirectory::new();
+        let final_root = temporary.0.join("final");
+        tokio::fs::create_dir(&final_root).await.unwrap();
+        let final_root = tokio::fs::canonicalize(final_root).await.unwrap();
+        let outside = temporary.0.join("outside.pdf");
+        tokio::fs::write(&outside, MONO_PDF).await.unwrap();
+        assert!(
+            verified_native_pdf(&final_root, &outside, MONO_PDF.len() as u64)
+                .await
+                .is_err()
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn native_output_symlinks_are_not_archived() {
+        let temporary = TestDirectory::new();
+        let final_root = tokio::fs::canonicalize(&temporary.0).await.unwrap();
+        let target = final_root.join("real.pdf");
+        let link = final_root.join("linked.pdf");
+        tokio::fs::write(&target, MONO_PDF).await.unwrap();
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        assert!(
+            verified_native_pdf(&final_root, &link, MONO_PDF.len() as u64)
+                .await
+                .is_err()
+        );
+    }
 }
