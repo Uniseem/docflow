@@ -23,6 +23,10 @@ callbacks route translations to DocFlow's Rust-managed provider pools. The PDF
 writer operations remain inside the supervised worker process. See `runner.py`,
 `bridge.py`, and `asset_bundle.py` for the complete adaptation source.
 
+The adapter also initializes the pinned Joblib CPU budget and threadpoolctl's
+Linux libc cache without subprocess-based hardware or library discovery. The
+upstream threadpoolctl package source remains unmodified.
+
 ## PyMuPDF
 
 - Selected release: **1.26.7**.

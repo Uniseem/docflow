@@ -80,6 +80,13 @@ hardware-probe commands that the process guard would reject. Native numerical
 libraries and layout configuration are initialized before the blocking stdin
 reader starts, avoiding cold-import/stdio-lock hangs on Windows.
 
+On Linux, the pinned threadpoolctl libc handle is initialized from the current
+process with `ctypes.CDLL(None)`. This avoids its `find_library`/`ldconfig`
+subprocess probe when small text bands enter sklearn's DBSCAN path. Only libc is
+cached; BLAS libraries loaded later are still enumerated normally. Regression
+tests run actual threadpool inspection and Manhattan DBSCAN with the process
+guard active, in addition to the complete offline PDF smoke test.
+
 Document-bearing upstream log messages and exception tracebacks are not printed.
 Only fixed safe errors are exposed; source paragraphs exist in `translate`
 protocol messages but must not be written to application logs. The runtime uses

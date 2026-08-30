@@ -17,6 +17,7 @@ fonttools==4.61.1
 scipy==1.15.3
 scikit-learn==1.7.1
 joblib==1.5.3
+threadpoolctl==3.6.0
 pydantic==2.11.7
 openai==1.99.9
 huggingface-hub==0.34.4
