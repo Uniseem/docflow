@@ -7,6 +7,8 @@ frontend/node_modules/
 frontend/dist/
 server/target/
 server/pdf-assets/node_modules/
+server/native-pdf/**/__pycache__/
+server/native-pdf/**/*.pyc
 data/
 output/
 tmp/

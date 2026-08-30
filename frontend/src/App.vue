@@ -1,43 +1,37 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
+import { useRoute } from 'vue-router'
+import { BookOutlined, ExportOutlined, FileTextOutlined, MenuOutlined, UploadOutlined } from '@ant-design/icons-vue'
+import zhCN from 'ant-design-vue/es/locale/zh_CN'
 
+const route = useRoute()
 const drawer = ref(false)
-const nav = [
-  { label: '提交文档', to: '/', icon: 'mdi-tray-arrow-up' },
-  { label: '公开文库', to: '/library', icon: 'mdi-bookshelf' },
-]
+const selectedKeys = computed(() => route.path === '/' ? ['/'] : route.path.startsWith('/library') ? ['/library'] : [])
 </script>
 
 <template>
-  <v-app>
-    <header class="topbar">
-      <div class="topbar__inner">
-        <router-link class="brand" to="/" aria-label="文流首页">
-          <span class="brand-mark">文</span>
-          <span class="brand-copy"><strong>文流</strong><small>DOCFLOW</small></span>
-        </router-link>
-        <nav class="desktop-nav" aria-label="主导航">
-          <router-link v-for="item in nav" :key="item.to" :to="item.to">{{ item.label }}</router-link>
-          <a href="/api/docs" target="_blank">开放 API <v-icon icon="mdi-arrow-top-right" size="15" /></a>
-        </nav>
-        <button class="mobile-menu" type="button" aria-label="打开导航" @click="drawer = true"><v-icon icon="mdi-menu" size="24" /></button>
-      </div>
-    </header>
-
-    <v-navigation-drawer v-model="drawer" class="mobile-drawer" location="right" temporary width="300">
-      <div class="drawer-head"><span class="brand-mark">文</span><span class="brand-copy"><strong>文流</strong><small>DOCFLOW</small></span></div>
-      <v-list nav density="comfortable">
-        <v-list-item v-for="item in nav" :key="item.to" :to="item.to" :prepend-icon="item.icon" :title="item.label" @click="drawer = false" />
-        <v-list-item href="/api/docs" target="_blank" prepend-icon="mdi-api" title="开放 API" />
-      </v-list>
-    </v-navigation-drawer>
-
-    <v-main>
-      <router-view />
-    </v-main>
-
-    <footer class="site-footer">
-      <div class="footer-inner"><strong>文流 DocFlow</strong><span>默认私有 · 本地永久保存 · 支持完整迁移</span></div>
-    </footer>
-  </v-app>
+  <a-config-provider :locale="zhCN">
+    <a-layout class="app-shell">
+      <a-layout-header class="app-header">
+        <div class="header-inner">
+          <router-link class="brand" to="/" aria-label="文流首页"><FileTextOutlined /><strong>文流</strong><span>DocFlow</span></router-link>
+          <a-menu class="desktop-navigation" mode="horizontal" :selected-keys="selectedKeys">
+            <a-menu-item key="/"><template #icon><UploadOutlined /></template><router-link to="/">提交文档</router-link></a-menu-item>
+            <a-menu-item key="/library"><template #icon><BookOutlined /></template><router-link to="/library">公开文库</router-link></a-menu-item>
+            <a-menu-item key="api"><a href="/api/docs" target="_blank" rel="noopener noreferrer">开放 API <ExportOutlined /></a></a-menu-item>
+          </a-menu>
+          <a-button class="mobile-navigation" aria-label="打开导航" @click="drawer = true"><template #icon><MenuOutlined /></template></a-button>
+        </div>
+      </a-layout-header>
+      <a-drawer v-model:open="drawer" title="文流 DocFlow" placement="right" :width="280">
+        <a-menu mode="inline" :selected-keys="selectedKeys" @click="drawer = false">
+          <a-menu-item key="/"><template #icon><UploadOutlined /></template><router-link to="/">提交文档</router-link></a-menu-item>
+          <a-menu-item key="/library"><template #icon><BookOutlined /></template><router-link to="/library">公开文库</router-link></a-menu-item>
+          <a-menu-item key="api"><template #icon><ExportOutlined /></template><a href="/api/docs" target="_blank" rel="noopener noreferrer">开放 API</a></a-menu-item>
+        </a-menu>
+      </a-drawer>
+      <a-layout-content><router-view :key="route.path" /></a-layout-content>
+      <a-layout-footer class="app-footer">文流 DocFlow · 默认私有 · 本地永久保存 · <a href="https://github.com/FengYuchen1314/docflow/blob/main/THIRD_PARTY_NOTICES.md" target="_blank" rel="noopener noreferrer">源码与许可</a></a-layout-footer>
+    </a-layout>
+  </a-config-provider>
 </template>

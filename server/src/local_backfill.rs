@@ -32,8 +32,11 @@ struct BackfillDocument {
 }
 
 pub async fn run(pool: &PgPool, config: &Config) -> Result<()> {
+    // This migrates historical MinerU article archives only. Native-layout jobs
+    // already own their mono/dual PDFs and must never receive a journal render
+    // or have their archive status rewritten by this legacy repair pass.
     let documents = sqlx::query_as::<_, BackfillDocument>(
-        "SELECT id,title,original_filename,display_filename,storage_key,source_path,source_size,mime_type,status,local_archive_path,markdown_original,markdown_translated,translation_guidance,markdown_normalized,content_html,excerpt FROM documents ORDER BY created_at",
+        "SELECT id,title,original_filename,display_filename,storage_key,source_path,source_size,mime_type,status,local_archive_path,markdown_original,markdown_translated,translation_guidance,markdown_normalized,content_html,excerpt FROM documents WHERE processing_mode='mineru' ORDER BY created_at",
     )
     .fetch_all(pool)
     .await?;
@@ -153,6 +156,7 @@ async fn backfill_document(
     let metadata = json!({
         "schema": "docflow-local-backfill-v2",
         "document_id": document.id,
+        "processing_mode": "mineru",
         "title": document.title,
         "original_filename": document.original_filename,
         "display_filename": document.display_filename,
@@ -168,6 +172,7 @@ async fn backfill_document(
     let manifest = json!({
         "schema": "docflow-local-archive-v2",
         "document_id": document.id,
+        "processing_mode": "mineru",
         "storage_key": document.storage_key,
         "retention": "permanent-no-delete-api",
         "backfilled": true,

@@ -1,3 +1,11 @@
+export type ProcessingMode = 'mineru' | 'pdf2zh'
+
+export interface ProcessingModeConfig {
+  available: boolean
+  accepted_extensions: string[]
+  native_pdf_only: boolean
+}
+
 export interface PublicConfig {
   app_name: string
   mineru_configured: boolean
@@ -10,6 +18,8 @@ export interface PublicConfig {
   documents_public_by_default: boolean
   r2_configured: boolean
   accepting_uploads: boolean
+  default_processing_mode: ProcessingMode
+  processing_modes: Record<ProcessingMode, ProcessingModeConfig>
   max_upload_mb: number
   accepted_extensions: string[]
   api_version: string
@@ -20,6 +30,7 @@ export type DocumentStatus = 'queued' | 'processing' | 'retrying' | 'completed' 
 
 export interface DocumentSummary {
   id: string
+  processing_mode: ProcessingMode
   title: string
   original_filename: string
   display_filename: string
@@ -48,6 +59,7 @@ export interface DocumentSummary {
   r2_mirror_status: string
   r2_mirror_error: string | null
   pdf_size: number | null
+  dual_pdf_size: number | null
   upload_sha256: string | null
   api_version: string
 }
@@ -56,6 +68,7 @@ export interface DocumentDetail extends DocumentSummary {
   content_html: string | null
   markdown_available?: { original: boolean; translated: boolean; normalized: boolean }
   pdf_available?: boolean
+  pdf_variants_available?: { journal: boolean; mono: boolean; dual: boolean }
 }
 
 export interface ProcessingEvent {
@@ -97,12 +110,42 @@ export interface AdminSettings {
   deepseek_model: string
   translation_provider: 'google' | 'deepseek'
   translation_tier: 1 | 2 | 3
+  translation_runtime: TranslationRuntime
+  translation_runtime_defaults: TranslationRuntime
+  translation_runtime_limits: TranslationRuntimeLimits
   r2_configured: boolean
   r2_account_id: string
   r2_access_key_id_masked: string | null
   r2_secret_access_key_masked: string | null
   r2_bucket: string
   r2_public_base_url: string
+}
+
+export interface TranslationPoolSettings {
+  concurrency: number
+  chunk_chars: number
+  max_segments_per_request: number
+}
+
+export interface TranslationRuntime {
+  google: TranslationPoolSettings
+  deepseek: TranslationPoolSettings
+  per_document_concurrency: number
+  system_prompt: string
+}
+
+export interface TranslationPoolLimits {
+  concurrency_max: number
+  chunk_chars_max: number
+  max_segments_per_request_max: number
+}
+
+export interface TranslationRuntimeLimits {
+  google: TranslationPoolLimits
+  deepseek: TranslationPoolLimits
+  min_chunk_chars: number
+  per_document_concurrency_max: number
+  system_prompt_max_chars: number
 }
 
 export interface AdminStatus {

@@ -167,7 +167,7 @@ async fn render_pdf_artifact(
     })
 }
 
-async fn verify_pdf(path: &Path) -> Result<()> {
+pub(super) async fn verify_pdf(path: &Path) -> Result<()> {
     let metadata = tokio::fs::metadata(path)
         .await
         .context("PDF 渲染器没有生成输出文件")?;

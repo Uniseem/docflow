@@ -6,7 +6,7 @@ on:
     paths:
       - server/**
       - frontend/**
-      - scripts/verify-compose-readme.py
+      - scripts/**
       - docker-compose.yml
       - README.md
       - .github/workflows/publish-images.yml
@@ -21,10 +21,39 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  verify-frontend:
+    name: Verify Ant Design frontend
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install locked frontend dependencies
+        run: npm ci
+
+      - name: Test translation runtime validation and form state
+        run: npm test
+
+      - name: Type-check and build frontend
+        run: npm run build
+
   verify-server:
     name: Verify server and fresh database migration
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 90
     services:
       postgres:
         image: postgres:17-alpine
@@ -98,8 +127,61 @@ jobs:
                     WHERE table_schema='public' AND table_name='documents'
                       AND column_name='pdf_size'
                 )
-                AND (SELECT count(*) FROM _sqlx_migrations WHERE success) = 6")"
+                AND EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_schema='public' AND table_name='documents'
+                      AND column_name='translation_runtime_snapshot'
+                      AND data_type='jsonb' AND is_nullable='YES'
+                )
+                AND EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_schema='public' AND table_name='documents'
+                      AND column_name='processing_mode' AND is_nullable='NO'
+                )
+                AND EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_schema='public' AND table_name='documents'
+                      AND column_name='dual_pdf_path'
+                )
+                AND EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_schema='public' AND table_name='documents'
+                      AND column_name='dual_pdf_size'
+                )
+                AND (SELECT count(*) FROM _sqlx_migrations WHERE success) = 8")"
           test "$schema_ok" = "t"
+
+      - name: Verify exclusive Worker pool ownership and fail-closed lock loss
+        run: |
+          python3 scripts/worker-pool-smoke.py \
+            --postgres-container '${{ job.services.postgres.id }}' \
+            --confirm-disposable-instance
+
+      - name: Start API-only runtime settings smoke test
+        run: |
+          docker run --detach --rm --name docflow-runtime-api-smoke --network host \
+            -e DATABASE_HOST=127.0.0.1 \
+            -e DATABASE_PORT=5432 \
+            -e DATABASE_NAME=docflow \
+            -e DATABASE_USER=docflow \
+            -e DATABASE_PASSWORD=docflow-test-password \
+            -e SECRET_KEY=docflow-test-secret-key \
+            -e DATA_ROOT=/tmp/docflow \
+            docflow-server:smoke api
+
+      - name: Verify runtime settings, permissions and task snapshots over HTTP
+        run: |
+          python3 scripts/translation-runtime-smoke.py \
+            --base-url http://127.0.0.1:8000 \
+            --postgres-container '${{ job.services.postgres.id }}' \
+            --confirm-disposable-instance
+
+      - name: Stop temporary runtime settings API
+        if: always()
+        run: |
+          if docker container inspect docflow-runtime-api-smoke >/dev/null 2>&1; then
+            docker stop docflow-runtime-api-smoke
+          fi
 
       - name: Verify journal PDF runtime is bundled
         run: |
@@ -139,9 +221,25 @@ jobs:
             "SELECT value FROM app_settings WHERE key='migration_smoke'")"
           test "$preserved" = "kept"
 
+      - name: Verify pinned native engine and bridge contracts
+        run: |
+          docker run --rm --network none --user 10001:10001 \
+            --workdir /opt/docflow/native-pdf \
+            --entrypoint /opt/docflow/native-pdf/venv/bin/python \
+            docflow-server:smoke -B -m unittest discover -s tests -v
+
+      - name: Render native Chinese and bilingual PDFs offline as production user
+        timeout-minutes: 15
+        run: |
+          docker run --rm --network none --user 10001:10001 \
+            --entrypoint /opt/docflow/native-pdf/venv/bin/python \
+            docflow-server:smoke -B /opt/docflow/native-pdf/smoke.py \
+            --asset-dir /opt/docflow/native-pdf/assets \
+            --work-dir /tmp/docflow-native-smoke --failure-checks
+
   publish:
     name: Publish ${{ matrix.name }}
-    needs: verify-server
+    needs: [verify-server, verify-frontend]
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false

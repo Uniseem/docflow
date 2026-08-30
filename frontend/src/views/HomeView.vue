@@ -1,79 +1,96 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
-
+import { CloudUploadOutlined, FileTextOutlined, InboxOutlined, LockOutlined, ReloadOutlined } from '@ant-design/icons-vue'
 import { api } from '../api'
 import DocumentCard from '../components/DocumentCard.vue'
-import type { DocumentSummary, PublicConfig } from '../types'
+import { acceptedExtensions, initialProcessingMode, processingModeAvailable, processingModes, validateUpload } from '../processingModes'
+import type { DocumentSummary, ProcessingMode, PublicConfig } from '../types'
 
 const router = useRouter()
 const config = ref<PublicConfig | null>(null)
 const recent = ref<DocumentSummary[]>([])
 const file = ref<File | null>(null)
 const title = ref('')
-const dragging = ref(false)
 const uploading = ref(false)
+const configLoading = ref(false)
 const uploadProgress = ref(0)
 const error = ref('')
-const translationNotice = ref('')
-const fileInput = ref<HTMLInputElement | null>(null)
 type TranslationTier = 1 | 2 | 3
 const selectedTranslationTier = ref<TranslationTier>(1)
+const selectedProcessingMode = ref<ProcessingMode>('mineru')
 
 const translationTiers = [
-  { tier: 1, name: '极速', engine: 'Google Cloud', detail: '官方翻译 API · 高速并发', icon: 'mdi-flash-outline' },
-  { tier: 2, name: '均衡', engine: 'DeepSeek V4 Flash', detail: '非思考模式 · 自然准确', icon: 'mdi-scale-balance' },
-  { tier: 3, name: '精准', engine: 'DeepSeek V4 Flash', detail: '思考模式 · 复杂论文优先', icon: 'mdi-brain' },
+  { tier: 1, name: '极速', engine: 'Google Cloud', detail: '官方翻译 API，适合快速阅读。' },
+  { tier: 2, name: '均衡', engine: 'DeepSeek V4 Flash', detail: '非思考模式，兼顾翻译速度与准确度。' },
+  { tier: 3, name: '精准', engine: 'DeepSeek V4 Flash', detail: '思考模式，适合复杂句式与专业术语。' },
 ] as const
-
 const selectedTier = computed(() => translationTiers.find((item) => item.tier === selectedTranslationTier.value) || translationTiers[0])
-
+const selectedMode = computed(() => processingModes.find((item) => item.value === selectedProcessingMode.value) || processingModes[0])
+const modeReady = computed(() => processingModeAvailable(config.value, selectedProcessingMode.value))
+const allowedExtensions = computed(() => acceptedExtensions(config.value, selectedProcessingMode.value))
+// This also revalidates an already-selected file whenever the mode or server limits change.
+const fileValidation = computed(() => file.value ? validateUpload(file.value, config.value, selectedProcessingMode.value) : '')
+const canSubmit = computed(() => Boolean(file.value && !fileValidation.value && modeReady.value && tierAvailable(selectedTranslationTier.value) && !uploading.value))
+const unavailableReason = computed(() => {
+  if (!config.value) return ''
+  if (!config.value.translation_available) return '尚未配置可用的翻译服务，请联系管理员。'
+  if (selectedProcessingMode.value === 'mineru' && !config.value.mineru_configured) return 'MinerU 尚未配置。可切换到 PDF 原生翻译，或联系管理员配置 MinerU。'
+  if (!modeReady.value) return `${selectedMode.value.label}暂不可用，请联系管理员检查服务配置。`
+  return ''
+})
+const processingSteps = computed(() => selectedProcessingMode.value === 'pdf2zh'
+  ? [{ title: '检查与分析 PDF', description: '检查文本层，分析原文页面布局' }, { title: '原文翻译与排版', description: '按所选档位翻译，保留页面版式' }, { title: '校验与归档', description: '保存原 PDF、中文单语 PDF 与双语 PDF' }]
+  : [{ title: '解析文档', description: '由 MinerU 识别正文、图片和公式' }, { title: '并发翻译', description: '按所选档位分段翻译，实时显示进度' }, { title: '规范化与归档', description: '本地保存 Markdown、期刊式 PDF 和 WebP 图片' }])
 const formatSize = (bytes: number) => bytes < 1048576 ? `${(bytes / 1024).toFixed(0)} KB` : `${(bytes / 1048576).toFixed(1)} MB`
 
-function chooseFile(selected?: File) {
+function chooseFile(selected: File) {
   error.value = ''
-  if (!selected) return
-  const extension = `.${selected.name.split('.').pop()?.toLowerCase() || ''}`
-  if (config.value && !config.value.accepted_extensions.includes(extension)) {
-    error.value = `暂不支持 ${extension} 文件`
-    return
+  if (uploading.value) return false
+  const validation = validateUpload(selected, config.value, selectedProcessingMode.value)
+  if (validation) {
+    error.value = validation
+    return false
   }
-  if (config.value && selected.size > config.value.max_upload_mb * 1048576) {
-    error.value = `文件不能超过 ${config.value.max_upload_mb} MB`
-    return
-  }
+  const previousName = file.value?.name.replace(/\.[^.]+$/, '')
   file.value = selected
-  if (!title.value.trim()) title.value = selected.name.replace(/\.[^.]+$/, '')
-}
-
-function handleDrop(event: DragEvent) {
-  dragging.value = false
-  chooseFile(event.dataTransfer?.files?.[0])
+  if (!title.value.trim() || title.value === previousName) title.value = selected.name.replace(/\.[^.]+$/, '')
+  return false
 }
 
 function tierAvailable(tier: TranslationTier) {
   return tier === 1 ? Boolean(config.value?.google_configured) : Boolean(config.value?.deepseek_configured)
 }
 
-function selectTranslationTier(tier: TranslationTier) {
-  if (!tierAvailable(tier)) {
-    translationNotice.value = tier === 1
-      ? '极速档需要管理员先在后台配置 Google Cloud Translation API Key。'
-      : '均衡档和精准档需要管理员先在后台配置 DeepSeek API Key。'
-    return
+async function loadConfig() {
+  if (configLoading.value) return
+  configLoading.value = true
+  try {
+    const initial = !config.value
+    config.value = await api.publicConfig()
+    if (initial) {
+      selectedTranslationTier.value = config.value.translation_tier
+      selectedProcessingMode.value = initialProcessingMode(config.value)
+    }
+    if (!tierAvailable(selectedTranslationTier.value)) {
+      const available = translationTiers.find((tier) => tierAvailable(tier.tier))
+      if (available) selectedTranslationTier.value = available.tier
+    }
+  } catch (reason) {
+    error.value = reason instanceof Error ? reason.message : '服务暂不可用'
+  } finally {
+    configLoading.value = false
   }
-  selectedTranslationTier.value = tier
-  translationNotice.value = ''
 }
 
 async function submit() {
-  if (!file.value || uploading.value || !config.value?.accepting_uploads) return
+  if (!file.value || !canSubmit.value) return
   error.value = ''
   uploading.value = true
   uploadProgress.value = 0
   try {
-    const document = await api.uploadDocument(file.value, title.value, selectedTranslationTier.value, (value) => { uploadProgress.value = value })
-    await router.push(`/documents/${document.id}`)
+    const result = await api.uploadDocument(file.value, title.value, selectedTranslationTier.value, selectedProcessingMode.value, (value) => { uploadProgress.value = value })
+    await router.push(`/documents/${result.id}`)
   } catch (reason) {
     error.value = reason instanceof Error ? reason.message : '上传失败'
   } finally {
@@ -81,128 +98,78 @@ async function submit() {
   }
 }
 
-onMounted(async () => {
-  try {
-    const [cfg, documents] = await Promise.all([api.publicConfig(), api.listDocuments(1, 5)])
-    config.value = cfg
-    selectedTranslationTier.value = cfg.translation_tier
-    recent.value = documents.items
-  } catch (reason) {
-    error.value = reason instanceof Error ? reason.message : '服务暂不可用'
-  }
+watch(selectedProcessingMode, () => { error.value = '' })
+onMounted(() => {
+  void loadConfig()
+  void api.listDocuments(1, 5).then((response) => { recent.value = response.items }).catch(() => undefined)
+  window.addEventListener('focus', loadConfig)
 })
+onBeforeUnmount(() => window.removeEventListener('focus', loadConfig))
 </script>
 
 <template>
-  <v-container class="home-shell">
-    <header class="home-hero">
-      <div class="home-hero__copy">
-        <span class="eyebrow">DOCUMENT WORKFLOW</span>
-        <h1>把文档变成<br>可直接阅读的中文文章</h1>
-        <p>提交 PDF、Office 或图片。解析、翻译、公式排版和期刊 PDF 生成都在后台自动完成。</p>
+  <div class="page-container">
+    <div class="page-heading">
+      <div><h1>提交文档</h1><p>解析、翻译并整理为可阅读、可下载的文档。</p></div>
+      <a-space><a-badge :status="modeReady ? 'success' : 'warning'" :text="modeReady ? '所选流程可用' : configLoading ? '读取服务状态' : '所选流程未就绪'" /><a-button :loading="configLoading" aria-label="刷新服务状态" @click="loadConfig"><template #icon><ReloadOutlined /></template></a-button></a-space>
+    </div>
+    <a-alert v-if="unavailableReason" type="warning" :message="unavailableReason" show-icon class="section-gap" />
+    <a-alert v-if="error" type="error" :message="error" show-icon closable class="section-gap" @close="error = ''" />
+
+    <div class="upload-grid">
+      <a-card title="上传与处理" class="upload-card">
+        <a-form layout="vertical" @finish="submit">
+          <a-form-item label="处理方式" required>
+            <a-radio-group v-model:value="selectedProcessingMode" :disabled="uploading" class="processing-selector" aria-label="处理方式">
+              <a-space direction="vertical" :size="16" class="full-width">
+                <a-radio v-for="mode in processingModes" :key="mode.value" :value="mode.value">
+                  {{ mode.label }}<a-tag v-if="config && !processingModeAvailable(config, mode.value)" class="inline-tag">未就绪</a-tag>
+                  <div class="processing-choice-description">{{ mode.description }}</div>
+                </a-radio>
+              </a-space>
+            </a-radio-group>
+            <div v-if="selectedProcessingMode === 'pdf2zh'" class="field-help">pdf2zh 流程使用 BabelDOC 内核，无需 MinerU 密钥；上传后检查文本层，不支持扫描件。</div>
+          </a-form-item>
+          <a-form-item label="选择文档" required :validate-status="fileValidation ? 'error' : undefined" :help="fileValidation || undefined">
+            <a-upload-dragger :before-upload="chooseFile" :show-upload-list="false" :multiple="false" :accept="allowedExtensions.join(',')" :disabled="uploading || !config">
+              <p class="ant-upload-drag-icon"><FileTextOutlined v-if="file" /><InboxOutlined v-else /></p>
+              <p class="ant-upload-text file-name">{{ file ? file.name : '点击选择文件，或拖动文件到这里' }}</p>
+              <p class="ant-upload-hint">{{ file ? formatSize(file.size) + ' · 点击可更换' : selectedMode.fileHint }}</p>
+              <p class="ant-upload-hint">单个文件最大 {{ config?.max_upload_mb || 200 }} MB</p>
+            </a-upload-dragger>
+          </a-form-item>
+          <a-form-item label="文档标题" extra="仅用于页面展示与下载命名，不影响服务器上的安全存储名称。">
+            <a-input v-model:value="title" placeholder="默认使用文件名，可填写中文" :maxlength="300" :disabled="uploading" />
+          </a-form-item>
+          <a-form-item label="中文翻译档位" required>
+            <a-radio-group v-model:value="selectedTranslationTier" button-style="solid" size="large" class="translation-selector" :disabled="uploading">
+              <a-radio-button v-for="tier in translationTiers" :key="tier.tier" :value="tier.tier" :disabled="!tierAvailable(tier.tier)">{{ tier.name }}</a-radio-button>
+            </a-radio-group>
+            <div class="field-help">{{ selectedTier.engine }} · {{ selectedTier.detail }}</div>
+            <div class="field-help">两种处理方式共用以上档位及管理员设置的翻译参数。</div>
+            <div v-if="!config?.google_configured || !config?.deepseek_configured" class="field-help">灰色档位需管理员配置对应服务密钥后开放。</div>
+          </a-form-item>
+          <a-progress v-if="uploading" :percent="uploadProgress" :status="uploadProgress === 100 ? 'active' : 'normal'" />
+          <div v-if="uploading" class="field-help section-gap">{{ uploadProgress === 100 ? '文件上传完成，正在保存并创建任务…' : '正在上传文件，请暂时保留此页面。' }}</div>
+          <a-button type="primary" size="large" html-type="submit" :loading="uploading" :disabled="!canSubmit"><template #icon><CloudUploadOutlined /></template>{{ uploading ? '正在提交' : '开始处理' }}</a-button>
+        </a-form>
+      </a-card>
+
+      <div class="side-stack">
+        <a-card title="处理说明" size="small">
+          <a-steps direction="vertical" size="small" :current="-1" :items="processingSteps" />
+        </a-card>
+        <a-alert type="info" show-icon message="默认私有">
+          <template #icon><LockOutlined /></template>
+          <template #description>文档仅当前上传浏览器和管理员可见。公开文库只展示管理员主动公开的文档。</template>
+        </a-alert>
+        <a-alert type="info" show-icon message="提交后可以离开页面" description="任务由后台持续处理，源文件与处理结果永久保留。" />
       </div>
-      <div class="service-card" :class="{ 'is-ready': config?.accepting_uploads }">
-        <span class="service-card__icon"><v-icon :icon="config?.accepting_uploads ? 'mdi-check' : 'mdi-alert-outline'" size="20" /></span>
-        <span><strong>{{ config?.accepting_uploads ? '可以提交' : '服务未就绪' }}</strong><small>{{ config?.accepting_uploads ? '后台处理服务运行正常' : '请联系管理员完成配置' }}</small></span>
-      </div>
-    </header>
+    </div>
 
-    <v-alert v-if="config && !config.mineru_configured" type="warning" variant="tonal" class="workspace-alert">MinerU 尚未配置，当前不能提交文档。</v-alert>
-    <v-alert v-else-if="config && !config.translation_available" type="warning" variant="tonal" class="workspace-alert">尚未配置 Google Cloud Translation 或 DeepSeek，当前不能提交文档。</v-alert>
-
-    <section class="upload-workspace">
-      <div class="workspace-section">
-        <div class="workspace-heading">
-          <span class="workspace-step">01</span>
-          <div><h2>选择文档</h2><p>PDF、Word、PowerPoint、Excel、图片或 HTML，最大 {{ config?.max_upload_mb || 200 }} MB</p></div>
-        </div>
-
-        <div
-          class="drop-zone"
-          :class="{ 'is-dragging': dragging, 'has-file': file }"
-          role="button"
-          tabindex="0"
-          @click="fileInput?.click()"
-          @keydown.enter="fileInput?.click()"
-          @keydown.space.prevent="fileInput?.click()"
-          @dragover.prevent="dragging = true"
-          @dragleave.prevent="dragging = false"
-          @drop.prevent="handleDrop"
-        >
-          <input ref="fileInput" hidden type="file" :accept="config?.accepted_extensions.join(',')" @change="chooseFile(($event.target as HTMLInputElement).files?.[0])">
-          <template v-if="!file">
-            <span class="drop-icon"><v-icon icon="mdi-arrow-up" size="26" /></span>
-            <div class="drop-copy"><strong>拖放文件到这里</strong><span>或者点击选择本地文件</span></div>
-            <span class="drop-action">浏览文件</span>
-          </template>
-          <template v-else>
-            <span class="file-type-icon"><v-icon icon="mdi-file-document-outline" size="26" /></span>
-            <div class="selected-file-copy">
-              <strong>{{ file.name }}</strong>
-              <span>{{ formatSize(file.size) }} · 点击可更换</span>
-            </div>
-            <span class="file-ready"><v-icon icon="mdi-check" size="18" />已选择</span>
-          </template>
-        </div>
-
-        <v-text-field v-if="file" v-model="title" class="title-field" label="文档标题" hint="可以使用中文；服务器实际文件名始终使用安全编码" persistent-hint maxlength="512" />
-        <v-alert v-if="error" type="error" variant="tonal" class="mt-4">{{ error }}</v-alert>
-        <div v-if="uploading" class="upload-progress">
-          <div><span>正在上传源文件</span><strong>{{ uploadProgress }}%</strong></div>
-          <v-progress-linear :model-value="uploadProgress" color="primary" height="8" rounded />
-        </div>
-      </div>
-
-      <div class="workspace-divider" />
-
-      <div class="workspace-section">
-        <div class="workspace-heading">
-          <span class="workspace-step">02</span>
-          <div><h2>选择翻译质量</h2><p>管理员设定默认档位，你可以为本次任务选择任一已开放档位</p></div>
-          <span class="selected-tier-label">本次使用第 {{ selectedTranslationTier }} 档</span>
-        </div>
-
-        <div class="tier-grid" role="radiogroup" aria-label="本次任务翻译质量">
-          <button
-            v-for="item in translationTiers"
-            :key="item.tier"
-            type="button"
-            class="tier-card"
-            :class="{ 'is-active': item.tier === selectedTranslationTier, 'is-unavailable': !tierAvailable(item.tier) }"
-            role="radio"
-            :aria-checked="item.tier === selectedTranslationTier"
-            :aria-disabled="!tierAvailable(item.tier)"
-            @click="selectTranslationTier(item.tier)"
-          >
-            <span class="tier-card__top"><b>0{{ item.tier }}</b><span v-if="item.tier === config?.translation_tier">默认</span><v-icon v-if="!tierAvailable(item.tier)" icon="mdi-lock-outline" size="18" /></span>
-            <span class="tier-card__icon"><v-icon :icon="item.icon" size="28" /></span>
-            <span class="tier-card__copy"><strong>{{ item.name }}</strong><small>{{ item.engine }}</small><em>{{ item.detail }}</em></span>
-            <span class="tier-card__choice"><template v-if="item.tier === selectedTranslationTier"><v-icon icon="mdi-check" size="16" />已选择</template><template v-else-if="!tierAvailable(item.tier)">尚未开放</template><template v-else>选择此档</template></span>
-          </button>
-        </div>
-        <p v-if="translationNotice" class="tier-note is-warning"><v-icon icon="mdi-information-outline" size="18" />{{ translationNotice }}</p>
-        <p v-else class="tier-note"><v-icon icon="mdi-check-circle-outline" size="18" />已选择“{{ selectedTier.name }}”；提交后任务将固定使用第 {{ selectedTranslationTier }} 档。</p>
-      </div>
-
-      <footer class="workspace-footer">
-        <div class="processing-notes">
-          <span><v-icon icon="mdi-lock-outline" size="19" /><b>默认私有</b></span>
-          <span><v-icon icon="mdi-harddisk" size="19" /><b>永久保存</b></span>
-          <span><v-icon icon="mdi-file-pdf-box" size="19" /><b>生成期刊 PDF</b></span>
-          <span><v-icon icon="mdi-progress-clock" size="19" /><b>实时详细进度</b></span>
-        </div>
-        <v-btn class="submit-button" color="primary" size="x-large" append-icon="mdi-arrow-right" :disabled="!file || !config?.accepting_uploads" :loading="uploading" @click="submit">
-          {{ uploading ? `正在上传 ${uploadProgress}%` : '开始处理文档' }}
-        </v-btn>
-      </footer>
-    </section>
-
-    <section v-if="recent.length" class="recent-section">
-      <div class="section-heading">
-        <div><span class="eyebrow">PUBLIC LIBRARY</span><h2>最近公开</h2><p>由管理员主动公开的最新文档</p></div>
-        <v-btn to="/library" variant="outlined" append-icon="mdi-arrow-right">查看文库</v-btn>
-      </div>
-      <div class="document-list"><DocumentCard v-for="document in recent" :key="document.id" :document="document" /></div>
-    </section>
-  </v-container>
+    <a-card v-if="recent.length" title="最近公开文档" class="section-top">
+      <template #extra><router-link to="/library">查看全部</router-link></template>
+      <a-list :data-source="recent"><template #renderItem="{ item }"><DocumentCard :document="item" /></template></a-list>
+    </a-card>
+  </div>
 </template>

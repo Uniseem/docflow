@@ -24,6 +24,11 @@ pub struct Config {
     pub pdf_renderer_script: PathBuf,
     pub pdf_katex_root: PathBuf,
     pub pdf_render_timeout_seconds: u64,
+    pub pdf2zh_python_binary: PathBuf,
+    pub pdf2zh_runner_script: PathBuf,
+    pub pdf2zh_asset_dir: PathBuf,
+    pub pdf2zh_timeout_seconds: u64,
+    pub pdf2zh_concurrency: usize,
     pub worker_concurrency: usize,
     pub public_origin: String,
 }
@@ -73,6 +78,21 @@ impl Config {
             ),
             pdf_render_timeout_seconds: parsed::<u64>("PDF_RENDER_TIMEOUT_SECONDS", 180)?
                 .clamp(30, 900),
+            pdf2zh_python_binary: PathBuf::from(
+                env::var("PDF2ZH_PYTHON_BINARY")
+                    .unwrap_or_else(|_| "/opt/docflow/native-pdf/venv/bin/python".into()),
+            ),
+            pdf2zh_runner_script: PathBuf::from(
+                env::var("PDF2ZH_RUNNER_SCRIPT")
+                    .unwrap_or_else(|_| "/opt/docflow/native-pdf/runner.py".into()),
+            ),
+            pdf2zh_asset_dir: PathBuf::from(
+                env::var("PDF2ZH_ASSET_DIR")
+                    .unwrap_or_else(|_| "/opt/docflow/native-pdf/assets".into()),
+            ),
+            pdf2zh_timeout_seconds: parsed::<u64>("PDF2ZH_TIMEOUT_SECONDS", 7_200)?
+                .clamp(300, 14_400),
+            pdf2zh_concurrency: parsed::<usize>("PDF2ZH_CONCURRENCY", 1)?.clamp(1, 4),
             worker_concurrency: parsed("WORKER_CONCURRENCY", 3)?,
             public_origin: env::var("PUBLIC_ORIGIN")
                 .unwrap_or_default()
@@ -83,6 +103,12 @@ impl Config {
 
     pub fn max_upload_mb(&self) -> u64 {
         self.max_upload_bytes / 1024 / 1024
+    }
+
+    pub fn pdf2zh_available(&self) -> bool {
+        self.pdf2zh_python_binary.is_file()
+            && self.pdf2zh_runner_script.is_file()
+            && self.pdf2zh_asset_dir.join(".ready").is_file()
     }
 }
 

@@ -16,6 +16,7 @@ pub struct Document {
     pub source_path: String,
     pub source_size: i32,
     pub mime_type: Option<String>,
+    pub processing_mode: String,
     pub status: String,
     pub stage: String,
     pub progress: i32,
@@ -58,6 +59,9 @@ pub struct Document {
     #[serde(skip_serializing)]
     pub pdf_path: Option<String>,
     pub pdf_size: Option<i64>,
+    #[serde(skip_serializing)]
+    pub dual_pdf_path: Option<String>,
+    pub dual_pdf_size: Option<i64>,
     #[serde(skip_serializing)]
     pub r2_prefix: Option<String>,
     #[serde(skip_serializing)]
@@ -126,8 +130,23 @@ pub struct PublicConfig {
     pub documents_public_by_default: bool,
     pub r2_configured: bool,
     pub accepting_uploads: bool,
+    pub default_processing_mode: &'static str,
+    pub processing_modes: ProcessingModes,
     pub max_upload_mb: u64,
     pub accepted_extensions: Vec<&'static str>,
     pub api_version: &'static str,
     pub api_docs: &'static str,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ProcessingModeCapability {
+    pub available: bool,
+    pub accepted_extensions: Vec<&'static str>,
+    pub native_pdf_only: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ProcessingModes {
+    pub mineru: ProcessingModeCapability,
+    pub pdf2zh: ProcessingModeCapability,
 }

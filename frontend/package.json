@@ -5,23 +5,22 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 0.0.0.0",
+    "test": "node --test tests/*.test.mjs",
     "build": "vue-tsc --noEmit && vite build",
     "preview": "vite preview --host 0.0.0.0"
   },
   "dependencies": {
-    "@mdi/font": "7.4.47",
+    "@ant-design/icons-vue": "7.0.1",
+    "ant-design-vue": "4.2.6",
     "katex": "0.18.4",
     "vue": "3.5.41",
-    "vue-router": "5.2.0",
-    "vuetify": "3.13.2"
+    "vue-router": "5.2.0"
   },
   "devDependencies": {
     "@types/katex": "0.16.7",
     "@vitejs/plugin-vue": "6.0.8",
-    "sass": "1.93.2",
     "typescript": "5.9.3",
     "vite": "8.2.2",
-    "vite-plugin-vuetify": "^2.1.2",
     "vue-tsc": "3.1.1"
   }
 }
