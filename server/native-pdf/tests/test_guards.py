@@ -78,6 +78,71 @@ assert not failure.failed
 print('guarded')
 """)
 
+    def test_linux_libc_bootstrap_never_probes_external_libraries(self):
+        self.run_guard_script("""
+import ctypes
+from types import SimpleNamespace
+from unittest.mock import patch
+import threadpoolctl
+import asset_bundle
+from bridge import FailureState
+failure = FailureState()
+asset_bundle.install_process_guard(failure)
+libc = SimpleNamespace(dl_iterate_phdr=object())
+with patch.object(asset_bundle.sys, 'platform', 'linux'), \
+     patch.dict(threadpoolctl.ThreadpoolController._system_libraries, {}, clear=True), \
+     patch.object(threadpoolctl, 'find_library', side_effect=AssertionError('external probe')), \
+     patch.object(ctypes, 'CDLL', return_value=libc) as loader:
+    asset_bundle.configure_threadpool_runtime()
+    assert threadpoolctl.ThreadpoolController._get_libc() is libc
+    asset_bundle.configure_threadpool_runtime()
+    loader.assert_called_once_with(None)
+assert not failure.failed
+print('guarded')
+""")
+
+    def test_linux_libc_bootstrap_rejects_missing_symbols(self):
+        self.run_guard_script("""
+from unittest.mock import patch
+import threadpoolctl
+import asset_bundle
+from bridge import NativePdfError
+with patch.object(asset_bundle.sys, 'platform', 'linux'), \
+     patch.dict(threadpoolctl.ThreadpoolController._system_libraries, {}, clear=True), \
+     patch.object(asset_bundle.ctypes, 'CDLL', return_value=object()):
+    try:
+        asset_bundle.configure_threadpool_runtime()
+    except NativePdfError as error:
+        assert error.code == 'engine_threadpool'
+    else:
+        raise AssertionError('missing dl_iterate_phdr was accepted')
+print('guarded')
+""")
+
+    def test_layout_dbscan_and_threadpool_inspection_work_under_process_guard(self):
+        self.run_guard_script("""
+from unittest.mock import patch
+import threadpoolctl
+from asset_bundle import configure_cpu_runtime, install_process_guard
+from bridge import FailureState
+with patch.object(threadpoolctl, 'find_library', side_effect=AssertionError('external probe')):
+    configure_cpu_runtime()
+    failure = FailureState()
+    install_process_guard(failure)
+    # Import the numerical libraries after libc bootstrap, as the runner does.
+    # A Linux subprocess here reproduces the former CI-only layout failure.
+    import numpy as np
+    from sklearn.cluster import DBSCAN
+    info = threadpoolctl.threadpool_info()
+    assert any(item['user_api'] == 'blas' for item in info)
+    labels = DBSCAN(eps=0.4, min_samples=1, metric='manhattan', algorithm='brute').fit_predict(
+        np.array([[0.0, 0.0], [0.2, 0.0], [8.0, 8.0]])
+    )
+    assert labels.tolist() == [0, 0, 1]
+    assert not failure.failed
+print('guarded')
+""")
+
 
 if __name__ == "__main__":
     unittest.main()

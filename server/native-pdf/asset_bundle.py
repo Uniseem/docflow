@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ctypes
 import hashlib
 import importlib
 import importlib.metadata
@@ -272,3 +273,38 @@ def configure_cpu_runtime() -> None:
     # it still probes physical cores. Cache the conservative one-core budget
     # before installing the subprocess guard; no shell command is necessary.
     context.physical_cores_cache = 1
+    configure_threadpool_runtime()
+
+
+def configure_threadpool_runtime() -> None:
+    """Use the loaded Linux libc instead of spawning ldconfig to discover it.
+
+    BabelDOC's small character bands use sklearn's brute-force DBSCAN path.
+    Its lazy threadpoolctl initialization normally calls find_library('c'),
+    which launches a subprocess on Linux even though libc is already loaded.
+    Cache only libc: a full controller created here would miss BLAS libraries
+    imported later by the layout engine.
+    """
+    if sys.platform != "linux":
+        return
+    if importlib.metadata.version("threadpoolctl") != "3.6.0":
+        raise NativePdfError(
+            "engine_version", "原生 PDF 线程库版本不符合适配器约定，请重新构建镜像。"
+        )
+    from threadpoolctl import ThreadpoolController
+
+    try:
+        libc = ThreadpoolController._system_libraries.get("libc")
+        if libc is None:
+            # None resolves symbols in this process, without searching for a
+            # filename or calling an external loader/hardware-probe command.
+            libc = ctypes.CDLL(None)
+        if not hasattr(libc, "dl_iterate_phdr"):
+            raise NativePdfError(
+                "engine_threadpool", "原生 PDF 线程库缺少 Linux 动态库枚举接口。"
+            )
+        ThreadpoolController._system_libraries["libc"] = libc
+    except (AttributeError, OSError) as exc:
+        raise NativePdfError(
+            "engine_threadpool", "原生 PDF 线程库初始化失败，请检查运行镜像。"
+        ) from exc
