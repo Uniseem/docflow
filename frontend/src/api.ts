@@ -11,6 +11,23 @@ import type {
 } from './types'
 
 const jsonHeaders = { 'Content-Type': 'application/json' }
+const adminTokenKey = 'docflow-admin-token'
+let memoryAdminToken = ''
+
+// Login must still work when browser storage is disabled. The server also sets
+// an HttpOnly cookie; localStorage is a best-effort bridge for older sessions.
+export function readAdminToken(): string {
+  try { return localStorage.getItem(adminTokenKey) || memoryAdminToken }
+  catch { return memoryAdminToken }
+}
+export function saveAdminToken(token: string) {
+  memoryAdminToken = token
+  try { localStorage.setItem(adminTokenKey, token) } catch { /* Cookie + memory remain usable. */ }
+}
+export function clearAdminToken() {
+  memoryAdminToken = ''
+  try { localStorage.removeItem(adminTokenKey) } catch { /* Storage may be disabled. */ }
+}
 
 export class ApiError extends Error {
   constructor(message: string, readonly status: number) {
@@ -20,24 +37,35 @@ export class ApiError extends Error {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(path, { credentials: 'same-origin', ...init })
-  if (!response.ok) {
-    let message = `请求失败（${response.status}）`
-    try {
-      const body = await response.json()
-      if (typeof body.detail === 'string' && body.detail) message = body.detail
-    } catch {
-      // Keep the HTTP status fallback.
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), 60_000)
+  try {
+    const response = await fetch(path, { credentials: 'same-origin', signal: controller.signal, ...init })
+    if (!response.ok) {
+      let message = `请求失败（${response.status}）`
+      try {
+        const body = await response.json()
+        if (typeof body.detail === 'string' && body.detail) message = body.detail
+      } catch {
+        // Keep the HTTP status fallback.
+      }
+      throw new ApiError(message, response.status)
     }
-    throw new ApiError(message, response.status)
+    if (response.status === 204) return undefined as T
+    try { return await response.json() as T }
+    catch { throw new ApiError('服务器返回了无效的数据，请刷新页面并确认前后端版本一致。', 502) }
+  } catch (reason) {
+    if (controller.signal.aborted) throw new ApiError('请求超时，请检查服务状态后重试。', 408)
+    if (reason instanceof ApiError) throw reason
+    throw new ApiError('无法连接服务器，请检查网络或稍后重试。', 0)
+  } finally {
+    clearTimeout(timer)
   }
-  if (response.status === 204) return undefined as T
-  return response.json() as Promise<T>
 }
 
 function adminHeaders(): Record<string, string> {
-  const token = localStorage.getItem('docflow-admin-token')
-  return { ...jsonHeaders, Authorization: `Bearer ${token || ''}` }
+  const token = readAdminToken()
+  return token ? { ...jsonHeaders, Authorization: `Bearer ${token}` } : { ...jsonHeaders }
 }
 
 export const api = {
@@ -148,14 +176,20 @@ export const api = {
       xhr.open('POST', '/api/v1/jobs')
       xhr.withCredentials = true
       xhr.responseType = 'json'
+      xhr.timeout = 15 * 60 * 1000
       xhr.upload.onprogress = (event) => {
         if (event.lengthComputable) onProgress(Math.round((event.loaded / event.total) * 100))
       }
       xhr.onload = () => {
-        if (xhr.status >= 200 && xhr.status < 300) resolve(xhr.response as DocumentSummary)
+        if (xhr.status >= 200 && xhr.status < 300) {
+          if (typeof xhr.response?.id === 'string' && xhr.response.id.trim()) resolve(xhr.response as DocumentSummary)
+          else reject(new Error('服务器未返回有效的任务编号，请刷新页面并检查后台任务，避免重复提交。'))
+        }
         else reject(new Error(xhr.response?.detail || `上传失败（${xhr.status}）`))
       }
       xhr.onerror = () => reject(new Error('网络连接中断，请稍后重试'))
+      xhr.ontimeout = () => reject(new Error('提交超时，请检查网络和后台任务后重试，避免重复上传。'))
+      xhr.onabort = () => reject(new Error('文件提交已中断，请重新提交。'))
       xhr.send(form)
     }),
 }

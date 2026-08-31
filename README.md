@@ -390,7 +390,7 @@ HTTP_PORT=9000
 
 管理员访问 `http://你的服务器IP:38100/admin`：
 
-1. 首次注册唯一管理员；已有 Python 版本的 Argon2 密码可直接登录。
+1. 尚无管理员时，直接设置账号、密码并确认密码即可注册，无需初始化密钥、邀请码或读取服务器文件。首位成功注册者成为唯一管理员，之后关闭注册，只显示登录表单。部署后请及时注册；已有 Python 版本的 Argon2 密码可直接登录，不会重置原管理员。
 2. 使用 MinerU 路线时配置并验证 MinerU API Key 与模型；只用 PDF 原生翻译可以跳过。
 3. 配置并验证 Google Cloud Translation API Key 后开放极速档。
 4. 配置并验证 DeepSeek API Key 后开放均衡档（V4 Flash 非思考）和精准档（V4 Flash 思考）；模型名称由系统固定。

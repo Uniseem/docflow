@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { CloudUploadOutlined, FileTextOutlined, InboxOutlined, LockOutlined, ReloadOutlined } from '@ant-design/icons-vue'
 import { api } from '../api'
@@ -19,6 +19,8 @@ const error = ref('')
 type TranslationTier = 1 | 2 | 3
 const selectedTranslationTier = ref<TranslationTier>(1)
 const selectedProcessingMode = ref<ProcessingMode>('mineru')
+// Ant Design only emits finish for a bound model; keep its identity stable.
+const uploadForm = reactive({ file, title, translationTier: selectedTranslationTier, processingMode: selectedProcessingMode })
 
 const translationTiers = [
   { tier: 1, name: '极速', engine: 'Google Cloud', detail: '官方翻译 API，适合快速阅读。' },
@@ -84,7 +86,11 @@ async function loadConfig() {
 }
 
 async function submit() {
-  if (!file.value || !canSubmit.value) return
+  if (uploading.value) return
+  if (!file.value || !canSubmit.value) {
+    error.value = fileValidation.value || unavailableReason.value || '请先选择文档和可用的翻译档位。'
+    return
+  }
   error.value = ''
   uploading.value = true
   uploadProgress.value = 0
@@ -118,8 +124,8 @@ onBeforeUnmount(() => window.removeEventListener('focus', loadConfig))
 
     <div class="upload-grid">
       <a-card title="上传与处理" class="upload-card">
-        <a-form layout="vertical" @finish="submit">
-          <a-form-item label="处理方式" required>
+        <a-form :model="uploadForm" layout="vertical" @finish="submit">
+          <a-form-item name="processingMode" label="处理方式" required>
             <a-radio-group v-model:value="selectedProcessingMode" :disabled="uploading" class="processing-selector" aria-label="处理方式">
               <a-space direction="vertical" :size="16" class="full-width">
                 <a-radio v-for="mode in processingModes" :key="mode.value" :value="mode.value">
@@ -130,7 +136,7 @@ onBeforeUnmount(() => window.removeEventListener('focus', loadConfig))
             </a-radio-group>
             <div v-if="selectedProcessingMode === 'pdf2zh'" class="field-help">pdf2zh 流程使用 BabelDOC 内核，无需 MinerU 密钥；上传后检查文本层，不支持扫描件。</div>
           </a-form-item>
-          <a-form-item label="选择文档" required :validate-status="fileValidation ? 'error' : undefined" :help="fileValidation || undefined">
+          <a-form-item name="file" label="选择文档" required :validate-status="fileValidation ? 'error' : undefined" :help="fileValidation || undefined">
             <a-upload-dragger :before-upload="chooseFile" :show-upload-list="false" :multiple="false" :accept="allowedExtensions.join(',')" :disabled="uploading || !config">
               <p class="ant-upload-drag-icon"><FileTextOutlined v-if="file" /><InboxOutlined v-else /></p>
               <p class="ant-upload-text file-name">{{ file ? file.name : '点击选择文件，或拖动文件到这里' }}</p>
@@ -138,10 +144,10 @@ onBeforeUnmount(() => window.removeEventListener('focus', loadConfig))
               <p class="ant-upload-hint">单个文件最大 {{ config?.max_upload_mb || 200 }} MB</p>
             </a-upload-dragger>
           </a-form-item>
-          <a-form-item label="文档标题" extra="仅用于页面展示与下载命名，不影响服务器上的安全存储名称。">
+          <a-form-item name="title" label="文档标题" extra="仅用于页面展示与下载命名，不影响服务器上的安全存储名称。">
             <a-input v-model:value="title" placeholder="默认使用文件名，可填写中文" :maxlength="300" :disabled="uploading" />
           </a-form-item>
-          <a-form-item label="中文翻译档位" required>
+          <a-form-item name="translationTier" label="中文翻译档位" required>
             <a-radio-group v-model:value="selectedTranslationTier" button-style="solid" size="large" class="translation-selector" :disabled="uploading">
               <a-radio-button v-for="tier in translationTiers" :key="tier.tier" :value="tier.tier" :disabled="!tierAvailable(tier.tier)">{{ tier.name }}</a-radio-button>
             </a-radio-group>

@@ -4,7 +4,7 @@ import { Collapse as ACollapse, CollapsePanel as ACollapsePanel, Descriptions as
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { ArrowLeftOutlined, DownloadOutlined, EyeOutlined, FileMarkdownOutlined, FilePdfOutlined, FileZipOutlined, ReloadOutlined } from '@ant-design/icons-vue'
-import { api } from '../api'
+import { api, readAdminToken } from '../api'
 import ProcessingTimeline from '../components/ProcessingTimeline.vue'
 import StageOverview from '../components/StageOverview.vue'
 import StatusChip from '../components/StatusChip.vue'
@@ -145,7 +145,7 @@ async function load() {
   if (refreshing.value) return
   refreshing.value = true; error.value = ''
   try {
-    if (localStorage.getItem('docflow-admin-token')) await api.ensureAdminSession().catch(() => undefined)
+    if (readAdminToken()) await api.ensureAdminSession().catch(() => undefined)
     const item = await api.getDocument(documentId)
     if (disposed) return
     documentItem.value = item

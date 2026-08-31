@@ -2,18 +2,19 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { Descriptions as ADescriptions, DescriptionsItem as ADescriptionsItem, Divider as ADivider, InputNumber as AInputNumber, Modal as AModal, Pagination as APagination, Popconfirm as APopconfirm, Select as ASelect, Table as ATable, Tabs as ATabs, TabPane as ATabPane } from 'ant-design-vue'
 import { LogoutOutlined, ReloadOutlined, SaveOutlined } from '@ant-design/icons-vue'
-import { api, ApiError } from '../api'
+import { api, ApiError, clearAdminToken, readAdminToken, saveAdminToken } from '../api'
 import StatusChip from '../components/StatusChip.vue'
 import { processingModeLabel } from '../processingModes'
 import { copyTranslationRuntime, validateTranslationRuntime } from '../translationRuntime'
 import type { AdminSettings, DocumentSummary, TranslationRuntime } from '../types'
 
 type TranslationTier = 1 | 2 | 3
-const token = ref(localStorage.getItem('docflow-admin-token') || '')
+const authenticated = ref(false)
 const initialized = ref<boolean | null>(null)
 const username = ref('')
 const password = ref('')
 const passwordConfirm = ref('')
+const authForm = reactive({ username, password, passwordConfirm })
 const settings = ref<AdminSettings | null>(null)
 const runtime = ref<TranslationRuntime | null>(null)
 const tab = ref('translation')
@@ -34,6 +35,7 @@ const renameTitle = ref('')
 const renameFilename = ref('')
 const pending = ref('')
 const loading = ref(false)
+const initializationFailed = ref(false)
 const success = ref('')
 const error = ref('')
 let documentRequest = 0
@@ -73,8 +75,8 @@ function hydrateSettings(value: AdminSettings) {
 }
 
 function clearAdminState() {
-  localStorage.removeItem('docflow-admin-token')
-  token.value = ''
+  clearAdminToken()
+  authenticated.value = false
   settings.value = null
   runtime.value = null
   documents.value = []
@@ -103,7 +105,7 @@ async function loadDocuments() {
   documentsLoading.value = true
   try {
     const result = await api.adminListDocuments(documentPage.value, 20, documentQuery.value.trim())
-    if (request !== documentRequest || !token.value) return
+    if (request !== documentRequest || !authenticated.value) return
     documents.value = result.items
     documentTotal.value = result.total
   } catch (reason) {
@@ -115,27 +117,36 @@ async function loadDocuments() {
 function searchDocuments() { documentPage.value = 1; void loadDocuments() }
 function changeDocumentPage(page: number) { documentPage.value = page; void loadDocuments() }
 
-async function loadSettings() {
-  if (!token.value) return
+async function loadSettings(initial = false) {
+  const hadToken = Boolean(readAdminToken())
   loading.value = true
   try {
     await api.ensureAdminSession()
     hydrateSettings(await api.adminSettings())
+    authenticated.value = true
     await loadDocuments()
   } catch (reason) {
-    reportFailure(reason, '无法读取后台配置，请稍后重试')
+    if (initial && !hadToken && reason instanceof ApiError && reason.status === 401) {
+      // A visitor without a session should see login, not an expiration error.
+      clearAdminState()
+    } else {
+      if (initial && !(reason instanceof ApiError && reason.status === 401)) initializationFailed.value = true
+      reportFailure(reason, '无法读取后台配置，请稍后重试')
+    }
   } finally { loading.value = false }
 }
 
 async function authenticate() {
-  if (pending.value) return
+  if (pending.value || initialized.value === null) return
   error.value = ''
+  if (Array.from(username.value.trim()).length < 2 || !password.value) { error.value = '请填写管理员名称（至少 2 个字符）和密码。'; return }
+  if (!initialized.value && Array.from(password.value).length < 10) { error.value = '管理员密码至少需要 10 个字符。'; return }
   if (!initialized.value && password.value !== passwordConfirm.value) { error.value = '两次输入的密码不一致'; return }
   pending.value = 'auth'
   try {
     const result = initialized.value ? await api.adminLogin(username.value, password.value) : await api.adminRegister(username.value, password.value)
-    localStorage.setItem('docflow-admin-token', result.token)
-    token.value = result.token
+    saveAdminToken(result.token)
+    authenticated.value = true
     initialized.value = true
     password.value = ''
     passwordConfirm.value = ''
@@ -145,6 +156,12 @@ async function authenticate() {
     const status = await api.adminStatus().catch(() => null)
     if (status) initialized.value = status.initialized
   } finally { pending.value = '' }
+}
+
+function authenticateOnEnter(event: KeyboardEvent) {
+  if (event.isComposing) return
+  event.preventDefault()
+  void authenticate()
 }
 
 async function logout() {
@@ -209,26 +226,33 @@ function retryDocument(item: DocumentSummary) { return mutateDocument(item.id, (
 
 async function initialize() {
   error.value = ''
-  try { initialized.value = (await api.adminStatus()).initialized; await loadSettings() }
-  catch (reason) { error.value = reason instanceof Error ? reason.message : '无法连接管理服务' }
+  initializationFailed.value = false
+  loading.value = true
+  try {
+    initialized.value = (await api.adminStatus()).initialized
+    if (initialized.value) await loadSettings(true)
+    else clearAdminState()
+  }
+  catch (reason) { initializationFailed.value = true; error.value = reason instanceof Error ? reason.message : '无法连接管理服务' }
+  finally { loading.value = false }
 }
 onMounted(initialize)
 </script>
 
 <template>
   <div class="page-container admin-container">
-    <div class="page-heading"><div><h1>管理后台</h1><p>管理翻译参数、服务密钥与全部文档。</p></div><a-button v-if="token" :loading="pending === 'logout'" :disabled="Boolean(pending)" @click="logout()"><template #icon><LogoutOutlined /></template>退出登录</a-button></div>
+    <div class="page-heading"><div><h1>管理后台</h1><p>管理翻译参数、服务密钥与全部文档。</p></div><a-button v-if="authenticated" :loading="pending === 'logout'" :disabled="Boolean(pending)" @click="logout()"><template #icon><LogoutOutlined /></template>退出登录</a-button></div>
     <a-alert v-if="success" type="success" :message="success" show-icon closable class="section-gap" @close="success = ''" />
     <a-alert v-if="error" type="error" :message="error" show-icon closable class="section-gap" @close="error = ''" />
-    <a-card v-if="!loading && error && (initialized === null || (token && !settings))" class="section-gap"><a-button type="primary" @click="initialize"><template #icon><ReloadOutlined /></template>重新连接后台</a-button></a-card>
+    <a-card v-if="!loading && error && (initializationFailed || initialized === null || (authenticated && !settings))" class="section-gap"><a-button type="primary" @click="initialize"><template #icon><ReloadOutlined /></template>重新连接后台</a-button></a-card>
     <div v-else-if="initialized === null || loading" class="loading-state"><a-spin /><span>正在读取后台配置…</span></div>
 
-    <a-card v-else-if="!token" :title="initialized ? '管理员登录' : '注册首位管理员'" class="auth-card">
-      <a-alert v-if="!initialized" type="warning" show-icon message="首位完成注册的用户将成为管理员，注册后初始化入口关闭。" class="section-gap" />
-      <a-form layout="vertical" @finish="authenticate">
-        <a-form-item label="管理员名称" required><a-input v-model:value="username" autocomplete="username" :maxlength="64" /></a-form-item>
-        <a-form-item label="管理员密码" required :extra="initialized ? '' : '至少 10 个字符，请妥善保存。'"><a-input-password v-model:value="password" :autocomplete="initialized ? 'current-password' : 'new-password'" /></a-form-item>
-        <a-form-item v-if="!initialized" label="确认密码" required><a-input-password v-model:value="passwordConfirm" autocomplete="new-password" /></a-form-item>
+    <a-card v-else-if="!authenticated" :title="initialized ? '管理员登录' : '注册首位管理员'" class="auth-card">
+      <a-alert v-if="!initialized" type="info" show-icon message="无需初始化密钥，直接设置管理员账号和密码。" description="首位完成注册的人将成为唯一管理员，之后关闭注册。请在部署完成后及时注册。" class="section-gap" />
+      <a-form :model="authForm" layout="vertical" @finish="authenticate" @keydown.enter="authenticateOnEnter">
+        <a-form-item name="username" label="管理员名称" required><a-input v-model:value="username" autocomplete="username" :maxlength="64" /></a-form-item>
+        <a-form-item name="password" label="管理员密码" required :extra="initialized ? '' : '至少 10 个字符，请妥善保存。'"><a-input-password v-model:value="password" :autocomplete="initialized ? 'current-password' : 'new-password'" /></a-form-item>
+        <a-form-item v-if="!initialized" name="passwordConfirm" label="确认密码" required><a-input-password v-model:value="passwordConfirm" autocomplete="new-password" /></a-form-item>
         <a-button type="primary" html-type="submit" block :loading="pending === 'auth'" :disabled="username.trim().length < 2 || !password || (!initialized && password.length < 10)">{{ initialized ? '登录' : '注册并进入后台' }}</a-button>
       </a-form>
     </a-card>
@@ -245,7 +269,7 @@ onMounted(initialize)
           <a-card v-if="runtime" title="并发与分段" class="section-gap">
             <template #extra><a-tag v-if="runtimeDirty" color="warning">有未保存的修改</a-tag></template>
             <a-alert type="info" show-icon message="两个独立的全站任务池" description="Google 与 DeepSeek 分别控制并发，两种处理方式、所有用户共享对应任务池。每次请求最多段数指单次 API 批量提交，不是整篇文档的总段数。" class="section-gap" />
-            <a-form layout="vertical" :disabled="Boolean(pending)" @finish="saveRuntime">
+            <a-form :model="runtime" layout="vertical" :disabled="Boolean(pending)" @finish="saveRuntime">
               <div class="provider-grid">
                 <a-card v-for="pool in poolDefinitions" :key="pool.key" size="small" :title="pool.name">
                   <p class="section-description">{{ pool.description }}</p>
@@ -286,7 +310,7 @@ onMounted(initialize)
           <div class="credential-grid">
             <a-card title="MinerU 文档解析">
               <p class="section-description">仅用于 MinerU 解析翻译。PDF 原生翻译使用 BabelDOC 内核，无需此密钥。</p>
-              <a-form layout="vertical" @finish="saveMinerU">
+              <a-form :model="{ mineruKey, mineruModel }" layout="vertical" @finish="saveMinerU">
                 <a-form-item label="新的 MinerU API Key" :extra="settings.mineru_api_key_masked ? '当前：' + settings.mineru_api_key_masked : '尚未配置'"><a-input-password v-model:value="mineruKey" autocomplete="new-password" /></a-form-item>
                 <a-form-item label="解析模型"><a-select v-model:value="mineruModel" :options="[{ label: 'VLM（推荐）', value: 'vlm' }, { label: 'Pipeline', value: 'pipeline' }]" /></a-form-item>
                 <a-button type="primary" html-type="submit" :loading="pending === 'mineru'" :disabled="mineruKey.length < 8 || Boolean(pending)">验证并保存</a-button>
@@ -294,13 +318,13 @@ onMounted(initialize)
             </a-card>
             <a-card title="Google Cloud Translation">
               <p class="section-description">极速档使用官方 Basic v2 API，需启用 API 并配置项目密钥。</p>
-              <a-form layout="vertical" @finish="saveGoogle">
+              <a-form :model="{ googleKey }" layout="vertical" @finish="saveGoogle">
                 <a-form-item label="新的 Google API Key" :extra="settings.google_api_key_masked ? '当前：' + settings.google_api_key_masked : '尚未配置'"><a-input-password v-model:value="googleKey" autocomplete="new-password" /></a-form-item>
                 <a-button type="primary" html-type="submit" :loading="pending === 'google'" :disabled="googleKey.length < 8 || Boolean(pending)">验证并保存</a-button>
               </a-form>
             </a-card>
             <a-card title="DeepSeek">
-              <a-form layout="vertical" @finish="saveDeepSeek">
+              <a-form :model="{ deepseekKey, deepseekModel }" layout="vertical" @finish="saveDeepSeek">
                 <a-form-item label="新的 DeepSeek API Key" :extra="settings.deepseek_api_key_masked ? '当前：' + settings.deepseek_api_key_masked : '尚未配置'"><a-input-password v-model:value="deepseekKey" autocomplete="new-password" /></a-form-item>
                 <a-form-item label="模型名称" extra="均衡档关闭思考，精准档启用思考。"><a-input v-model:value="deepseekModel" placeholder="deepseek-v4-flash" /></a-form-item>
                 <a-button type="primary" html-type="submit" :loading="pending === 'deepseek'" :disabled="deepseekKey.length < 8 || !deepseekModel.trim() || Boolean(pending)">验证并保存</a-button>
@@ -347,7 +371,7 @@ onMounted(initialize)
             <template #extra><a-tag :color="settings.r2_configured ? 'success' : 'default'">{{ settings.r2_configured ? '已配置' : '未配置' }}</a-tag></template>
             <p class="section-description">只追加异地副本，R2 故障不影响本地发布，也不会删除本地文件。</p>
             <a-alert type="warning" show-icon message="请使用私有存储桶" description="镜像包含私有文档。请关闭桶的公开访问、r2.dev 和公开自定义域名；文件必须通过本站鉴权下载，否则知道对象地址的人仍可绕过本站访问。" class="section-gap" />
-            <a-form layout="vertical" @finish="saveR2">
+            <a-form :model="r2" layout="vertical" @finish="saveR2">
               <div class="provider-grid"><a-form-item label="Cloudflare Account ID"><a-input v-model:value="r2.accountId" /></a-form-item><a-form-item label="Bucket 名称"><a-input v-model:value="r2.bucket" /></a-form-item><a-form-item label="新的 Access Key ID"><a-input-password v-model:value="r2.accessKeyId" autocomplete="new-password" :placeholder="settings.r2_access_key_id_masked || ''" /></a-form-item><a-form-item label="新的 Secret Access Key"><a-input-password v-model:value="r2.secretAccessKey" autocomplete="new-password" :placeholder="settings.r2_secret_access_key_masked || ''" /></a-form-item></div>
               <a-form-item label="旧版公开域名（兼容字段，建议留空）"><a-input v-model:value="r2.publicBaseUrl" placeholder="请关闭桶的公开访问，并留空此项" /></a-form-item>
               <a-button type="primary" html-type="submit" :loading="pending === 'r2'" :disabled="!r2.accountId || !r2.bucket || r2.accessKeyId.length < 8 || r2.secretAccessKey.length < 8 || Boolean(pending)">验证并保存</a-button>
