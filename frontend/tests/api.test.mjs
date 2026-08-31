@@ -5,7 +5,7 @@ import ts from 'typescript'
 
 const source = await readFile(new URL('../src/api.ts', import.meta.url), 'utf8')
 const compiled = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } }).outputText
-const { api, ApiError } = await import(`data:text/javascript;base64,${Buffer.from(compiled).toString('base64')}`)
+const { api, ApiError, readAdminToken, saveAdminToken, clearAdminToken } = await import(`data:text/javascript;base64,${Buffer.from(compiled).toString('base64')}`)
 
 function installStorage(t) {
   const descriptor = Object.getOwnPropertyDescriptor(globalThis, 'localStorage')
@@ -154,4 +154,86 @@ test('upload network errors remain actionable for either processing mode', async
   const uploaded = api.uploadDocument(new File(['pdf'], 'paper.pdf'), '', 2, 'pdf2zh', () => {})
   MockXMLHttpRequest.latest.onerror()
   await assert.rejects(uploaded, /网络连接中断/)
+})
+
+test('upload timeouts and aborts always reject instead of leaving the submit button pending forever', async (t) => {
+  installXMLHttpRequest(t)
+  for (const [event, message] of [['ontimeout', /提交超时/], ['onabort', /已中断/]]) {
+    const pending = api.uploadDocument(new File(['pdf'], 'paper.pdf'), '', 1, 'mineru', () => {})
+    const xhr = MockXMLHttpRequest.latest
+    assert.equal(xhr.timeout, 900_000)
+    xhr[event]()
+    await assert.rejects(pending, message)
+  }
+})
+
+test('a malformed successful upload response cannot navigate to an undefined document', async (t) => {
+  installXMLHttpRequest(t)
+  for (const response of [null, {}, { id: '' }, { id: 123 }]) {
+    const pending = api.uploadDocument(new File(['pdf'], 'paper.pdf'), '', 1, 'mineru', () => {})
+    const xhr = MockXMLHttpRequest.latest
+    xhr.status = 200
+    xhr.response = response
+    xhr.onload()
+    await assert.rejects(pending, /未返回有效的任务编号/)
+  }
+})
+
+test('registration only sends username and password without any initialization secret', async (t) => {
+  t.mock.method(globalThis, 'fetch', async (path, options) => {
+    assert.equal(path, '/api/admin/register')
+    assert.deepEqual(JSON.parse(options.body), { username: 'test-admin', password: 'test-password-123' })
+    assert.equal(options.headers.Authorization, undefined)
+    return new Response(JSON.stringify({ token: 'fixture' }), { status: 201 })
+  })
+  assert.deepEqual(await api.adminRegister('test-admin', 'test-password-123'), { token: 'fixture' })
+})
+
+test('disabled browser storage still allows memory-backed login and cookie-only session restoration', async (t) => {
+  const descriptor = Object.getOwnPropertyDescriptor(globalThis, 'localStorage')
+  Object.defineProperty(globalThis, 'localStorage', { configurable: true, get() { throw new Error('storage disabled') } })
+  t.after(() => { clearAdminToken(); if (descriptor) Object.defineProperty(globalThis, 'localStorage', descriptor); else delete globalThis.localStorage })
+  assert.equal(readAdminToken(), '')
+  saveAdminToken('memory-fixture-token')
+  assert.equal(readAdminToken(), 'memory-fixture-token')
+  let expected = 'Bearer memory-fixture-token'
+  t.mock.method(globalThis, 'fetch', async (_path, options) => {
+    assert.equal(options.headers.Authorization, expected)
+    assert.equal(options.credentials, 'same-origin')
+    return new Response(null, { status: 204 })
+  })
+  await api.ensureAdminSession()
+  clearAdminToken()
+  expected = undefined
+  await api.ensureAdminSession()
+})
+
+test('unreachable API and invalid JSON responses display actionable connection errors', async (t) => {
+  t.mock.method(globalThis, 'fetch', async () => { throw new TypeError('Failed to fetch') })
+  await assert.rejects(api.adminStatus(), (error) => error instanceof ApiError && error.status === 0 && /无法连接服务器/.test(error.message))
+  t.mock.method(globalThis, 'fetch', async () => new Response('<html>stale proxy response</html>'))
+  await assert.rejects(api.adminStatus(), (error) => error instanceof ApiError && error.status === 502 && /无效的数据/.test(error.message))
+})
+
+test('a hung admin request times out with a retryable error', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  t.mock.method(globalThis, 'fetch', async (_path, options) => new Promise((_resolve, reject) => {
+    options.signal.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')))
+  }))
+  const pending = api.adminStatus()
+  const rejected = assert.rejects(pending, (error) => error instanceof ApiError && error.status === 408 && /请求超时/.test(error.message))
+  t.mock.timers.tick(60_000)
+  await rejected
+})
+
+test('a response body that hangs after headers is still reported as a timeout', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  t.mock.method(globalThis, 'fetch', async (_path, options) => new Response(new ReadableStream({
+    start(controller) { options.signal.addEventListener('abort', () => controller.error(new DOMException('Aborted', 'AbortError'))) },
+  })))
+  const pending = api.adminStatus()
+  const rejected = assert.rejects(pending, (error) => error instanceof ApiError && error.status === 408)
+  await Promise.resolve()
+  t.mock.timers.tick(60_000)
+  await rejected
 })
