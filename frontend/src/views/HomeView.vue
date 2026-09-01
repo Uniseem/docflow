@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { CloudUploadOutlined, FileTextOutlined, InboxOutlined, LockOutlined, ReloadOutlined } from '@ant-design/icons-vue'
 import { api } from '../api'
@@ -16,6 +16,7 @@ const uploading = ref(false)
 const configLoading = ref(false)
 const uploadProgress = ref(0)
 const error = ref('')
+const submissionPhase = ref<'idle' | 'uploading' | 'creating' | 'opening'>('idle')
 type TranslationTier = 1 | 2 | 3
 const selectedTranslationTier = ref<TranslationTier>(1)
 const selectedProcessingMode = ref<ProcessingMode>('mineru')
@@ -34,6 +35,17 @@ const allowedExtensions = computed(() => acceptedExtensions(config.value, select
 // This also revalidates an already-selected file whenever the mode or server limits change.
 const fileValidation = computed(() => file.value ? validateUpload(file.value, config.value, selectedProcessingMode.value) : '')
 const canSubmit = computed(() => Boolean(file.value && !fileValidation.value && modeReady.value && tierAvailable(selectedTranslationTier.value) && !uploading.value))
+const submissionMessage = computed(() => ({
+  idle: '',
+  uploading: `正在上传源文件 · ${uploadProgress.value}%`,
+  creating: '源文件已上传，正在保存并创建任务',
+  opening: '任务已创建，正在打开实时进度',
+}[submissionPhase.value]))
+const submissionDetail = computed(() => submissionPhase.value === 'uploading'
+  ? '上传完成后会自动进入任务页面，无需再次点击。'
+  : submissionPhase.value === 'creating'
+    ? '服务器正在写入永久存储，请保持当前页面。'
+    : '后台处理已经开始，页面即将无缝切换。')
 const unavailableReason = computed(() => {
   if (!config.value) return ''
   if (!config.value.translation_available) return '尚未配置可用的翻译服务，请联系管理员。'
@@ -94,13 +106,20 @@ async function submit() {
   error.value = ''
   uploading.value = true
   uploadProgress.value = 0
+  submissionPhase.value = 'uploading'
   try {
-    const result = await api.uploadDocument(file.value, title.value, selectedTranslationTier.value, selectedProcessingMode.value, (value) => { uploadProgress.value = value })
+    const result = await api.uploadDocument(file.value, title.value, selectedTranslationTier.value, selectedProcessingMode.value, (value) => {
+      uploadProgress.value = value
+      if (value >= 100) submissionPhase.value = 'creating'
+    })
+    submissionPhase.value = 'opening'
+    await nextTick()
     await router.push(`/documents/${result.id}`)
   } catch (reason) {
     error.value = reason instanceof Error ? reason.message : '上传失败'
   } finally {
     uploading.value = false
+    submissionPhase.value = 'idle'
   }
 }
 
@@ -155,9 +174,13 @@ onBeforeUnmount(() => window.removeEventListener('focus', loadConfig))
             <div class="field-help">两种处理方式共用以上档位及管理员设置的翻译参数。</div>
             <div v-if="!config?.google_configured || !config?.deepseek_configured" class="field-help">灰色档位需管理员配置对应服务密钥后开放。</div>
           </a-form-item>
-          <a-progress v-if="uploading" :percent="uploadProgress" :status="uploadProgress === 100 ? 'active' : 'normal'" />
-          <div v-if="uploading" class="field-help section-gap">{{ uploadProgress === 100 ? '文件上传完成，正在保存并创建任务…' : '正在上传文件，请暂时保留此页面。' }}</div>
-          <a-button type="primary" size="large" html-type="submit" :loading="uploading" :disabled="!canSubmit"><template #icon><CloudUploadOutlined /></template>{{ uploading ? '正在提交' : '开始处理' }}</a-button>
+          <transition name="inline-feedback">
+            <div v-if="uploading" class="submission-status section-gap" role="status" aria-live="polite">
+              <div class="submission-status-copy"><a-spin size="small" /><div><strong>{{ submissionMessage }}</strong><span>{{ submissionDetail }}</span></div></div>
+              <a-progress :percent="uploadProgress" :show-info="false" :status="uploadProgress === 100 ? 'success' : 'active'" size="small" />
+            </div>
+          </transition>
+          <a-button type="primary" size="large" html-type="submit" :loading="uploading" :disabled="!canSubmit" class="submit-button"><template #icon><CloudUploadOutlined /></template>{{ uploading ? '正在提交' : '开始处理' }}</a-button>
         </a-form>
       </a-card>
 

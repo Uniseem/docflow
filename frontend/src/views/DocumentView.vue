@@ -18,6 +18,7 @@ const events = ref<ProcessingEvent[]>([])
 const eventTotal = ref(0)
 const error = ref('')
 const refreshing = ref(false)
+const completionPending = ref(false)
 const clock = ref(Date.now())
 const connection = ref<'connecting' | 'live' | 'retrying' | 'closed'>('connecting')
 let eventCursor = 0
@@ -34,6 +35,7 @@ const downloads = computed(() => documentDownloads(documentItem.value))
 const pdfPreviewUrl = computed(() => nativePdfPreviewUrl(documentItem.value))
 const downloadIcons = { markdown: FileMarkdownOutlined, pdf: FilePdfOutlined, bundle: FileZipOutlined }
 const renderedMarkdownHtml = computed(() => documentItem.value?.content_html || '')
+const workspaceState = computed(() => documentItem.value?.status === 'completed' ? 'completed' : 'processing')
 const connectionText = computed(() => ({ connecting: '连接实时进度', live: '实时进度已连接', retrying: '连接中断，自动重连中', closed: '处理记录已保存' }[connection.value]))
 const connectionStatus = computed(() => connection.value === 'retrying' ? 'warning' : connection.value === 'live' ? 'processing' : 'default')
 const formatDate = (value: string) => new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium', timeStyle: 'medium', hour12: false }).format(new Date(value))
@@ -83,24 +85,29 @@ function appendEvent(event: ProcessingEvent, refresh = true) {
   if (refresh && documentItem.value) {
     documentItem.value.stage = event.stage
     documentItem.value.progress = event.progress
-    if (event.stage === 'completed') documentItem.value.status = 'completed'
+    if (event.stage === 'completed') completionPending.value = true
     else if (event.stage === 'failed') documentItem.value.status = 'failed'
     else if (event.stage === 'retrying') documentItem.value.status = 'retrying'
     else documentItem.value.status = 'processing'
   }
-  if (refresh) scheduleRefresh()
+  if (refresh) scheduleRefresh(event.stage === 'completed' ? 0 : 350)
 }
-function scheduleRefresh() {
+function scheduleRefresh(delay = 350) {
   window.clearTimeout(refreshTimer)
   refreshTimer = window.setTimeout(async () => {
     try {
       const item = await api.getDocument(documentId)
       if (disposed) return
       documentItem.value = item
+      if (item.status === 'completed' || item.status === 'failed') completionPending.value = false
       if (!isLive.value) connection.value = 'closed'
       if (item.status === 'completed') await renderMath()
-    } catch { /* The event stream still supplies progress if a snapshot request fails. */ }
-  }, 500)
+      else if (completionPending.value) scheduleRefresh(750)
+    } catch {
+      // Keep the complete progress view visible instead of flashing an empty result.
+      if (completionPending.value && !disposed) scheduleRefresh(1500)
+    }
+  }, delay)
 }
 function scheduleReconnect() {
   if (disposed) return
@@ -112,6 +119,7 @@ function scheduleReconnect() {
       const item = await api.getDocument(documentId)
       if (disposed) return
       documentItem.value = item
+      if (item.status === 'completed') completionPending.value = false
       if (item.status === 'completed') await renderMath()
     } catch { /* Retry the stream while the API is temporarily unreachable. */ }
     connect()
@@ -133,6 +141,7 @@ function connect() {
         const item = await api.getDocument(documentId)
         if (disposed) return
         documentItem.value = item
+        if (item.status === 'completed') completionPending.value = false
         await renderMath()
         if (isLive.value) scheduleReconnect()
       } catch { scheduleReconnect() }
@@ -149,6 +158,7 @@ async function load() {
     const item = await api.getDocument(documentId)
     if (disposed) return
     documentItem.value = item
+    if (item.status === 'completed') completionPending.value = false
     await loadEvents()
     if (item.status === 'completed') await renderMath()
     connect()
@@ -163,8 +173,14 @@ onBeforeUnmount(() => { disposed = true; stopStream?.(); window.clearTimeout(ret
   <div class="page-container">
     <router-link class="back-link" to="/library"><ArrowLeftOutlined /> 返回公开文库</router-link>
     <a-alert v-if="error" type="error" :message="error" show-icon class="section-gap"><template #action><a-button size="small" :loading="refreshing" @click="load">重试</a-button></template></a-alert>
-    <div v-if="!documentItem && !error" class="loading-state"><a-spin /><span>正在加载文档…</span></div>
-    <template v-if="documentItem">
+    <div class="workspace-stage">
+    <transition name="workspace-reveal">
+      <div v-if="!documentItem && !error" key="loading" class="document-loading" aria-live="polite">
+        <a-card class="document-summary section-gap"><a-skeleton active :paragraph="{ rows: 2 }" /></a-card>
+        <div class="task-grid"><a-card><a-skeleton active :paragraph="{ rows: 6 }" /></a-card><a-card><a-skeleton active :paragraph="{ rows: 8 }" /></a-card></div>
+        <span class="document-loading-label"><a-spin size="small" /> 正在载入任务与永久处理记录</span>
+      </div>
+      <div v-else-if="documentItem" key="workspace" class="document-workspace">
       <a-card class="document-summary section-gap">
         <a-space wrap class="section-gap">
           <StatusChip :status="documentItem.status" />
@@ -177,12 +193,14 @@ onBeforeUnmount(() => { disposed = true; stopStream?.(); window.clearTimeout(ret
         </a-space>
         <h1 class="document-title">{{ documentItem.title }}</h1>
         <div class="document-meta"><span>{{ documentItem.display_filename }}</span><span>{{ formatSize(documentItem.source_size) }}</span><span>{{ formatDate(documentItem.created_at) }}</span><span v-if="!isNativePdf">{{ documentItem.image_count }} 张图片</span><span v-else-if="documentItem.pages_total != null">{{ documentItem.pages_total }} 页</span><span>{{ isLive ? '已运行' : '耗时' }} {{ elapsedText }}</span></div>
-        <nav v-if="documentItem.status === 'completed'" class="document-actions" aria-label="文档下载">
+        <transition name="inline-feedback"><nav v-if="documentItem.status === 'completed'" class="document-actions" aria-label="文档下载">
           <a-button v-for="download in downloads" :key="download.key" :type="download.primary ? 'primary' : 'default'" :href="download.href"><template #icon><component :is="downloadIcons[download.kind]" /></template>{{ download.label }}</a-button>
-        </nav>
+        </nav></transition>
       </a-card>
 
-      <template v-if="documentItem.status === 'completed'">
+      <div class="task-content-stage">
+      <transition name="task-content" mode="out-in">
+      <div v-if="workspaceState === 'completed'" key="completed" class="task-content-panel">
         <a-collapse class="section-gap">
           <a-collapse-panel key="audit" :header="`处理与归档记录 · ${eventTotal} 条事件`">
             <div class="task-grid"><a-card title="处理阶段" size="small"><StageOverview :document="documentItem" /></a-card><ProcessingTimeline :events="events" :total="eventTotal" :created-at="documentItem.created_at" /></div>
@@ -202,13 +220,13 @@ onBeforeUnmount(() => { disposed = true; stopStream?.(); window.clearTimeout(ret
           <article v-if="renderedMarkdownHtml" class="article-content" aria-label="Markdown 正文" data-render-source="markdown" v-html="renderedMarkdownHtml" />
           <a-empty v-else description="规范化 Markdown 正文暂不可用" />
         </a-card>
-      </template>
+      </div>
 
-      <template v-else>
+      <div v-else key="processing" class="task-content-panel">
         <a-card class="section-gap">
-          <div class="progress-heading"><h2>{{ documentItem.status === 'failed' ? '处理失败' : documentItem.status === 'retrying' ? '等待自动重试' : '处理进度' }}</h2><a-button :loading="refreshing" @click="load"><template #icon><ReloadOutlined /></template>刷新状态</a-button></div>
+          <div class="progress-heading"><h2>{{ completionPending ? '处理完成，正在打开结果' : documentItem.status === 'failed' ? '处理失败' : documentItem.status === 'retrying' ? '等待自动重试' : '处理进度' }}</h2><a-button :loading="refreshing" @click="load"><template #icon><ReloadOutlined /></template>刷新状态</a-button></div>
           <a-progress :percent="documentItem.progress" :status="documentItem.status === 'failed' ? 'exception' : 'active'" />
-          <a-alert :type="documentItem.status === 'failed' ? 'error' : documentItem.status === 'retrying' ? 'warning' : 'info'" show-icon :message="latestEvent?.message || documentItem.stage" class="current-event">
+          <a-alert :type="documentItem.status === 'failed' ? 'error' : documentItem.status === 'retrying' ? 'warning' : 'info'" show-icon :message="completionPending ? '处理结果已生成，正在读取最终文件' : latestEvent?.message || documentItem.stage" class="current-event">
             <template #description><div v-if="latestEvent?.detail" class="event-detail">{{ latestEvent.detail }}</div><a-space wrap class="field-help"><span v-if="latestEvent">事件 #{{ latestEvent.id }}</span><span v-if="latestEvent?.current != null">当前 {{ latestEvent.current }}<template v-if="latestEvent.total !== null"> / {{ latestEvent.total }}</template></span><span>{{ documentItem.progress }} / 100</span></a-space></template>
           </a-alert>
           <a-alert v-if="documentItem.status === 'failed' && documentItem.failure_reason && documentItem.failure_reason !== latestEvent?.detail" type="error" :message="documentItem.failure_reason" show-icon class="section-top" />
@@ -234,7 +252,11 @@ onBeforeUnmount(() => { disposed = true; stopStream?.(); window.clearTimeout(ret
           </div>
           <div class="side-stack"><ProcessingTimeline :events="events" :total="eventTotal" :created-at="documentItem.created_at" :live="isLive" /><a-alert type="info" show-icon message="离开页面不会中断任务" description="所有处理事件会永久写入数据库，失败时也会保留源文件与已有结果。" /></div>
         </div>
-      </template>
-    </template>
+      </div>
+      </transition>
+      </div>
+      </div>
+    </transition>
+    </div>
   </div>
 </template>
