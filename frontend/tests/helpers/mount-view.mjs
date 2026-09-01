@@ -21,6 +21,7 @@ const require = createRequire(import.meta.url)
 const vue = require('vue')
 const antd = require('ant-design-vue')
 const icons = require('@ant-design/icons-vue')
+const katex = require('katex')
 const { parse, compileScript, compileTemplate } = require('vue/compiler-sfc')
 const cache = new Map()
 
@@ -55,11 +56,16 @@ export async function mountView(t, name, api) {
   assert.deepEqual(template.errors, [])
   const routes = []
   const dependencies = {
-    vue, 'ant-design-vue': antd, '@ant-design/icons-vue': icons,
-    'vue-router': { useRouter: () => ({ push: async (path) => { routes.push(path) } }) },
+    vue, katex, 'ant-design-vue': antd, '@ant-design/icons-vue': icons,
+    'vue-router': {
+      useRouter: () => ({ push: async (path) => { routes.push(path) } }),
+      useRoute: () => ({ params: { id: 'fixture-task' } }),
+    },
     '../api': { ...apiModule, api },
     '../components/DocumentCard.vue': { template: '<div />' },
     '../components/StatusChip.vue': { template: '<span />' },
+    '../components/ProcessingTimeline.vue': { props: ['events', 'total'], template: '<div>处理记录 {{ total }}</div>' },
+    '../components/StageOverview.vue': { props: ['document'], template: '<div>阶段概览</div>' },
     ...Object.fromEntries(cache),
   }
   const component = evaluate(script.content, dependencies).default

@@ -100,6 +100,51 @@ test('in-flight upload displays progress, rejects duplicate clicks and surfaces 
   assert.deepEqual(routes, [])
 })
 
+test('completed event keeps the progress workspace until the final readable snapshot arrives', async (t) => {
+  let snapshotCalls = 0
+  let resolveIntermediate
+  let pushEvent
+  const base = {
+    id: 'fixture-task', title: '无缝切换测试', display_filename: 'paper.pdf', source_size: 1024,
+    created_at: new Date().toISOString(), updated_at: new Date().toISOString(), completed_at: null,
+    status: 'processing', stage: 'translation_chunk_completed', progress: 96, failure_reason: null,
+    is_public: false, processing_mode: 'mineru', translated: true, translate_requested: true,
+    translation_tier: 2, image_count: 0, pages_processed: 8, pages_total: 10,
+    local_archive_status: 'pending', r2_mirror_status: 'pending', pdf_available: false,
+    pdf_variants_available: null, pdf_size: null, dual_pdf_size: null, content_html: null,
+  }
+  const finalSnapshot = {
+    ...base, status: 'completed', stage: 'completed', progress: 100,
+    completed_at: new Date().toISOString(), local_archive_status: 'archived', pdf_available: true,
+    content_html: '<h1>最终正文</h1><p>结果已经完整载入。</p>',
+  }
+  const { host } = await mountView(t, 'DocumentView', {
+    getDocument: async () => {
+      snapshotCalls += 1
+      if (snapshotCalls === 1) return { ...base }
+      if (snapshotCalls === 2) return new Promise((resolve) => { resolveIntermediate = resolve })
+      return finalSnapshot
+    },
+    getDocumentEvents: async () => ({ items: [], total: 0, has_more: false }),
+    streamDocumentEvents: (_id, _cursor, onEvent, _onComplete, _onError, onOpen) => {
+      pushEvent = onEvent
+      onOpen()
+      return () => {}
+    },
+  })
+  assert.match(host.textContent, /处理进度/)
+  pushEvent({ id: 101, stage: 'completed', level: 'success', progress: 100, message: '处理完成', detail: null, current: null, total: null, created_at: new Date().toISOString() })
+  await flush()
+  assert.match(host.textContent, /处理完成，正在打开结果/)
+  assert.doesNotMatch(host.textContent, /Markdown 渲染|最终正文/)
+  resolveIntermediate({ ...base, progress: 100, stage: 'completed' })
+  await new Promise((resolve) => setTimeout(resolve, 800))
+  await flush()
+  assert.match(host.textContent, /Markdown 渲染/)
+  assert.match(host.textContent, /最终正文/)
+  assert.doesNotMatch(host.textContent, /规范化 Markdown 正文暂不可用/)
+})
+
 test('a cookie-only administrator session opens the dashboard without localStorage credentials', async (t) => {
   assert.equal(localStorage.getItem('docflow-admin-token'), null)
   const { host } = await mountView(t, 'AdminView', {

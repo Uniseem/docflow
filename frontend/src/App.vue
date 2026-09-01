@@ -30,7 +30,15 @@ const selectedKeys = computed(() => route.path === '/' ? ['/'] : route.path.star
           <a-menu-item key="api"><template #icon><ExportOutlined /></template><a href="/api/docs" target="_blank" rel="noopener noreferrer">开放 API</a></a-menu-item>
         </a-menu>
       </a-drawer>
-      <a-layout-content><router-view :key="route.path" /></a-layout-content>
+      <a-layout-content class="app-content">
+        <div class="route-stage">
+          <router-view v-slot="{ Component, route: viewRoute }">
+            <transition name="route-view">
+              <component :is="Component" :key="viewRoute.path" />
+            </transition>
+          </router-view>
+        </div>
+      </a-layout-content>
       <a-layout-footer class="app-footer">文流 DocFlow · 默认私有 · 本地永久保存 · <a href="https://github.com/FengYuchen1314/docflow/blob/main/THIRD_PARTY_NOTICES.md" target="_blank" rel="noopener noreferrer">源码与许可</a></a-layout-footer>
     </a-layout>
   </a-config-provider>
