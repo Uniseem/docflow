@@ -21,8 +21,10 @@
 # stapled opens without any prompt.
 #
 # Requirements: Xcode (or the Command Line Tools) with the macOS 14 SDK or
-# newer, and Rust. Building for x86_64 on Apple silicon needs Rosetta for the
-# runtime step. Notarization needs a notarytool keychain profile, created once:
+# newer, and Rust. Build the x86_64 version on an Intel Mac: under Rosetta the
+# runtime's tests can crash (AVX). The x86_64 installer refuses Apple silicon
+# Macs and the arm64 one Intel Macs, each naming the right download.
+# Notarization needs a notarytool keychain profile, created once:
 #   xcrun notarytool store-credentials docflow --apple-id … --team-id … --password <app-specific password>
 #
 # Usage: apps/macos/build.sh [--arch arm64|x86_64] [--skip-runtime]
@@ -59,9 +61,10 @@ while [ $# -gt 0 ]; do
 done
 
 case "$ARCH" in
-  arm64|aarch64) ARCH=arm64; RUST_TARGET=aarch64-apple-darwin; HOST_ARCHITECTURES="arm64" ;;
-  # An Intel build also installs on Apple silicon (it runs under Rosetta).
-  x86_64) RUST_TARGET=x86_64-apple-darwin; HOST_ARCHITECTURES="x86_64,arm64" ;;
+  arm64|aarch64) ARCH=arm64; RUST_TARGET=aarch64-apple-darwin; WANTS_ARM=true; OTHER_KIND="Intel 芯片的 Mac 请下载 x86_64 版" ;;
+  # Not for Apple silicon: under Rosetta some wheels' vector instructions
+  # (AVX) crash the PDF engine, so the installer refuses those Macs.
+  x86_64) RUST_TARGET=x86_64-apple-darwin; WANTS_ARM=false; OTHER_KIND="Apple 芯片的 Mac 请下载 arm64 版" ;;
   *) echo "unsupported architecture: $ARCH" >&2; exit 2 ;;
 esac
 if [ -n "$NOTARY_PROFILE" ] && [ "$IDENTITY" = "-" ]; then
@@ -128,8 +131,10 @@ while IFS= read -r -d '' link; do
     /*) echo "error: absolute symlink in the bundle: $link -> $target" >&2; exit 1 ;;
   esac
 done < <(find "$APP" -type l -print0)
-# Extended attributes (quarantine, Finder info) are not allowed in a sealed bundle.
+# Extended attributes (quarantine, Finder info) are not allowed in a sealed
+# bundle, and codesign rewrites every binary, read-only wheel files included.
 xattr -cr "$APP"
+chmod -R u+w "$APP"
 
 # Every Mach-O file of the bundled Python, split into programs (which get
 # the hardened-runtime exceptions) and libraries (which never need any).
@@ -228,8 +233,27 @@ if [ "$PKG" = 1 ]; then
     <title>DocFlow</title>
     <welcome file="welcome.html" mime-type="text/html"/>
     <conclusion file="conclusion.html" mime-type="text/html"/>
-    <options customize="never" require-scripts="false" hostArchitectures="$HOST_ARCHITECTURES"/>
+    <options customize="never" require-scripts="false" hostArchitectures="x86_64,arm64"/>
     <domains enable_localSystem="true"/>
+    <installation-check script="matchingMac()"/>
+    <script><![CDATA[
+function matchingMac() {
+    // Set on Apple silicon even when asked from a Rosetta process; Intel
+    // Macs do not have the key.
+    var isArm = false;
+    try {
+        isArm = system.sysctl('hw.optional.arm64') == 1;
+    } catch (error) {
+    }
+    if (isArm == $WANTS_ARM) {
+        return true;
+    }
+    my.result.type = 'Fatal';
+    my.result.title = '这个安装包不适用于这台 Mac';
+    my.result.message = '$OTHER_KIND。';
+    return false;
+}
+]]></script>
     <volume-check>
         <allowed-os-versions>
             <os-version min="14.0"/>
