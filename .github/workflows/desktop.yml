@@ -25,17 +25,22 @@ concurrency:
 jobs:
   macos:
     name: macOS (${{ matrix.arch }})
-    # Built on the oldest supported macOS so pip never picks wheels that
-    # need a newer system than the app's minimum (14.0).
-    runs-on: macos-14
+    # arm64 is built on the oldest supported macOS, so pip never picks wheels
+    # that need a newer system than the app's minimum (14.0); the runtime
+    # build also checks every binary's minimum macOS version. The Intel build
+    # needs a real Intel runner: under Rosetta some wheels' vector
+    # instructions (AVX) stop the runtime tests with SIGILL.
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
         include:
           - arch: arm64
+            runner: macos-14
             rust-target: aarch64-apple-darwin
           - arch: x86_64
+            runner: macos-15-intel
             rust-target: x86_64-apple-darwin
     env:
       MACOS_CERTIFICATE_P12: ${{ secrets.MACOS_CERTIFICATE_P12 }}
@@ -49,12 +54,9 @@ jobs:
       - uses: actions/checkout@v4
       - name: Newest Xcode on this runner
         run: |
-          latest="$(ls -d /Applications/Xcode_*.app 2>/dev/null | sort -V | tail -n 1)"
+          latest="$(ls -d /Applications/Xcode_*.app 2>/dev/null | grep -v -i -E 'beta|_rc' | sort -V | tail -n 1 || true)"
           if [ -n "$latest" ]; then sudo xcode-select -s "$latest"; fi
           xcodebuild -version
-      - name: Rosetta (x86_64 runtime)
-        if: matrix.arch == 'x86_64'
-        run: softwareupdate --install-rosetta --agree-to-license || true
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.rust-target }}

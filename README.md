@@ -32,7 +32,7 @@ DocFlow 是 Windows 与 macOS 上的文档翻译应用。把 PDF、Word、PowerP
 
 ### macOS
 
-双击 `DocFlow-macos-<架构>.pkg` 安装包，按提示安装到“应用程序”文件夹。Apple 芯片的 Mac 用 arm64 版，Intel 芯片的 Mac 用 x86_64 版。
+双击 `DocFlow-macos-<架构>.pkg` 安装包，按提示安装到“应用程序”文件夹。Apple 芯片的 Mac 用 arm64 版，Intel 芯片的 Mac 用 x86_64 版；下错了版本，安装器会直接提示该下载哪一个。
 
 经过 Apple 公证的安装包可以直接打开。**未公证的安装包**第一次打开时，macOS 会提示“无法验证开发者”（macOS 15 显示“未打开”）——这是 macOS 对所有未公证软件的统一提示，手动允许一次即可：
 
@@ -132,7 +132,7 @@ API Key 只保存在系统的凭据存储中，启动时由应用在内存中交
 bash apps/macos/build.sh --pkg
 ```
 
-产物是 `apps/macos/dist/DocFlow.app`，`--pkg` 另外生成安装包 `DocFlow-macos-<arch>.pkg`（没有 Developer ID 时推荐用它分发）；`--dmg` 和 `--zip` 生成磁盘映像和 zip。默认为当前 Mac 的架构构建，`--arch x86_64` 可在 Apple 芯片上为 Intel Mac 构建（运行环境这一步需要 Rosetta）。
+产物是 `apps/macos/dist/DocFlow.app`，`--pkg` 另外生成安装包 `DocFlow-macos-<arch>.pkg`（没有 Developer ID 时推荐用它分发）；`--dmg` 和 `--zip` 生成磁盘映像和 zip。默认为当前 Mac 的架构构建；Intel 版请在 Intel Mac 上构建（在 Apple 芯片上经 Rosetta 构建时，运行环境的自检可能因 AVX 指令崩溃）。
 
 - 运行环境构建会检查每个二进制文件要求的最低系统版本不高于 macOS 14：在更新的 macOS 上构建时，pip 可能选到只支持新系统的 wheel，那样的构建会在 macOS 14 上无法导入。请在 macOS 14 上构建发行版（CI 即如此）。
 - 没有 Developer ID 时使用临时（ad-hoc）签名：内置 Python 的每个二进制文件、引擎和应用都会由内向外重新签名并封存，构建时逐一严格校验，并拒绝指向包外的符号链接。“已损坏”只会出现在签名无效的应用上，这些检查保证构建出的应用签名有效。安装包只包含与签名时完全一致的应用（打包后会再校验一次），装好的应用不带下载隔离标记。

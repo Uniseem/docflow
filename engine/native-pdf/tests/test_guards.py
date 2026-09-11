@@ -121,11 +121,17 @@ print('guarded')
 
     def test_layout_dbscan_and_threadpool_inspection_work_under_process_guard(self):
         self.run_guard_script("""
+import contextlib
+import sys
 from unittest.mock import patch
 import threadpoolctl
 from asset_bundle import configure_cpu_runtime, install_process_guard
 from bridge import FailureState
-with patch.object(threadpoolctl, 'find_library', side_effect=AssertionError('external probe')):
+# Only Linux's find_library launches a subprocess (ldconfig); macOS resolves
+# libc through dyld in-process. The process guard below covers every platform.
+probe = (patch.object(threadpoolctl, 'find_library', side_effect=AssertionError('external probe'))
+         if sys.platform == 'linux' else contextlib.nullcontext())
+with probe:
     configure_cpu_runtime()
     failure = FailureState()
     install_process_guard(failure)
