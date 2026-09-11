@@ -48,7 +48,7 @@ supervised process and propagate failures. No provider credentials are given to
 that process.
 
 Source for these adapters and the rest of the application is available in the
-[DocFlow repository](https://github.com/FengYuchen1314/docflow). Anyone who
+[DocFlow repository](https://github.com/Uniseem/docflow). Anyone who
 modifies or redistributes AGPL-covered software must preserve its notices and
 satisfy its source-availability obligations. Do not remove this notice or
 present the bundled AGPL software as MIT-licensed. A distribution with private

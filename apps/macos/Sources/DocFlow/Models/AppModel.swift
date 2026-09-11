@@ -734,7 +734,7 @@ final class AppModel {
             string: "源代码与第三方许可",
             attributes: [
                 .font: NSFont.systemFont(ofSize: NSFont.smallSystemFontSize),
-                .link: URL(string: "https://github.com/FengYuchen1314/docflow")!,
+                .link: URL(string: "https://github.com/Uniseem/docflow")!,
             ]
         ))
         let paragraph = NSMutableParagraphStyle()

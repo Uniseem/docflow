@@ -68,7 +68,7 @@ struct DocFlowCommands: Commands {
 
         CommandGroup(replacing: .help) {
             Button("DocFlow 源代码与说明") {
-                if let url = URL(string: "https://github.com/FengYuchen1314/docflow") {
+                if let url = URL(string: "https://github.com/Uniseem/docflow") {
                     NSWorkspace.shared.open(url)
                 }
             }

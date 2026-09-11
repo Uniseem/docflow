@@ -250,7 +250,7 @@ function matchingMac() {
     }
     my.result.type = 'Fatal';
     my.result.title = '这个安装包不适用于这台 Mac';
-    my.result.message = '$OTHER_KIND。';
+    my.result.message = '${OTHER_KIND}。';
     return false;
 }
 ]]></script>
