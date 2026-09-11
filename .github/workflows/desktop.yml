@@ -3,6 +3,8 @@ name: Desktop apps
 on:
   push:
     branches: [main]
+    # A version tag (v3.0.0) also publishes the installers as a GitHub Release.
+    tags: ['v*']
   pull_request:
   workflow_dispatch:
 
@@ -147,3 +149,36 @@ jobs:
           name: DocFlow-win-x64
           path: apps/windows/dist/DocFlow-win-x64.zip
           if-no-files-found: error
+
+  release:
+    name: GitHub Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [macos, windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tag matches the app version
+        run: |
+          version="$(sed -n 's/^version = "\(.*\)"$/\1/p' engine/Cargo.toml | head -n 1)"
+          windows="$(sed -n 's/.*<Version>\(.*\)<\/Version>.*/\1/p' apps/windows/DocFlow/DocFlow.csproj | head -n 1)"
+          if [ "$GITHUB_REF_NAME" != "v$version" ] || [ "$windows" != "$version" ]; then
+            echo "::error::tag $GITHUB_REF_NAME, engine/Cargo.toml $version and DocFlow.csproj $windows must agree"
+            exit 1
+          fi
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          sed "s/__VERSION__/$VERSION/g" .github/release-notes.md > "$RUNNER_TEMP/notes.md"
+          cd dist
+          sha256sum DocFlow-* > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+          gh release create "$GITHUB_REF_NAME" --verify-tag \
+            --title "DocFlow $VERSION" --notes-file "$RUNNER_TEMP/notes.md" DocFlow-* SHA256SUMS.txt

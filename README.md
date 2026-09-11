@@ -24,6 +24,8 @@ DocFlow 是 Windows 与 macOS 上的文档翻译应用。把 PDF、Word、PowerP
 
 ## 安装
 
+从 [Releases](https://github.com/Uniseem/docflow/releases/latest) 下载对应系统的安装包：Windows 用 `DocFlow-win-x64.zip`，Mac 用 `DocFlow-macos-arm64.pkg`（Apple 芯片）或 `DocFlow-macos-x86_64.pkg`（Intel 芯片）。
+
 ### Windows
 
 解压 `DocFlow-win-x64.zip`，运行其中的 `DocFlow.exe`。不需要管理员权限，也不需要另外安装 .NET 或 Visual C++ 运行库；可以放在任何文件夹，包括含中文的路径。
@@ -134,7 +136,7 @@ bash apps/macos/build.sh --pkg
 
 产物是 `apps/macos/dist/DocFlow.app`，`--pkg` 另外生成安装包 `DocFlow-macos-<arch>.pkg`（没有 Developer ID 时推荐用它分发）；`--dmg` 和 `--zip` 生成磁盘映像和 zip。默认为当前 Mac 的架构构建；Intel 版请在 Intel Mac 上构建（在 Apple 芯片上经 Rosetta 构建时，运行环境的自检可能因 AVX 指令崩溃）。
 
-- 运行环境构建会检查每个二进制文件要求的最低系统版本不高于 macOS 14：在更新的 macOS 上构建时，pip 可能选到只支持新系统的 wheel，那样的构建会在 macOS 14 上无法导入。请在 macOS 14 上构建发行版（CI 即如此）。
+- 运行环境构建会检查每个二进制文件要求的最低系统版本不高于 macOS 14：在更新的 macOS 上构建时，pip 可能选到只支持新系统的 wheel，那样的构建会在 macOS 14 上无法导入，因此检查不通过时构建失败。CI 在 macOS 14 上构建 arm64 版；Intel 版只能在 macOS 15 的 Intel 机器上构建，这项检查保证它同样能在 macOS 14 上运行。
 - 没有 Developer ID 时使用临时（ad-hoc）签名：内置 Python 的每个二进制文件、引擎和应用都会由内向外重新签名并封存，构建时逐一严格校验，并拒绝指向包外的符号链接。“已损坏”只会出现在签名无效的应用上，这些检查保证构建出的应用签名有效。安装包只包含与签名时完全一致的应用（打包后会再校验一次），装好的应用不带下载隔离标记。
 - 有 Apple Developer ID 时，可以签名并公证，用户打开时没有任何提示：
 
@@ -146,7 +148,9 @@ bash apps/macos/build.sh --pkg
 
   脚本由内向外以强化运行时和安全时间戳签名全部 Mach-O 文件（只有 Python 解释器带必要的例外权限），签名安装包，提交公证、等待结果并把公证票据装订到应用、安装包和磁盘映像上。
 
-`.github/workflows/desktop.yml` 在 macOS 14（arm64 与 x86_64）和 Windows 上构建两个应用；配置了签名相关的仓库机密时自动签名和公证，没有时 macOS 只生成未签名的安装包，Windows 生成未签名的 zip。
+`.github/workflows/desktop.yml` 在 macOS（arm64 与 x86_64）和 Windows 上构建两个应用；配置了签名相关的仓库机密时自动签名和公证，没有时 macOS 只生成未签名的安装包，Windows 生成未签名的 zip。
+
+发布新版本：先把 `engine/Cargo.toml` 与 `apps/windows/DocFlow/DocFlow.csproj` 中的版本号改成新版本，再推送同名标签（例如 `git tag v3.0.0 && git push origin v3.0.0`）。CI 会在该提交上构建三个安装包，生成 `SHA256SUMS.txt`，并以 `.github/release-notes.md` 为说明创建 GitHub Release；标签与版本号不一致时不会发布。
 
 ## 架构
 
