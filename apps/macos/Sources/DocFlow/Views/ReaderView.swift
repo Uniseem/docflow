@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
-import WebKit
+// WebKit's delegate callbacks are annotated for Swift 6 concurrency.
+@preconcurrency import WebKit
 
 /// The reading view (reader.html next to the article). It loads the
 /// library's own files only; links to the web open in the default browser.
