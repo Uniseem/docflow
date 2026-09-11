@@ -90,6 +90,11 @@ Font License); packaging it in DocFlow does not change that license. See the
 - Windows: .NET (MIT), Windows App SDK / WinUI 3 (MIT; the redistributed
   runtime binaries are covered by the Windows App SDK license terms) and
   CommunityToolkit.Mvvm (MIT). Pages and PDFs are shown with the Microsoft Edge
-  WebView2 runtime installed on the system; it is not bundled.
+  WebView2 runtime installed on the system; it is not bundled. The setup
+  program is built with [Inno Setup](https://jrsoftware.org/isinfo.php)
+  (Inno Setup License); its Chinese Simplified messages
+  (`apps/windows/installer/ChineseSimplified.isl`, from Inno Setup 6.7.1's
+  translations, maintained by Zhenghan Yang) are used unchanged apart from a
+  UTF-8 byte order mark.
 - macOS: the app uses only system frameworks (SwiftUI, AppKit, PDFKit, WebKit,
   Security, UserNotifications).

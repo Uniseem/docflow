@@ -113,6 +113,10 @@ public sealed partial class SettingsViewModel : ObservableObject
     [ObservableProperty]
     public partial TranslatorOption? DefaultTranslator { get; set; }
 
+    /// <summary>At least one model is usable, so there is a default to pick.</summary>
+    [ObservableProperty]
+    public partial bool HasModels { get; set; }
+
     [ObservableProperty]
     public partial bool HasProviders { get; set; }
 
@@ -137,14 +141,7 @@ public sealed partial class SettingsViewModel : ObservableObject
     [ObservableProperty]
     public partial string? PreferencesError { get; set; }
 
-    // Google Translate (free).
-    [ObservableProperty] public partial bool IsCheckingGoogle { get; set; }
-    [ObservableProperty] public partial string GoogleStatus { get; set; } = "无需 API Key";
-    [ObservableProperty] public partial bool GoogleStatusIsError { get; set; }
-
     // Advanced translation runtime.
-    [ObservableProperty] public partial double GoogleConcurrency { get; set; }
-    [ObservableProperty] public partial double GoogleChunkChars { get; set; }
     [ObservableProperty] public partial double LlmChunkChars { get; set; }
     [ObservableProperty] public partial double LlmSegments { get; set; }
     [ObservableProperty] public partial double LlmRequestChars { get; set; }
@@ -196,11 +193,6 @@ public sealed partial class SettingsViewModel : ObservableObject
             {
                 LoadRuntime(settings.TranslationRuntime);
             }
-            else
-            {
-                // The Google concurrency lives on its own card and saves at once.
-                GoogleConcurrency = settings.TranslationRuntime.Google.Concurrency;
-            }
             Limits = settings.TranslationRuntimeLimits;
             DataDir = settings.DataDir;
             EngineVersion = settings.EngineVersion;
@@ -240,19 +232,19 @@ public sealed partial class SettingsViewModel : ObservableObject
     private void LoadTranslatorOptions(SettingsInfo settings)
     {
         var options = settings.TranslatorOptions();
-        var wanted = settings.Preferences.DefaultTranslator.Key;
+        var wanted = settings.Preferences.DefaultTranslator?.Key;
         TranslatorOptions.Clear();
         foreach (var option in options)
         {
             TranslatorOptions.Add(option);
         }
-        DefaultTranslator = TranslatorOptions.FirstOrDefault(option => option.Choice.Key == wanted) ?? TranslatorOptions[0];
+        HasModels = TranslatorOptions.Count > 0;
+        // Without a saved (and still usable) default, the first model is it.
+        DefaultTranslator = TranslatorOptions.FirstOrDefault(option => option.Choice.Key == wanted) ?? TranslatorOptions.FirstOrDefault();
     }
 
     private void LoadRuntime(TranslationRuntime runtime)
     {
-        GoogleConcurrency = runtime.Google.Concurrency;
-        GoogleChunkChars = runtime.Google.ChunkChars;
         LlmChunkChars = runtime.Llm.ChunkChars;
         LlmSegments = runtime.Llm.MaxSegmentsPerRequest;
         LlmRequestChars = runtime.Llm.MaxRequestChars;
@@ -265,15 +257,6 @@ public sealed partial class SettingsViewModel : ObservableObject
     partial void OnDefaultModeIndexChanged(int value) => _ = SavePreferencesAsync();
     partial void OnMineruModelIndexChanged(int value) => _ = SavePreferencesAsync();
     partial void OnWorkerConcurrencyChanged(double value) => _ = SavePreferencesAsync();
-
-    partial void OnGoogleConcurrencyChanged(double value)
-    {
-        if (!_loading && AppHost.Settings is { } settings && !double.IsNaN(value)
-            && ToInt(value) != settings.TranslationRuntime.Google.Concurrency)
-        {
-            _ = SaveGoogleConcurrencyAsync(ToInt(value));
-        }
-    }
 
     partial void OnProxyModeIndexChanged(int value)
     {
@@ -299,7 +282,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         var preferences = new Preferences
         {
             DefaultMode = DefaultModeIndex == 1 ? "mineru" : "pdf2zh",
-            DefaultTranslator = DefaultTranslator?.Choice ?? TranslatorChoice.Google,
+            DefaultTranslator = DefaultTranslator?.Choice,
             MineruModel = MineruModelIndex == 1 ? "pipeline" : "vlm",
             WorkerConcurrency = double.IsNaN(WorkerConcurrency) ? 2 : (int)Math.Clamp(WorkerConcurrency, 1, 4),
             Proxy = proxy,
@@ -317,11 +300,6 @@ public sealed partial class SettingsViewModel : ObservableObject
 
     private TranslationRuntime RuntimeFromForm(TranslationRuntime saved) => new()
     {
-        Google = new GoogleRuntime
-        {
-            Concurrency = ToInt(GoogleConcurrency, saved.Google.Concurrency),
-            ChunkChars = ToInt(GoogleChunkChars, saved.Google.ChunkChars),
-        },
         Llm = new LlmRuntime
         {
             ChunkChars = ToInt(LlmChunkChars, saved.Llm.ChunkChars),
@@ -332,33 +310,6 @@ public sealed partial class SettingsViewModel : ObservableObject
         PerDocumentConcurrency = ToInt(PerDocumentConcurrency, saved.PerDocumentConcurrency),
         SystemPrompt = SystemPrompt,
     };
-
-    private async Task SaveGoogleConcurrencyAsync(int concurrency)
-    {
-        if (AppHost.Settings is not { } settings)
-        {
-            return;
-        }
-        // Only this value changes; the rest of the saved runtime is kept.
-        var saved = settings.TranslationRuntime;
-        var runtime = new TranslationRuntime
-        {
-            Google = new GoogleRuntime { Concurrency = concurrency, ChunkChars = saved.Google.ChunkChars },
-            Llm = saved.Llm,
-            PerDocumentConcurrency = saved.PerDocumentConcurrency,
-            SystemPrompt = saved.SystemPrompt,
-        };
-        try
-        {
-            AppHost.UpdateSettings(await AppHost.RequireEngine().CallAsync<SettingsInfo>("settings.update", new { translation_runtime = runtime }));
-            GoogleStatusIsError = false;
-        }
-        catch (EngineException error)
-        {
-            GoogleStatus = error.Message;
-            GoogleStatusIsError = true;
-        }
-    }
 
     public async Task SaveRuntimeAsync()
     {
@@ -387,27 +338,6 @@ public sealed partial class SettingsViewModel : ObservableObject
             LoadRuntime(settings.TranslationRuntimeDefaults);
             RuntimeMessage = "已恢复默认值，点击“保存”后生效。";
             RuntimeMessageIsError = false;
-        }
-    }
-
-    public async Task CheckGoogleAsync()
-    {
-        IsCheckingGoogle = true;
-        GoogleStatus = "正在连接 Google 翻译…";
-        GoogleStatusIsError = false;
-        try
-        {
-            var result = await AppHost.RequireEngine().CallAsync<CheckResult>("google.check");
-            GoogleStatus = $"连接正常 · {result.LatencyMs} ms · “Hello, world.” → “{result.Reply}”";
-        }
-        catch (EngineException error)
-        {
-            GoogleStatus = error.Message;
-            GoogleStatusIsError = true;
-        }
-        finally
-        {
-            IsCheckingGoogle = false;
         }
     }
 

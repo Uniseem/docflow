@@ -5,10 +5,7 @@ DocFlow 是 Windows 与 macOS 上的文档翻译应用。把 PDF、Word、PowerP
 - **PDF 原生翻译**：基于 pdf2zh-next 使用的 [BabelDOC 0.6.4](https://github.com/funstory-ai/BabelDOC/releases/tag/v0.6.4) 排版内核，保留原 PDF 的版式、图表和公式，生成中文 PDF 与双语对照 PDF。不需要 MinerU。
 - **MinerU 解析翻译**：由 [MinerU](https://mineru.net/) 解析文档结构，生成可阅读的译文（阅读视图，公式由 KaTeX 渲染）和由 Typst 排版的 A4 期刊风格 PDF。适合扫描件、Office 文档和图片。
 
-两种方式共用同一套翻译服务：
-
-- **Google 翻译（免费）**：使用 Google 翻译的免费网页接口，无需 API Key，开箱即用。
-- **大模型服务商**：参考 [Cherry Studio](https://github.com/CherryHQ/cherry-studio) 的服务商接入方式——从预设中选择服务商（DeepSeek、OpenAI、Anthropic、Google Gemini、OpenRouter、硅基流动、阿里云百炼、火山引擎、Kimi、智谱、腾讯混元、阶跃星辰、零一万物、xAI、Groq、Mistral、Azure OpenAI、Ollama、LM Studio），或添加任何 OpenAI 兼容 / Anthropic / Gemini 接口；填写 API 地址和 Key 后一键**获取模型列表**，勾选要用的模型即可。每个服务商的并发请求数可以手动调整，默认 100。
+两种方式都由大模型翻译。服务商的接入方式参考 [Cherry Studio](https://github.com/CherryHQ/cherry-studio)：从预设中选择服务商（DeepSeek、OpenAI、Anthropic、Google Gemini、OpenRouter、硅基流动、阿里云百炼、火山引擎、Kimi、智谱、腾讯混元、阶跃星辰、零一万物、xAI、Groq、Mistral、Azure OpenAI、Ollama、LM Studio），或添加任何 OpenAI 兼容 / Anthropic / Gemini 接口；填写 API 地址和 Key 后一键**获取模型列表**，勾选要用的模型即可。每个服务商的并发请求数可以手动调整，默认 100。
 
 两个应用都是原生界面：Windows 版使用 WinUI 3 与 Fluent Design，macOS 版使用 SwiftUI 并遵循 Apple 人机界面指南。它们共享同一个处理引擎，文档库格式相同。
 
@@ -24,35 +21,39 @@ DocFlow 是 Windows 与 macOS 上的文档翻译应用。把 PDF、Word、PowerP
 
 ## 安装
 
-从 [Releases](https://github.com/Uniseem/docflow/releases/latest) 下载对应系统的安装包：Windows 用 `DocFlow-win-x64.zip`，Mac 用 `DocFlow-macos-arm64.pkg`（Apple 芯片）或 `DocFlow-macos-x86_64.pkg`（Intel 芯片）。
-
 ### Windows
 
-解压 `DocFlow-win-x64.zip`，运行其中的 `DocFlow.exe`。不需要管理员权限，也不需要另外安装 .NET 或 Visual C++ 运行库；可以放在任何文件夹，包括含中文的路径。
+从 [Releases](https://github.com/Uniseem/docflow/releases/latest) 下载 `DocFlow-win-x64-setup.exe`，双击运行，按提示完成安装。
 
-没有代码签名的构建第一次运行时，Windows 可能显示“Windows 已保护你的电脑”：点“更多信息 → 仍要运行”即可，之后不再询问。
+- 默认安装到当前用户的 `%LOCALAPPDATA%\Programs\DocFlow`，不需要管理员权限，也不需要另外安装 .NET 或 Visual C++ 运行库；安装位置可以改到其他文件夹，包括含中文的路径。
+- 装好后从开始菜单打开 DocFlow；安装时也可以选择创建桌面快捷方式。
+- 更新时直接运行新版本的安装程序，文档库、设置和 API Key 都会保留。卸载在“设置 → 应用 → 已安装的应用”中进行，卸载不会删除文档库。
+- 显示译文需要 Microsoft Edge WebView2 运行时（Windows 11 已自带）。电脑上没有时，安装程序会提示，并打开微软的下载链接。
+
+安装程序没有代码签名，第一次运行时 Windows 可能显示“Windows 已保护你的电脑”：点“更多信息 → 仍要运行”即可。
 
 ### macOS
 
-双击 `DocFlow-macos-<架构>.pkg` 安装包，按提示安装到“应用程序”文件夹。Apple 芯片的 Mac 用 arm64 版，Intel 芯片的 Mac 用 x86_64 版；下错了版本，安装器会直接提示该下载哪一个。
+打开“终端”（在“应用程序 → 实用工具”里，也可以按 ⌘ 空格键搜索“终端”），粘贴下面这行命令并按回车，然后输入这台 Mac 的登录密码（输入时不显示字符）再按回车：
 
-经过 Apple 公证的安装包可以直接打开。**未公证的安装包**第一次打开时，macOS 会提示“无法验证开发者”（macOS 15 显示“未打开”）——这是 macOS 对所有未公证软件的统一提示，手动允许一次即可：
+```bash
+curl -fL -o /tmp/DocFlow.pkg "https://github.com/Uniseem/docflow/releases/latest/download/DocFlow-macos-$([ "$(sysctl -n hw.optional.arm64 2>/dev/null)" = 1 ] && echo arm64 || echo x86_64).pkg" && sudo installer -pkg /tmp/DocFlow.pkg -target / && rm -f /tmp/DocFlow.pkg
+```
 
-- macOS 15 及以后：双击安装包，在提示中点“完成”；打开“系统设置 → 隐私与安全性”，在页面下方点“仍要打开”并输入登录密码，再点“打开”。
-- macOS 14：按住 Control 点按安装包，选“打开”，再点“打开”。
+命令会下载适合这台 Mac（Apple 芯片或 Intel）的最新版本，并安装到“应用程序”文件夹；终端显示 `The install was successful.` 就完成了。之后在“应用程序”文件夹里打开 DocFlow 即可，不会出现“无法验证开发者”或“已损坏”之类的提示。以后更新也运行同一行命令，文档库和设置都会保留。
 
-之后安装器会把 DocFlow 放进“应用程序”文件夹。由安装器安装的应用不带下载隔离标记，打开 DocFlow 时不会再有任何提示，也不会出现“已损坏”之类的错误。
+为什么用终端安装：DocFlow 还没有经过 Apple 公证，用浏览器下载的安装包会被 macOS 拦下，需要到“系统设置 → 隐私与安全性”中手动允许；用终端下载的安装包不会被拦下。不想用终端的话，也可以从 Releases 下载对应芯片的 `.pkg` 双击安装，第一次打开时在“系统设置 → 隐私与安全性”中点“仍要打开”。
 
 ## 使用
 
-1. **选择翻译服务**：Google 翻译无需设置即可使用。要使用大模型，打开“设置 → 翻译服务”，点“添加服务商”选择预设，填写 API Key（多个 Key 用英文逗号分隔，会轮流使用），点“获取模型列表”勾选要用的模型；每个模型旁的“检查”会发送一个测试请求。使用 MinerU 解析翻译时，在“设置 → 文档解析”填写 MinerU 的 API Key。
-2. **新建翻译**：把文件拖到窗口里，或点“新建翻译”选择文件，选好处理方式和翻译服务即可开始。一次可以加入多个文件。
+1. **添加大模型服务商**（第一次使用前）：打开“设置 → 翻译服务”，点“添加服务商”选择预设，填写 API Key（多个 Key 用英文逗号分隔，会轮流使用），点“获取模型列表”勾选要用的模型；每个模型旁的“检查”会发送一个测试请求。本机的 Ollama、LM Studio 不需要 Key。使用 MinerU 解析翻译时，还要在“设置 → 文档解析”填写 MinerU 的 API Key。
+2. **新建翻译**：把文件拖到窗口里，或点“新建翻译”选择文件，选好处理方式和翻译模型即可开始。一次可以加入多个文件。默认选中的模型可以在设置中更改。
 3. **查看进度**：文档库按“全部 / 进行中 / 已完成 / 失败与取消”分类，可搜索标题和文件名。处理中的文档显示当前阶段、各阶段状态和逐条处理记录（可只看警告和错误）。
-4. **阅读与导出**：完成后可以在应用内阅读中文 PDF、双语对照、阅读视图或期刊 PDF，也可以导出单个文件或包含全部文件与处理记录的 ZIP。
+4. **阅读与导出**：完成后可以在应用内阅读中文 PDF、双语对照、阅读视图或期刊 PDF，也可以导出单个文件或包含全部文件与处理记录的 ZIP。导出完成后会显示提示，可以直接打开所在文件夹；导出失败时会说明原因。
 
 失败的文档可以重新处理，已通过校验的翻译分段会作为断点复用。关闭应用时，进行中的任务会停止，下次启动后从断点继续。在 macOS 上关闭窗口不会停止任务，按 ⌘Q 退出应用时才会停止；在 Windows 上关闭窗口即退出应用。
 
-所在网络无法直接访问 Google 或某个服务商时，在“设置 → 网络”选择代理：跟随系统（读取 Windows / macOS 的系统代理）、不使用代理或自定义（HTTP、HTTPS、SOCKS5）。
+所在网络无法直接访问某个服务商时，在“设置 → 网络”选择代理：跟随系统（读取 Windows / macOS 的系统代理）、不使用代理或自定义（HTTP、HTTPS、SOCKS5）。
 
 ### 数据保存在哪里
 
@@ -79,7 +80,7 @@ API Key 只保存在系统的凭据存储中，启动时由应用在内存中交
 
 ## 翻译与自动修复
 
-**分段**：公式、代码、图片、链接地址、HTML 标签、脚注等先由本地占位符保护，表格（HTML 与 Markdown 管道表格）按单元格翻译、结构不动。之后每个段落是一段，超过上限的长段落在句子边界拆开（从不切开占位符）；只有公式、图片或代码的段落不发送。多个段落合并成一次请求：大模型用 `<segment id="…">` 标记区分段落，Google 翻译按行数把译文分回各段。
+**分段**：公式、代码、图片、链接地址、HTML 标签、脚注等先由本地占位符保护，表格（HTML 与 Markdown 管道表格）按单元格翻译、结构不动。之后每个段落是一段，超过上限的长段落在句子边界拆开（从不切开占位符）；只有公式、图片或代码的段落不发送。多个段落合并成一次请求，用 `<segment id="…">` 标记区分段落。
 
 **校验与修复**：每段译文都要通过校验才会保存，出现问题时逐级修复：
 
@@ -92,12 +93,10 @@ API Key 只保存在系统的凭据存储中，启动时由应用在内存中交
 
 ### 参数
 
-“设置 → 翻译服务”中可以调整 Google 翻译和每个服务商的并发请求数；“设置 → 高级”中可以调整分段与组批参数和大模型的翻译提示词。新任务提交时会保存一份参数快照，修改设置不影响进行中的任务，手动重新处理时使用最新设置。
+“设置 → 翻译服务”中可以调整每个服务商的并发请求数；“设置 → 高级”中可以调整分段与组批参数和翻译提示词。新任务提交时会保存一份参数快照，修改设置不影响进行中的任务，手动重新处理时使用最新设置。
 
 | 参数 | 默认值 | 范围 |
 | --- | --- | --- |
-| Google 翻译并发请求数 | 8 | 1–64 |
-| Google 翻译每次请求最多字符 | 3,000 | 100–5,000 |
 | 每个大模型服务商的并发请求数 | 100 | 1–2,000 |
 | 大模型每段最多字符 | 4,000 | 100–32,000 |
 | 大模型单次请求最多段数 | 8 | 1–64 |
@@ -110,17 +109,17 @@ API Key 只保存在系统的凭据存储中，启动时由应用在内存中交
 
 ## 构建
 
-目前没有预编译的发行版，需要从源码构建。两个平台的构建脚本都会依次构建处理引擎、准备内置的 Python + BabelDOC 运行环境（首次需要下载约 1 GB 的依赖和模型），再构建应用并组装成可直接运行的目录。
+发行版见 [Releases](https://github.com/Uniseem/docflow/releases)。从源码构建时，两个平台的构建脚本都会依次构建处理引擎、准备内置的 Python + BabelDOC 运行环境（首次需要下载约 1 GB 的依赖和模型），再构建应用并组装成可直接运行的目录。
 
 ### Windows
 
-需要 Rust（MSVC 工具链）、.NET 10 SDK，以及带 C++ 工作负载的 Visual Studio 或 Build Tools（提供可再分发的 Visual C++ 运行库）。在 PowerShell 中：
+需要 Rust（MSVC 工具链）、.NET 10 SDK、带 C++ 工作负载的 Visual Studio 或 Build Tools（提供可再分发的 Visual C++ 运行库），生成安装程序还需要 [Inno Setup](https://jrsoftware.org/isinfo.php) 6.6 或更高版本。在 PowerShell 中：
 
 ```powershell
-./apps/windows/build.ps1 -Zip
+./apps/windows/build.ps1 -Installer
 ```
 
-产物是 `apps/windows/dist/DocFlow/DocFlow.exe`（自包含，无需安装 .NET），`-Zip` 另外生成 `DocFlow-win-x64.zip`。脚本会：
+产物是 `apps/windows/dist/DocFlow/DocFlow.exe`（自包含，无需安装 .NET）；`-Installer` 另外生成安装程序 `DocFlow-win-x64-setup.exe`（`apps/windows/installer/DocFlow.iss`，为当前用户安装，无需管理员权限），`-Zip` 生成免安装的 zip。脚本会：
 
 - 以静态 C 运行库链接引擎，并把 Visual C++ 运行库放在内置的 `python.exe` 旁边（onnxruntime、PyMuPDF 等依赖它），使应用能在没有安装 VC++ 运行库的电脑上运行；
 - 检查应用、引擎和 Python 运行环境中每个 `.exe/.dll/.pyd` 的依赖都能在干净的 Windows 上找到（`runtime/check-windows-dlls.py`），否则构建失败；
@@ -148,9 +147,9 @@ bash apps/macos/build.sh --pkg
 
   脚本由内向外以强化运行时和安全时间戳签名全部 Mach-O 文件（只有 Python 解释器带必要的例外权限），签名安装包，提交公证、等待结果并把公证票据装订到应用、安装包和磁盘映像上。
 
-`.github/workflows/desktop.yml` 在 macOS（arm64 与 x86_64）和 Windows 上构建两个应用；配置了签名相关的仓库机密时自动签名和公证，没有时 macOS 只生成未签名的安装包，Windows 生成未签名的 zip。
+`.github/workflows/desktop.yml` 在 macOS（arm64 与 x86_64）和 Windows 上构建两个应用；配置了签名相关的仓库机密时自动签名和公证，没有时 macOS 只生成未签名的安装包，Windows 生成未签名的安装程序。
 
-发布新版本：先把 `engine/Cargo.toml` 与 `apps/windows/DocFlow/DocFlow.csproj` 中的版本号改成新版本，再推送同名标签（例如 `git tag v3.0.0 && git push origin v3.0.0`）。CI 会在该提交上构建三个安装包，生成 `SHA256SUMS.txt`，并以 `.github/release-notes.md` 为说明创建 GitHub Release；标签与版本号不一致时不会发布。
+发布新版本：先把 `engine/Cargo.toml`、`apps/windows/DocFlow/DocFlow.csproj` 和 `apps/windows/DocFlow/app.manifest` 中的版本号改成新版本（再运行一次 `cargo build` 更新 `Cargo.lock`），提交后推送同名标签（例如 `git tag v3.0.1 && git push origin v3.0.1`）。CI 会在该提交上构建三个安装包，生成 `SHA256SUMS.txt`，并以 `.github/release-notes.md` 为说明创建 GitHub Release；标签与版本号不一致时不会发布。
 
 ## 架构
 
@@ -170,25 +169,24 @@ runtime/        构建内置 Python 3.12 + BabelDOC 运行环境的脚本（Wind
 
 - **引擎**（`docflow-engine`）是应用启动的子进程，通过标准输入输出上逐行的 JSON-RPC 通信，日志写入文档库的 `logs/`。标准输入关闭时引擎自行退出，因此不会在应用退出后残留。
 - **存储**：SQLite（WAL 模式）保存文档、处理记录、服务商配置和设置；文件保存在 `archives/`，全部使用随机的 ASCII 物理名，展示标题只存在数据库里。
-- **服务商**：支持四种接口——OpenAI 兼容 Chat Completions、Azure OpenAI、Anthropic Messages、Gemini generateContent——以及各自的模型列表接口。Google 翻译和每个服务商各有一个全局共享的 FIFO 翻译池，并发上限可调，遇到限流自动收缩。
+- **服务商**：支持四种接口——OpenAI 兼容 Chat Completions、Azure OpenAI、Anthropic Messages、Gemini generateContent——以及各自的模型列表接口。每个服务商有一个全局共享的 FIFO 翻译池，并发上限可调，遇到限流自动收缩。
 - **期刊 PDF**：由嵌入引擎的 Typst 0.15 排版，公式经 MiTeX 从 LaTeX 转换，无法转换的公式保留源码而不会让整篇失败。不依赖浏览器。
 - **PDF 原生翻译**：引擎启动内置 Python 中的 BabelDOC 适配脚本，通过有界的 JSONL 管道交换段落；Python 进程不继承任何凭据，任务结束或取消时会被结束。
 - **应用**：Windows 版用 WebView2 显示阅读视图和 PDF，用 Windows 凭据管理器保存 Key；macOS 版用 PDFKit 显示 PDF、WKWebView 显示阅读视图，用钥匙串保存 Key，任务完成时在后台发送通知，Dock 图标显示进行中的文档数。
 
 ### 引擎协议
 
-请求 `{"id": 1, "method": "documents.list", "params": {…}}`，响应 `{"id": 1, "result": …}` 或 `{"id": 1, "error": {"code": "…", "message": "…"}}`；引擎另外推送没有 `id` 的通知：`event`（新的处理记录）、`document.changed`、`document.removed`。当前协议版本为 2。
+请求 `{"id": 1, "method": "documents.list", "params": {…}}`，响应 `{"id": 1, "result": …}` 或 `{"id": 1, "error": {"code": "…", "message": "…"}}`；引擎另外推送没有 `id` 的通知：`event`（新的处理记录）、`document.changed`、`document.removed`。当前协议版本为 3。
 
 | 方法 | 作用 |
 | --- | --- |
 | `engine.initialize` | 传入 API Key（`mineru`、`provider:<id>`），启动调度器，返回版本和全部设置 |
 | `engine.shutdown` | 停止引擎（关闭标准输入效果相同） |
-| `settings.get` / `settings.update` | 读取、修改偏好设置（含默认翻译服务）和翻译参数 |
+| `settings.get` / `settings.update` | 读取、修改偏好设置（含默认翻译模型）和翻译参数 |
 | `secrets.set` / `secrets.verify` | 在内存中设置 Key；向 MinerU 验证 Key |
 | `providers.save` / `providers.delete` | 新增或修改、删除大模型服务商 |
 | `providers.models` / `providers.check` | 获取服务商的模型列表；用某个模型发送测试请求 |
-| `google.check` | 测试能否访问 Google 翻译 |
-| `documents.create` | 以本地文件路径、处理方式和翻译服务（`{"kind":"google"}` 或 `{"kind":"llm","provider_id":…,"model":…}`）新建任务 |
+| `documents.create` | 以本地文件路径、处理方式和翻译模型（`{"kind":"llm","provider_id":…,"model":…}`）新建任务 |
 | `documents.list` / `documents.get` / `documents.events` | 列表与计数、单个文档及其文件路径、分页读取处理记录 |
 | `documents.rename` / `retry` / `cancel` / `delete` | 重命名、重新处理、取消、删除 |
 | `documents.exportBundle` | 把一个文档的全部文件和处理记录导出为 ZIP |
@@ -204,7 +202,7 @@ python engine/tests/e2e.py --engine engine/target/debug/docflow-engine \
 `e2e.py` 通过 JSON-RPC 驱动真实的引擎，不需要 API Key，也不产生费用：
 
 - 默认设置 `DOCFLOW_FAKE_PROVIDERS=1`，用本地测试译文代替云端翻译，并用合成的 MinerU 结果走完 MinerU 路线；给出 `--resources` 和 `--pdf` 时还会用真实的 BabelDOC 运行环境完成一次 PDF 原生翻译。
-- `--mock` 改为通过真实的 HTTP 请求访问本地的模拟服务（`engine/tests/mock_providers.py`：Google 免费接口、OpenAI 兼容、Anthropic、Gemini）。模拟服务会故意限流、截断输出、漏掉段落、改坏或删掉占位符、拒绝翻译，并返回错误的 Key 等，用来验证获取模型列表、多 Key 轮换和上面的每一级自动修复。
+- `--mock` 改为通过真实的 HTTP 请求访问本地的模拟服务（`engine/tests/mock_providers.py`：OpenAI 兼容、Anthropic、Gemini）。模拟服务会故意限流、截断输出、漏掉段落、改坏或删掉占位符、拒绝翻译，并返回错误的 Key 等，用来验证获取模型列表、多 Key 轮换和上面的每一级自动修复。
 
 `engine/native-pdf/` 下另有 BabelDOC 适配层的单元测试和离线排版冒烟测试（见其中的 README）。
 

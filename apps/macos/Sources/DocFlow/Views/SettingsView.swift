@@ -1,23 +1,41 @@
 import AppKit
 import SwiftUI
 
+private enum SettingsTab: Hashable {
+    case general, services, parsing, network, advanced
+}
+
 /// The Settings window (⌘,): 通用, 翻译服务, 文档解析, 网络, 高级.
 @MainActor
 struct SettingsView: View {
+    @Environment(AppModel.self) private var model
+    @State private var tab = SettingsTab.general
+
     var body: some View {
-        TabView {
+        TabView(selection: $tab) {
             GeneralSettingsView()
                 .tabItem { Label("通用", systemImage: "gearshape") }
+                .tag(SettingsTab.general)
             ServicesSettingsView()
                 .tabItem { Label("翻译服务", systemImage: "character.bubble") }
+                .tag(SettingsTab.services)
             MineruSettingsView()
                 .tabItem { Label("文档解析", systemImage: "doc.viewfinder") }
+                .tag(SettingsTab.parsing)
             NetworkSettingsView()
                 .tabItem { Label("网络", systemImage: "network") }
+                .tag(SettingsTab.network)
             AdvancedSettingsView()
                 .tabItem { Label("高级", systemImage: "slider.horizontal.3") }
+                .tag(SettingsTab.advanced)
         }
         .frame(width: 720)
+        .onAppear {
+            // Nothing translates without a model: start where one is added.
+            if model.settings?.capabilities.llmReady == false {
+                tab = .services
+            }
+        }
     }
 }
 
@@ -80,9 +98,16 @@ private struct GeneralSettingsView: View {
                         Text("PDF 原生翻译").tag("pdf2zh")
                         Text("MinerU 解析翻译").tag("mineru")
                     }
-                    Picker("默认翻译服务", selection: $model.defaultTranslatorPreference) {
-                        ForEach(model.translatorOptions) { option in
-                            Text(option.label).tag(option.choice)
+                    if model.translatorOptions.isEmpty {
+                        LabeledContent("默认翻译模型") {
+                            Text("尚未添加大模型服务商")
+                                .foregroundStyle(.secondary)
+                        }
+                    } else {
+                        Picker("默认翻译模型", selection: $model.defaultTranslatorPreference) {
+                            ForEach(model.translatorOptions) { option in
+                                Text(option.label).tag(Optional(option.choice))
+                            }
                         }
                     }
                     Picker("同时处理的文档数", selection: $model.workerConcurrencyPreference) {
@@ -93,7 +118,7 @@ private struct GeneralSettingsView: View {
                 } header: {
                     Text("新建翻译")
                 } footer: {
-                    Text("Google 翻译免费可用；在“翻译服务”中添加大模型服务商后，可以选用它们的模型。同时处理更多文档会占用更多 CPU 和内存，翻译请求的并发由各服务商的“并发请求数”控制。")
+                    Text("文档由大模型翻译，服务商和模型在“翻译服务”中添加。同时处理更多文档会占用更多 CPU 和内存，翻译请求的并发由各服务商的“并发请求数”控制。")
                         .foregroundStyle(.secondary)
                 }
 
@@ -187,11 +212,6 @@ private struct GeneralSettingsView: View {
 
 // MARK: - 翻译服务
 
-private enum ServiceSelection: Hashable {
-    case google
-    case provider(String)
-}
-
 private struct PresetGroup: Hashable {
     var title: String
     var ids: [String]
@@ -204,12 +224,12 @@ private let presetGroups = [
     PresetGroup(title: "本机模型", ids: ["ollama", "lmstudio"]),
 ]
 
-/// Like Mail's accounts: a list of services with + and −, and the
+/// Like Mail's accounts: a list of providers with + and −, and the
 /// selected one's settings beside it.
 @MainActor
 private struct ServicesSettingsView: View {
     @Environment(AppModel.self) private var model
-    @State private var selection: ServiceSelection? = .google
+    @State private var selection: String?
     @State private var isCustomPresented = false
     @State private var deleteCandidate: ProviderInfo?
     @State private var error: String?
@@ -219,14 +239,10 @@ private struct ServicesSettingsView: View {
             HStack(spacing: 0) {
                 VStack(spacing: 0) {
                     List(selection: $selection) {
-                        Section("免费") {
-                            Label("Google 翻译", systemImage: "globe")
-                                .tag(ServiceSelection.google)
-                        }
                         Section("大模型服务商") {
                             ForEach(model.settings?.providers ?? []) { provider in
                                 ProviderRow(provider: provider, fake: model.settings?.capabilities.fakeProviders == true)
-                                    .tag(ServiceSelection.provider(provider.id))
+                                    .tag(provider.id)
                             }
                         }
                     }
@@ -242,7 +258,7 @@ private struct ServicesSettingsView: View {
                         .help("添加服务商")
                         .accessibilityLabel("添加服务商")
                         Button {
-                            if case .provider(let id) = selection {
+                            if let id = selectedProviderID {
                                 deleteCandidate = model.settings?.provider(id)
                             }
                         } label: {
@@ -260,6 +276,11 @@ private struct ServicesSettingsView: View {
                 Divider()
                 detail
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+            .onAppear {
+                if selection == nil {
+                    selection = model.settings?.providers.first?.id
+                }
             }
         }
         .sheet(isPresented: $isCustomPresented) {
@@ -289,10 +310,8 @@ private struct ServicesSettingsView: View {
     }
 
     private var selectedProviderID: String? {
-        if case .provider(let id) = selection, model.settings?.provider(id) != nil {
-            return id
-        }
-        return nil
+        guard let selection, model.settings?.provider(selection) != nil else { return nil }
+        return selection
     }
 
     @ViewBuilder
@@ -300,8 +319,25 @@ private struct ServicesSettingsView: View {
         if let id = selectedProviderID {
             ProviderDetailView(id: id)
                 .id(id)
+        } else if model.settings?.providers.isEmpty ?? true {
+            ContentUnavailableView {
+                Label("还没有大模型服务商", systemImage: "sparkles")
+            } description: {
+                Text("DocFlow 用大模型翻译文档。从预设中选择服务商（DeepSeek、通义千问、Kimi、Claude 等），填写 API Key 后获取模型列表即可。")
+            } actions: {
+                Menu {
+                    presetMenu
+                } label: {
+                    Text("添加服务商")
+                }
+                .fixedSize()
+            }
         } else {
-            GoogleServiceView()
+            ContentUnavailableView(
+                "选择一个服务商",
+                systemImage: "sidebar.left",
+                description: Text("在左侧选择服务商，查看或修改它的设置。")
+            )
         }
     }
 
@@ -328,7 +364,7 @@ private struct ServicesSettingsView: View {
         Task {
             do {
                 let id = try await model.addProvider(preset, name: name, type: type, baseURL: baseURL)
-                selection = .provider(id)
+                selection = id
             } catch {
                 self.error = error.localizedDescription
             }
@@ -339,7 +375,7 @@ private struct ServicesSettingsView: View {
         Task {
             do {
                 try await model.deleteProvider(provider.id)
-                selection = .google
+                selection = model.settings?.providers.first?.id
             } catch {
                 self.error = error.localizedDescription
             }
@@ -378,83 +414,6 @@ private struct ProviderRow: View {
         if provider.models.isEmpty { return "需要添加模型" }
         if !(fake || provider.keyConfigured || provider.keyOptional) { return "需要 API Key" }
         return "\(provider.models.count) 个模型"
-    }
-}
-
-@MainActor
-private struct GoogleServiceView: View {
-    @Environment(AppModel.self) private var model
-    @State private var concurrency = 8
-    @State private var loaded = false
-    @State private var isChecking = false
-    @State private var status: String?
-    @State private var statusIsError = false
-
-    var body: some View {
-        Form {
-            Section {
-                Text("无需 API Key，速度快，适合快速阅读。所在网络无法直接访问 Google 时，请在“网络”中设置代理。")
-                    .foregroundStyle(.secondary)
-                HStack {
-                    Button("测试连接", action: check)
-                        .disabled(isChecking)
-                    if isChecking {
-                        ProgressView()
-                            .controlSize(.small)
-                    }
-                    Spacer()
-                }
-                if let status {
-                    FormMessage(text: status, isError: statusIsError)
-                }
-            } header: {
-                Text("Google 翻译（免费）")
-            }
-            Section {
-                NumberField(
-                    "并发请求数",
-                    value: $concurrency,
-                    range: 1...(model.settings?.translationRuntimeLimits.googleConcurrencyMax ?? 64)
-                )
-            } footer: {
-                Text("免费接口对频率敏感，默认 8。遇到限流会自动降低并发并重试。")
-                    .foregroundStyle(.secondary)
-            }
-        }
-        .formStyle(.grouped)
-        .onAppear {
-            concurrency = model.settings?.translationRuntime.google.concurrency ?? 8
-            loaded = true
-        }
-        .onChange(of: concurrency) { _, value in
-            guard loaded, var runtime = model.settings?.translationRuntime, runtime.google.concurrency != value else { return }
-            runtime.google.concurrency = value
-            Task {
-                do {
-                    try await model.saveRuntime(runtime)
-                } catch {
-                    status = error.localizedDescription
-                    statusIsError = true
-                }
-            }
-        }
-    }
-
-    private func check() {
-        isChecking = true
-        status = "正在连接 Google 翻译…"
-        statusIsError = false
-        Task {
-            do {
-                let result = try await model.checkGoogle()
-                status = "连接正常 · \(result.latencyMs) ms · “Hello, world.” → “\(result.reply)”"
-                statusIsError = false
-            } catch {
-                status = error.localizedDescription
-                statusIsError = true
-            }
-            isChecking = false
-        }
     }
 }
 
@@ -1111,7 +1070,7 @@ private struct NetworkSettingsView: View {
                         }
                     }
                 } footer: {
-                    Text("处理引擎访问 Google 翻译、大模型服务商和 MinerU 时使用的网络代理。“跟随系统”会读取“系统设置”中的代理。")
+                    Text("处理引擎访问大模型服务商和 MinerU 时使用的网络代理。“跟随系统”会读取“系统设置”中的代理。")
                         .foregroundStyle(.secondary)
                 }
                 if let error = model.preferencesError {
@@ -1162,9 +1121,6 @@ private struct AdvancedSettingsView: View {
         EngineRequired(height: 700) {
             if let limits = model.settings?.translationRuntimeLimits {
                 Form {
-                    Section("Google 翻译") {
-                        NumberField("每次请求最多字符", value: $runtime.google.chunkChars, range: limits.minChunkChars...limits.googleChunkCharsMax, step: 100)
-                    }
                     Section {
                         NumberField("每段最多字符", value: $runtime.llm.chunkChars, range: limits.minChunkChars...limits.llmChunkCharsMax, step: 100)
                         NumberField("单次请求最多段数", value: $runtime.llm.maxSegmentsPerRequest, range: 1...limits.llmSegmentsPerRequestMax)
@@ -1214,15 +1170,8 @@ private struct AdvancedSettingsView: View {
         }
     }
 
-    /// The Google concurrency is set (and saved) in “翻译服务”.
-    private var withSavedGoogleConcurrency: TranslationRuntime {
-        var value = runtime
-        value.google.concurrency = model.settings?.translationRuntime.google.concurrency ?? runtime.google.concurrency
-        return value
-    }
-
     private var isChanged: Bool {
-        withSavedGoogleConcurrency != model.settings?.translationRuntime
+        runtime != model.settings?.translationRuntime
     }
 
     private func reset() {
@@ -1234,10 +1183,10 @@ private struct AdvancedSettingsView: View {
     }
 
     private func save() {
-        let runtime = withSavedGoogleConcurrency
+        let edited = runtime
         Task {
             do {
-                try await model.saveRuntime(runtime)
+                try await model.saveRuntime(edited)
                 message = "已保存。"
                 messageIsError = false
             } catch {
@@ -1286,7 +1235,6 @@ private struct NumberField: View {
 extension TranslationRuntime {
     /// Only shown for a moment before the engine's values arrive.
     static let fallback = TranslationRuntime(
-        google: GoogleRuntime(concurrency: 8, chunkChars: 3_000),
         llm: LLMRuntime(chunkChars: 4_000, maxSegmentsPerRequest: 8, maxRequestChars: 8_000, maxOutputTokens: 0),
         perDocumentConcurrency: 100,
         systemPrompt: ""

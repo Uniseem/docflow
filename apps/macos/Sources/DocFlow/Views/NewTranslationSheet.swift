@@ -47,24 +47,17 @@ struct NewTranslationSheet: View {
                 }
 
                 Section {
-                    Picker("翻译服务", selection: $form.translator) {
-                        ForEach(form.translatorOptions) { option in
-                            Text(option.label).tag(option.choice)
-                        }
-                    }
-                    Text(form.translatorDetail)
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                    if !form.llmReady {
-                        HStack {
-                            Text("想用 DeepSeek、通义千问、Kimi、Claude 等大模型翻译？")
-                                .font(.callout)
-                                .foregroundStyle(.secondary)
-                            Spacer()
-                            SettingsLink {
-                                Text("添加服务商…")
+                    if form.hasModels {
+                        Picker("翻译模型", selection: $form.translator) {
+                            ForEach(form.translatorOptions) { option in
+                                Text(option.label).tag(Optional(option.choice))
                             }
                         }
+                        Text("由所选的大模型翻译，理解上下文、术语统一；速度和费用取决于服务商和模型。")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        LabeledContent("翻译模型", value: "尚未添加")
                     }
                 }
 
@@ -141,6 +134,9 @@ struct NewTranslationSheet: View {
             .padding(16)
         }
         .frame(width: 580, height: 640)
+        .onChange(of: form.translatorOptions) {
+            form.refreshTranslator()
+        }
         .fileImporter(
             isPresented: $isImporterPresented,
             allowedContentTypes: form.importableTypes,

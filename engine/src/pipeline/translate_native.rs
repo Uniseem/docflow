@@ -394,7 +394,7 @@ mod tests {
     #[test]
     fn native_requests_use_the_pdf_protocol() {
         let runtime = super::super::tests::test_runtime();
-        let translator = Translator::Llm(Arc::new(LlmTarget {
+        let translator = Translator(Arc::new(LlmTarget {
             provider_id: "p".into(),
             provider_name: "P".into(),
             endpoint: crate::providers::Endpoint {
@@ -407,15 +407,15 @@ mod tests {
             concurrency: 100,
         }));
         for mode in [Mode::Pdf, Mode::PdfStrict, Mode::PdfIsolated] {
-            let PoolRequest::Llm { system, .. } = build_request(&translator, &runtime, &[(0, "PDF paragraph".into())], mode) else {
-                panic!("LLM request expected")
-            };
+            let PoolRequest { system, .. } = build_request(&translator, &runtime, &[(0, "PDF paragraph".into())], mode);
             assert!(system.starts_with(&runtime.system_prompt));
             assert!(system.contains("PDF 原生段落翻译"));
         }
+        let mut other = (*translator.0).clone();
+        other.model = "n".into();
         assert_ne!(
             native_fingerprint(&translator, &runtime),
-            native_fingerprint(&Translator::Google, &runtime)
+            native_fingerprint(&Translator(Arc::new(other)), &runtime)
         );
     }
 }

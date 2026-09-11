@@ -18,7 +18,8 @@ pub struct Document {
     pub mime_type: Option<String>,
     pub processing_mode: String,
     pub translation_tier: i64,
-    /// "Google 翻译（免费）" or "服务商 · 模型"; absent for older documents.
+    /// "服务商 · 模型" (3.0.0 documents may say "Google 翻译（免费）");
+    /// absent for older documents.
     pub translator_label: Option<String>,
     pub mineru_model: String,
     pub status: String,

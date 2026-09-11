@@ -1,5 +1,6 @@
 using DocFlow.Services;
 using DocFlow.ViewModels;
+using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Navigation;
@@ -270,8 +271,10 @@ public sealed partial class DocumentPage : Page
         }
         catch (Exception error)
         {
-            await Dialogs.ShowErrorAsync(XamlRoot, "导出失败", error.Message);
+            await ExportFailedAsync(destination, error.Message);
+            return;
         }
+        await ExportedAsync(destination);
     }
 
     private async Task ExportBundleAsync(string name)
@@ -284,12 +287,53 @@ public sealed partial class DocumentPage : Page
         try
         {
             await AppHost.RequireEngine().CallAsync<ExportResult>("documents.exportBundle", new { id = ViewModel.Id, destination });
-            ShellService.Reveal(destination);
         }
-        catch (EngineException error)
+        catch (Exception error) when (error is EngineException or InvalidOperationException)
         {
-            await Dialogs.ShowErrorAsync(XamlRoot, "导出失败", error.Message);
+            await ExportFailedAsync(destination, error.Message);
+            return;
         }
+        await ExportedAsync(destination);
+    }
+
+    private string? _exported;
+    private DispatcherQueueTimer? _exportTimer;
+
+    /// <summary>Confirms a finished export in a bar that closes by itself.</summary>
+    private async Task ExportedAsync(string destination)
+    {
+        if (!File.Exists(destination))
+        {
+            await ExportFailedAsync(destination, "导出后没有找到这个文件。");
+            return;
+        }
+        _exported = destination;
+        ExportInfo.Message = $"已保存为“{Path.GetFileName(destination)}”";
+        ExportInfo.IsOpen = true;
+        if (_exportTimer is null)
+        {
+            _exportTimer = DispatcherQueue.CreateTimer();
+            _exportTimer.Interval = TimeSpan.FromSeconds(8);
+            _exportTimer.IsRepeating = false;
+            _exportTimer.Tick += (_, _) => ExportInfo.IsOpen = false;
+        }
+        _exportTimer.Stop();
+        _exportTimer.Start();
+    }
+
+    private Task ExportFailedAsync(string destination, string reason)
+    {
+        ExportInfo.IsOpen = false;
+        return Dialogs.ShowErrorAsync(XamlRoot, "导出失败", $"“{Path.GetFileName(destination)}”没有导出：{reason}");
+    }
+
+    private void OnRevealExport(object sender, RoutedEventArgs e)
+    {
+        if (_exported is { } path)
+        {
+            ShellService.Reveal(path);
+        }
+        ExportInfo.IsOpen = false;
     }
 
     private void OnOpenPrimary(object sender, RoutedEventArgs e)

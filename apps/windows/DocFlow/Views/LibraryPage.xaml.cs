@@ -163,7 +163,7 @@ public sealed partial class LibraryPage : Page
     public string EmptyTitle(bool libraryEmpty) => libraryEmpty ? "还没有文档" : "没有符合条件的文档";
 
     public string EmptyDetail(bool libraryEmpty) => libraryEmpty
-        ? "把 PDF、Word、PowerPoint 或图片拖到这里，或选择文件开始翻译。"
+        ? "把 PDF、Word、PowerPoint 或图片拖到这里，或选择文件开始翻译。翻译由你在设置中添加的大模型服务商完成。"
         : "试试其他筛选条件或搜索词。";
 
     public bool HasError(string? error) => !string.IsNullOrEmpty(error);

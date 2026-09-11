@@ -12,11 +12,6 @@ pub const PROXY: &str = "proxy";
 pub const WORKER_CONCURRENCY: &str = "worker_concurrency";
 
 pub const MIN_CHUNK_CHARS: usize = 100;
-/// Google's free endpoint: requests in flight (it rate-limits bursts).
-pub const GOOGLE_DEFAULT_CONCURRENCY: usize = 8;
-pub const GOOGLE_MAX_CONCURRENCY: usize = 64;
-pub const GOOGLE_DEFAULT_CHUNK_CHARS: usize = 3_000;
-pub const GOOGLE_MAX_CHUNK_CHARS: usize = 5_000;
 pub const LLM_DEFAULT_CHUNK_CHARS: usize = 4_000;
 pub const LLM_MAX_CHUNK_CHARS: usize = 32_000;
 pub const LLM_DEFAULT_SEGMENTS_PER_REQUEST: usize = 8;
@@ -31,40 +26,26 @@ pub const MAX_SYSTEM_PROMPT_CHARS: usize = 12_000;
 pub const MAX_WORKER_CONCURRENCY: usize = 4;
 pub const DEFAULT_TRANSLATION_SYSTEM_PROMPT: &str = "你是严谨的学术文献译者。把用户提供的内容准确、流畅地翻译成简体中文：术语统一，保留原有的段落、标题、列表、表格和换行结构；不合并、不遗漏、不解释，不添加原文没有的内容。";
 
-/// What translates a document. Captured on the document when it is queued.
+/// What translates a document: a model of a configured large-model provider.
+/// Captured on the document when it is queued. The JSON form keeps its
+/// `kind` tag (`{"kind": "llm", "provider_id": …, "model": …}`); documents
+/// from 3.0.0 may still hold `{"kind": "google"}`, which no longer parses.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum TranslatorChoice {
-    /// Google Translate's free web endpoint; no key.
-    Google,
-    /// A model of a configured large-model provider.
     Llm { provider_id: String, model: String },
-}
-
-impl Default for TranslatorChoice {
-    fn default() -> Self {
-        Self::Google
-    }
 }
 
 impl TranslatorChoice {
     pub fn validate(&self) -> Result<()> {
-        if let Self::Llm { provider_id, model } = self {
-            crate::providers::validate_id(provider_id)?;
-            ensure!(
-                !model.trim().is_empty() && model.len() <= 256,
-                "请选择要使用的模型"
-            );
-        }
+        let Self::Llm { provider_id, model } = self;
+        crate::providers::validate_id(provider_id)?;
+        ensure!(
+            !model.trim().is_empty() && model.len() <= 256,
+            "请选择要使用的模型"
+        );
         Ok(())
     }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct GoogleRuntime {
-    pub concurrency: usize,
-    pub chunk_chars: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -83,7 +64,6 @@ pub struct LlmRuntime {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct TranslationRuntimeSettings {
-    pub google: GoogleRuntime,
     pub llm: LlmRuntime,
     /// Requests one document keeps in flight at most.
     pub per_document_concurrency: usize,
@@ -93,10 +73,6 @@ pub struct TranslationRuntimeSettings {
 impl Default for TranslationRuntimeSettings {
     fn default() -> Self {
         Self {
-            google: GoogleRuntime {
-                concurrency: GOOGLE_DEFAULT_CONCURRENCY,
-                chunk_chars: GOOGLE_DEFAULT_CHUNK_CHARS,
-            },
             llm: LlmRuntime {
                 chunk_chars: LLM_DEFAULT_CHUNK_CHARS,
                 max_segments_per_request: LLM_DEFAULT_SEGMENTS_PER_REQUEST,
@@ -111,14 +87,6 @@ impl Default for TranslationRuntimeSettings {
 
 impl TranslationRuntimeSettings {
     pub fn validate(&self) -> Result<()> {
-        ensure!(
-            (1..=GOOGLE_MAX_CONCURRENCY).contains(&self.google.concurrency),
-            "Google 翻译并发数必须在 1–{GOOGLE_MAX_CONCURRENCY} 之间"
-        );
-        ensure!(
-            (MIN_CHUNK_CHARS..=GOOGLE_MAX_CHUNK_CHARS).contains(&self.google.chunk_chars),
-            "Google 翻译每段最多字符数必须在 {MIN_CHUNK_CHARS}–{GOOGLE_MAX_CHUNK_CHARS} 之间"
-        );
         ensure!(
             (MIN_CHUNK_CHARS..=LLM_MAX_CHUNK_CHARS).contains(&self.llm.chunk_chars),
             "大模型每段最多字符数必须在 {MIN_CHUNK_CHARS}–{LLM_MAX_CHUNK_CHARS} 之间"
@@ -153,8 +121,6 @@ impl TranslationRuntimeSettings {
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct TranslationRuntimeLimits {
     pub min_chunk_chars: usize,
-    pub google_concurrency_max: usize,
-    pub google_chunk_chars_max: usize,
     pub llm_chunk_chars_max: usize,
     pub llm_segments_per_request_max: usize,
     pub llm_request_chars_min: usize,
@@ -169,8 +135,6 @@ impl Default for TranslationRuntimeLimits {
     fn default() -> Self {
         Self {
             min_chunk_chars: MIN_CHUNK_CHARS,
-            google_concurrency_max: GOOGLE_MAX_CONCURRENCY,
-            google_chunk_chars_max: GOOGLE_MAX_CHUNK_CHARS,
             llm_chunk_chars_max: LLM_MAX_CHUNK_CHARS,
             llm_segments_per_request_max: LLM_MAX_SEGMENTS_PER_REQUEST,
             llm_request_chars_min: LLM_MIN_REQUEST_CHARS,
@@ -183,16 +147,25 @@ impl Default for TranslationRuntimeLimits {
     }
 }
 
+/// A stored runtime. One saved by 3.0.0 still carries Google Translate's
+/// settings; they are dropped so the rest of the user's settings survive.
+fn parse_runtime(text: &str) -> Option<TranslationRuntimeSettings> {
+    let mut value = serde_json::from_str::<serde_json::Value>(text).ok()?;
+    if let Some(object) = value.as_object_mut() {
+        object.remove("google");
+    }
+    serde_json::from_value::<TranslationRuntimeSettings>(value)
+        .ok()
+        .filter(|runtime| runtime.validate().is_ok())
+}
+
 pub async fn load_translation_runtime(pool: &SqlitePool) -> Result<TranslationRuntimeSettings> {
-    let runtime = match get(pool, TRANSLATION_RUNTIME).await? {
-        // A value from an older version falls back to the defaults.
-        Some(value) => serde_json::from_str::<TranslationRuntimeSettings>(&value)
-            .ok()
-            .filter(|runtime| runtime.validate().is_ok())
-            .unwrap_or_default(),
-        None => TranslationRuntimeSettings::default(),
-    };
-    Ok(runtime)
+    // A value from an older version falls back to the defaults.
+    Ok(get(pool, TRANSLATION_RUNTIME)
+        .await?
+        .as_deref()
+        .and_then(parse_runtime)
+        .unwrap_or_default())
 }
 
 /// Each job keeps the runtime settings from the moment it was queued, so a
@@ -208,11 +181,7 @@ pub async fn document_translation_runtime(
     .fetch_optional(pool)
     .await?
     .context("读取翻译运行快照时文档不存在")?;
-    if let Some(runtime) = existing
-        .as_deref()
-        .and_then(|snapshot| serde_json::from_str::<TranslationRuntimeSettings>(snapshot).ok())
-        .filter(|runtime| runtime.validate().is_ok())
-    {
+    if let Some(runtime) = existing.as_deref().and_then(parse_runtime) {
         return Ok(runtime);
     }
     let runtime = load_translation_runtime(pool).await?;
@@ -252,8 +221,9 @@ pub async fn set(pool: &SqlitePool, key: &str, value: &str) -> Result<()> {
 pub struct Preferences {
     /// MinerU parsing model: `vlm` or `pipeline`.
     pub mineru_model: String,
-    /// Preselected in "新建翻译".
-    pub default_translator: TranslatorChoice,
+    /// Preselected in "新建翻译"; none until the user picks a model (the apps
+    /// then offer the first usable one).
+    pub default_translator: Option<TranslatorChoice>,
     /// `mineru` or `pdf2zh`.
     pub default_mode: String,
     pub proxy: ProxySettings,
@@ -265,7 +235,7 @@ impl Default for Preferences {
     fn default() -> Self {
         Self {
             mineru_model: "vlm".into(),
-            default_translator: TranslatorChoice::Google,
+            default_translator: None,
             default_mode: "pdf2zh".into(),
             proxy: ProxySettings::System,
             worker_concurrency: 2,
@@ -279,7 +249,9 @@ impl Preferences {
             ["vlm", "pipeline"].contains(&self.mineru_model.as_str()),
             "MinerU 模型只能是 vlm 或 pipeline"
         );
-        self.default_translator.validate()?;
+        if let Some(choice) = &self.default_translator {
+            choice.validate()?;
+        }
         ensure!(
             ["mineru", "pdf2zh"].contains(&self.default_mode.as_str()),
             "默认处理方式只能是 mineru 或 pdf2zh"
@@ -303,11 +275,11 @@ pub async fn load_preferences(pool: &SqlitePool) -> Result<Preferences> {
             .await?
             .filter(|value| ["vlm", "pipeline"].contains(&value.as_str()))
             .unwrap_or(defaults.mineru_model),
+        // 3.0.0 stored {"kind":"google"} here, which no longer parses.
         default_translator: get(pool, DEFAULT_TRANSLATOR)
             .await?
             .and_then(|value| serde_json::from_str::<TranslatorChoice>(&value).ok())
-            .filter(|choice| choice.validate().is_ok())
-            .unwrap_or(defaults.default_translator),
+            .filter(|choice| choice.validate().is_ok()),
         default_mode: get(pool, DEFAULT_MODE)
             .await?
             .filter(|value| ["mineru", "pdf2zh"].contains(&value.as_str()))
@@ -352,10 +324,10 @@ mod tests {
         assert_eq!(load_preferences(&pool).await.unwrap(), Preferences::default());
         let changed = Preferences {
             mineru_model: "pipeline".into(),
-            default_translator: TranslatorChoice::Llm {
+            default_translator: Some(TranslatorChoice::Llm {
                 provider_id: "deepseek".into(),
                 model: "deepseek-chat".into(),
-            },
+            }),
             default_mode: "mineru".into(),
             proxy: ProxySettings::Custom {
                 url: "socks5://127.0.0.1:1080".into(),
@@ -367,11 +339,15 @@ mod tests {
         let mut invalid = changed.clone();
         invalid.worker_concurrency = 0;
         assert!(save_preferences(&pool, &invalid).await.is_err());
-        set(&pool, DEFAULT_TRANSLATOR, "{\"kind\":\"llm\"}").await.unwrap();
-        assert_eq!(
-            load_preferences(&pool).await.unwrap().default_translator,
-            TranslatorChoice::Google
-        );
+        // Incomplete choices and 3.0.0's Google Translate mean "none chosen".
+        for stored in ["{\"kind\":\"llm\"}", "{\"kind\":\"google\"}"] {
+            set(&pool, DEFAULT_TRANSLATOR, stored).await.unwrap();
+            assert_eq!(load_preferences(&pool).await.unwrap().default_translator, None);
+        }
+        let mut unset = changed.clone();
+        unset.default_translator = None;
+        save_preferences(&pool, &unset).await.unwrap();
+        assert_eq!(load_preferences(&pool).await.unwrap(), unset);
     }
 
     #[tokio::test]
@@ -390,6 +366,11 @@ mod tests {
             load_translation_runtime(&pool).await.unwrap(),
             TranslationRuntimeSettings::default()
         );
+        // 3.0.0 also stored Google Translate's settings; the rest is kept.
+        let mut stored = serde_json::to_value(&runtime).unwrap();
+        stored["google"] = json!({"concurrency": 8, "chunk_chars": 3000});
+        set(&pool, TRANSLATION_RUNTIME, &stored.to_string()).await.unwrap();
+        assert_eq!(load_translation_runtime(&pool).await.unwrap(), runtime);
     }
 
     #[test]
@@ -397,7 +378,6 @@ mod tests {
         let runtime = TranslationRuntimeSettings::default();
         assert_eq!(runtime.per_document_concurrency, 100);
         assert_eq!(crate::providers::DEFAULT_CONCURRENCY, 100);
-        assert_eq!(runtime.google.concurrency, GOOGLE_DEFAULT_CONCURRENCY);
         runtime.validate().unwrap();
     }
 
@@ -405,7 +385,6 @@ mod tests {
     fn runtime_bounds_are_inclusive_and_enforced() {
         let limits = TranslationRuntimeLimits::default();
         let mut runtime = TranslationRuntimeSettings::default();
-        runtime.google = GoogleRuntime { concurrency: 1, chunk_chars: MIN_CHUNK_CHARS };
         runtime.llm = LlmRuntime {
             chunk_chars: MIN_CHUNK_CHARS,
             max_segments_per_request: 1,
@@ -414,10 +393,6 @@ mod tests {
         };
         runtime.per_document_concurrency = 1;
         runtime.validate().unwrap();
-        runtime.google = GoogleRuntime {
-            concurrency: limits.google_concurrency_max,
-            chunk_chars: limits.google_chunk_chars_max,
-        };
         runtime.llm = LlmRuntime {
             chunk_chars: limits.llm_chunk_chars_max,
             max_segments_per_request: limits.llm_segments_per_request_max,
@@ -426,9 +401,7 @@ mod tests {
         };
         runtime.per_document_concurrency = limits.per_document_concurrency_max;
         runtime.validate().unwrap();
-        let mutations: [fn(&mut TranslationRuntimeSettings); 8] = [
-            |runtime: &mut TranslationRuntimeSettings| runtime.google.concurrency = 0,
-            |runtime: &mut TranslationRuntimeSettings| runtime.google.chunk_chars = GOOGLE_MAX_CHUNK_CHARS + 1,
+        let mutations: [fn(&mut TranslationRuntimeSettings); 6] = [
             |runtime: &mut TranslationRuntimeSettings| runtime.llm.chunk_chars = MIN_CHUNK_CHARS - 1,
             |runtime: &mut TranslationRuntimeSettings| runtime.llm.max_segments_per_request = 0,
             |runtime: &mut TranslationRuntimeSettings| runtime.llm.max_request_chars = LLM_MAX_REQUEST_CHARS + 1,
@@ -456,7 +429,7 @@ mod tests {
 
     #[test]
     fn translator_choice_has_a_tagged_json_form() {
-        assert_eq!(serde_json::to_value(TranslatorChoice::Google).unwrap(), json!({"kind": "google"}));
+        assert!(serde_json::from_value::<TranslatorChoice>(json!({"kind": "google"})).is_err());
         let llm: TranslatorChoice =
             serde_json::from_value(json!({"kind": "llm", "provider_id": "siliconflow", "model": "Qwen/Qwen3"})).unwrap();
         llm.validate().unwrap();

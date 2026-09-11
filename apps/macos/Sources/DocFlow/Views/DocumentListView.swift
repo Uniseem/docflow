@@ -122,21 +122,29 @@ struct DocumentListView: View {
     }
 }
 
-/// The first-run empty state. Google Translate needs no key, so a first
-/// translation can start right away.
+/// The first-run empty state. Translation needs a large model, so without
+/// one the first step is adding a provider.
 @MainActor
 private struct LibraryWelcomeView: View {
     @Environment(AppModel.self) private var model
 
     var body: some View {
+        let ready = model.settings?.capabilities.llmReady == true
         ContentUnavailableView {
             Label("文档库为空", systemImage: "doc.badge.plus")
         } description: {
-            Text("把 PDF、Word、PowerPoint 或图片拖到这里，或点按“新建翻译”。Google 翻译免费可用；在设置中添加大模型服务商后，还可以选用 DeepSeek、Claude 等模型。")
+            if ready {
+                Text("把 PDF、Word、PowerPoint 或图片拖到这里，或点按“新建翻译”。")
+            } else {
+                Text("DocFlow 用大模型翻译。先在设置中添加一个服务商（DeepSeek、通义千问、Kimi、Claude 等）并填写 API Key，再把文件拖到这里。")
+            }
         } actions: {
-            Button("新建翻译…") { model.presentNewTranslation() }
-            SettingsLink {
-                Text("添加大模型服务商…")
+            if ready {
+                Button("新建翻译…") { model.presentNewTranslation() }
+            } else {
+                SettingsLink {
+                    Text("添加大模型服务商…")
+                }
             }
         }
     }

@@ -3,7 +3,7 @@ name: Desktop apps
 on:
   push:
     branches: [main]
-    # A version tag (v3.0.0) also publishes the installers as a GitHub Release.
+    # A version tag (v3.0.1) also publishes the installers as a GitHub Release.
     tags: ['v*']
   pull_request:
   workflow_dispatch:
@@ -16,8 +16,8 @@ concurrency:
   cancel-in-progress: true
 
 # Signing is optional. Without these secrets macOS gets an unsigned installer
-# package (the user allows it once in System Settings; the installed app then
-# opens directly) and Windows an unsigned zip.
+# package (installed from Terminal it needs no approval; the installed app
+# opens directly) and Windows an unsigned setup program.
 #   macOS:   MACOS_CERTIFICATE_P12 (base64 of a .p12 with the Developer ID
 #            Application and Developer ID Installer certificates),
 #            MACOS_CERTIFICATE_PASSWORD, MACOS_SIGN_IDENTITY, MACOS_INSTALLER_IDENTITY,
@@ -143,11 +143,11 @@ jobs:
           "DOCFLOW_SIGN_PFX=$pfx" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
       - name: Build DocFlow
         shell: pwsh
-        run: ./apps/windows/build.ps1 -Zip
+        run: ./apps/windows/build.ps1 -Installer
       - uses: actions/upload-artifact@v4
         with:
           name: DocFlow-win-x64
-          path: apps/windows/dist/DocFlow-win-x64.zip
+          path: apps/windows/dist/DocFlow-win-x64-setup.exe
           if-no-files-found: error
 
   release:
@@ -163,8 +163,9 @@ jobs:
         run: |
           version="$(sed -n 's/^version = "\(.*\)"$/\1/p' engine/Cargo.toml | head -n 1)"
           windows="$(sed -n 's/.*<Version>\(.*\)<\/Version>.*/\1/p' apps/windows/DocFlow/DocFlow.csproj | head -n 1)"
-          if [ "$GITHUB_REF_NAME" != "v$version" ] || [ "$windows" != "$version" ]; then
-            echo "::error::tag $GITHUB_REF_NAME, engine/Cargo.toml $version and DocFlow.csproj $windows must agree"
+          manifest="$(sed -n 's/.*<assemblyIdentity version="\([^"]*\)".*/\1/p' apps/windows/DocFlow/app.manifest | head -n 1)"
+          if [ "$GITHUB_REF_NAME" != "v$version" ] || [ "$windows" != "$version" ] || [ "$manifest" != "$version.0" ]; then
+            echo "::error::tag $GITHUB_REF_NAME, engine/Cargo.toml $version, DocFlow.csproj $windows and app.manifest $manifest must agree"
             exit 1
           fi
           echo "VERSION=$version" >> "$GITHUB_ENV"

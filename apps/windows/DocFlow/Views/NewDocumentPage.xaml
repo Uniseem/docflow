@@ -119,26 +119,31 @@
                 </StackPanel>
             </Border>
 
-            <!-- Translation service -->
-            <TextBlock Text="翻译服务" Style="{StaticResource SectionHeaderTextBlockStyle}" />
+            <!-- Translation model -->
+            <TextBlock Text="翻译模型" Style="{StaticResource SectionHeaderTextBlockStyle}" />
             <Border Style="{StaticResource CardBorderStyle}">
                 <StackPanel Spacing="10">
                     <ComboBox
                         MinWidth="320"
                         MaxWidth="520"
                         HorizontalAlignment="Left"
-                        AutomationProperties.Name="翻译服务"
+                        AutomationProperties.Name="翻译模型"
                         ItemsSource="{x:Bind ViewModel.Translators}"
-                        SelectedItem="{x:Bind ViewModel.Translator, Mode=TwoWay}">
+                        SelectedItem="{x:Bind ViewModel.Translator, Mode=TwoWay}"
+                        Visibility="{x:Bind helpers:Format.Show(ViewModel.HasModels), Mode=OneWay}">
                         <ComboBox.ItemTemplate>
                             <DataTemplate x:DataType="services:TranslatorOption">
                                 <TextBlock Text="{x:Bind Label}" TextTrimming="CharacterEllipsis" />
                             </DataTemplate>
                         </ComboBox.ItemTemplate>
                     </ComboBox>
-                    <TextBlock Text="{x:Bind ViewModel.TranslatorDetail, Mode=OneWay}" Style="{StaticResource SecondaryTextBlockStyle}" TextWrapping="Wrap" />
-                    <StackPanel Orientation="Horizontal" Spacing="4" Visibility="{x:Bind helpers:Format.Hide(ViewModel.LlmReady), Mode=OneWay}">
-                        <TextBlock Style="{StaticResource SecondaryTextBlockStyle}" VerticalAlignment="Center" Text="想用 DeepSeek、通义千问、Kimi、Claude 等大模型翻译？" />
+                    <TextBlock
+                        Style="{StaticResource SecondaryTextBlockStyle}"
+                        TextWrapping="Wrap"
+                        Visibility="{x:Bind helpers:Format.Show(ViewModel.HasModels), Mode=OneWay}"
+                        Text="由所选的大模型翻译，理解上下文、术语统一；速度和费用取决于服务商和模型。" />
+                    <StackPanel Orientation="Horizontal" Spacing="4" Visibility="{x:Bind helpers:Format.Hide(ViewModel.HasModels), Mode=OneWay}">
+                        <TextBlock Style="{StaticResource SecondaryTextBlockStyle}" VerticalAlignment="Center" Text="还没有可用的大模型。" />
                         <HyperlinkButton Padding="2,0" Content="在设置中添加服务商" Click="OnOpenSettings" />
                     </StackPanel>
                 </StackPanel>

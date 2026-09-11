@@ -257,28 +257,28 @@ async fn dispatcher_keeps_the_last_limit_when_only_the_watch_channel_closes() {
 
 #[tokio::test]
 async fn two_provider_dispatchers_have_independent_limits_and_shutdown() {
-    let mut google = FakePool::new(1);
+    let mut openai = FakePool::new(1);
     let mut deepseek = FakePool::new(2);
-    let mut google_releases = google.enqueue(0..2).await;
+    let mut openai_releases = openai.enqueue(0..2).await;
     let mut deepseek_releases = deepseek.enqueue(10..13).await;
-    assert_eq!(google.next_started().await, 0);
+    assert_eq!(openai.next_started().await, 0);
     let mut initial = [deepseek.next_started().await, deepseek.next_started().await];
     initial.sort_unstable();
     assert_eq!(initial, [10, 11]);
 
-    google.set_limit(3);
-    assert_eq!(google.next_started().await, 1);
+    openai.set_limit(3);
+    assert_eq!(openai.next_started().await, 1);
     deepseek.assert_no_start().await;
-    assert_eq!(google.active(), 2);
+    assert_eq!(openai.active(), 2);
     assert_eq!(deepseek.active(), 2);
 
     deepseek.set_limit(1);
-    release(&mut google_releases, 0);
-    release(&mut google_releases, 1);
-    google.next_finished().await;
-    google.next_finished().await;
-    google.close();
-    google.assert_drained().await;
+    release(&mut openai_releases, 0);
+    release(&mut openai_releases, 1);
+    openai.next_finished().await;
+    openai.next_finished().await;
+    openai.close();
+    openai.assert_drained().await;
     assert_eq!(deepseek.active(), 2);
     assert!(!deepseek.dispatcher.is_finished());
 

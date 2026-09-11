@@ -4,10 +4,10 @@
 Default: local fake translations (DOCFLOW_FAKE_PROVIDERS=1) and a synthetic
 MinerU result, so no API keys or network access are needed.
 
---mock: real HTTP against local stand-ins for Google's free endpoint and the
-OpenAI-compatible, Anthropic and Gemini APIs (tests/mock_providers.py). The
-stand-ins rate-limit, truncate, drop segments, damage placeholders and refuse
-on purpose, so the engine's repair paths are exercised.
+--mock: real HTTP against local stand-ins for the OpenAI-compatible,
+Anthropic and Gemini APIs (tests/mock_providers.py). The stand-ins
+rate-limit, truncate, drop segments, damage placeholders and refuse on
+purpose, so the engine's repair paths are exercised.
 
 The native PDF route runs the real BabelDOC runtime when --resources points at
 a built runtime and --pdf names a text-layer PDF.
@@ -265,21 +265,34 @@ def check_document(engine: Engine, checks: Checks, label: str, view: dict, work:
     checks.expect("| --- | --- |" in text and f"| Serial{mock_providers.MARK} | slow{mock_providers.MARK} |" in text,
                   f"{label} translated the pipe table cell by cell")
     checks.expect("# Stress Test Document" + mock_providers.MARK in text, f"{label} translated the title")
-    if view.get("translator_label", "").startswith("Google"):
-        return
-    kept_source = [event for event in events if "保留原文" in event["message"] or "保留了原文" in event["message"]]
+    kept_source =[event for event in events if "保留原文" in event["message"] or "保留了原文" in event["message"]]
     checks.expect(bool(kept_source), f"{label} reports the refused fragment kept as source")
     checks.expect("REFUSE_ME" in text, f"{label} keeps the refused fragment")
     checks.expect("The last sentence is harmless again" in text and "translated as well, after the refused part is isolated." + mock_providers.MARK in text,
                   f"{label} still translates around the refused fragment")
 
 
+def expect_no_google(engine: Engine, checks: Checks, source: Path) -> None:
+    """Google Translate is gone: the choice is refused before anything is queued."""
+    try:
+        engine.call("documents.create", {"path": str(source), "mode": "mineru", "translator": {"kind": "google"}})
+        checks.expect(False, "Google Translate is refused")
+    except RpcFailure as error:
+        checks.expect(error.error.get("code") == "invalid_params", f"Google Translate is refused ({error.error.get('message', '')[:60]})")
+    try:
+        engine.call("google.check")
+        checks.expect(False, "google.check no longer exists")
+    except RpcFailure:
+        checks.expect(True, "google.check no longer exists")
+
+
 def run_fake(engine: Engine, checks: Checks, options, work: Path, caps: dict) -> None:
     source = work / "测试论文.docx"
     source.write_bytes(b"placeholder document; the MinerU result is synthetic")
+    checks.expect(not caps["llm_ready"], "no model is ready before a provider is added")
     engine.call("providers.save", {"provider": provider("fake-llm", "测试模型", "openai", "https://llm.invalid/v1", ["fake"])})
+    expect_no_google(engine, checks, source)
     documents = [
-        ("mineru+google", engine.call("documents.create", {"path": str(source), "mode": "mineru", "translator": {"kind": "google"}})),
         ("mineru+llm", engine.call("documents.create", {"path": str(source), "mode": "mineru", "translator": {"kind": "llm", "provider_id": "fake-llm", "model": "fake"}})),
     ]
     if options.pdf and caps["pdf2zh_ready"]:
@@ -294,10 +307,7 @@ def run_fake(engine: Engine, checks: Checks, options, work: Path, caps: dict) ->
 def run_mock(engine: Engine, checks: Checks, options, work: Path, caps: dict, base: str) -> None:
     source = work / "压力测试.docx"
     source.write_bytes(b"placeholder document; the MinerU result is synthetic")
-
-    print("google.check")
-    result = engine.call("google.check")
-    checks.expect(result["ok"] and mock_providers.MARK in result["reply"], "Google free endpoint check")
+    expect_no_google(engine, checks, source)
 
     print("model lists")
     listed = engine.call("providers.models", {"type": "openai", "base_url": f"{base}/v1/", "api_key": "test-key"})
@@ -354,7 +364,6 @@ def run_mock(engine: Engine, checks: Checks, options, work: Path, caps: dict, ba
         return {"kind": "llm", "provider_id": provider_id, "model": model}
 
     jobs = [
-        ("google", {"kind": "google"}),
         ("openai", llm("mock-openai", "mock-reasoner")),
         ("anthropic", llm("mock-claude", "claude-mock")),
         ("gemini", llm("mock-gemini", "gemini-mock")),
@@ -386,7 +395,7 @@ def run_mock(engine: Engine, checks: Checks, options, work: Path, caps: dict, ba
     with urllib.request.urlopen(f"{base}/stats") as response:
         stats = json.load(response)
     print("stand-in stats:", json.dumps(stats, ensure_ascii=False))
-    for key in ("rate_limited", "google_rate_limited", "truncated", "dropped", "damaged", "lost_markers", "refused"):
+    for key in ("rate_limited", "truncated", "dropped", "damaged", "lost_markers", "refused"):
         checks.expect(stats.get(key, 0) > 0, f"stand-ins exercised {key}")
     checks.expect(stats["peak"].get("anthropic", 0) <= 2, f"Anthropic stayed within its concurrency of 2 (peak {stats['peak'].get('anthropic')})")
     checks.expect(stats["peak"].get("openai", 0) > 2, f"OpenAI-compatible requests ran concurrently (peak {stats['peak'].get('openai')})")
@@ -413,7 +422,6 @@ def main() -> int:
     if options.mock:
         server = mock_providers.serve()
         base = f"http://127.0.0.1:{server.server_address[1]}"
-        env["DOCFLOW_GOOGLE_URL"] = f"{base}/google/translate_a/single"
         env["NO_PROXY"] = "127.0.0.1,localhost"
     else:
         env["DOCFLOW_FAKE_PROVIDERS"] = "1"
@@ -424,9 +432,11 @@ def main() -> int:
         init = engine.call("engine.initialize", {"secrets": {}})
         caps = init["settings"]["capabilities"]
         print("engine", init["version"], "protocol", init["protocol"], "pdf2zh_ready", caps["pdf2zh_ready"], caps["pdf2zh_issue"] or "")
-        checks.expect(init["protocol"] == 2, "protocol 2")
-        runtime = init["settings"]["translation_runtime"]
-        checks.expect(runtime["google"]["concurrency"] == 8, "Google concurrency defaults to 8")
+        checks.expect(init["protocol"] == 3, "protocol 3")
+        settings = init["settings"]
+        checks.expect("google" not in settings["translation_runtime"] and "google_ready" not in caps,
+                      "no Google Translate settings or capability")
+        checks.expect(settings["preferences"]["default_translator"] is None, "no default model before one is chosen")
         if options.mock:
             run_mock(engine, checks, options, work, caps, base)
         else:

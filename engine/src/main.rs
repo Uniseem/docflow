@@ -83,10 +83,8 @@ async fn run(config: Arc<Config>) -> Result<()> {
     let preferences = settings::load_preferences(&pool).await?;
     let pools = translation_pool::TranslationPools::new(&config, &preferences.proxy)?;
     pools.configure_providers(&providers::load(&pool).await?);
-    let runtime = settings::load_translation_runtime(&pool).await?;
     let state = Arc::new(AppState::new(pool, config, pools));
     rpc::apply_preferences(&state, &preferences)?;
-    rpc::apply_runtime(&state, &runtime);
     library::resume_interrupted(&state).await?;
 
     let (outgoing, lines) = mpsc::unbounded_channel();
