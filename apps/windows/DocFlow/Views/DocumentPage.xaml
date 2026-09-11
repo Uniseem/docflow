@@ -297,5 +297,21 @@
             Message="{x:Bind ViewModel.LoadError, Mode=OneWay}"
             IsOpen="{x:Bind HasText(ViewModel.LoadError), Mode=OneWay}"
             IsClosable="False" />
+
+        <!-- A finished export; it closes by itself. Failures use a dialog. -->
+        <InfoBar
+            x:Name="ExportInfo"
+            Grid.Row="2"
+            MaxWidth="720"
+            Margin="0,8,0,0"
+            VerticalAlignment="Top"
+            Severity="Success"
+            Title="导出成功"
+            IsClosable="True"
+            IsOpen="False">
+            <InfoBar.ActionButton>
+                <Button Content="打开所在文件夹" Click="OnRevealExport" />
+            </InfoBar.ActionButton>
+        </InfoBar>
     </Grid>
 </Page>

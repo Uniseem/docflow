@@ -39,8 +39,11 @@ public sealed partial class NewDocumentViewModel : ObservableObject
     public partial string Mode { get; set; } = "pdf2zh";
 
     [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(TranslatorDetail))]
     public partial TranslatorOption? Translator { get; set; }
+
+    /// <summary>At least one model is usable; without one nothing can be translated.</summary>
+    [ObservableProperty]
+    public partial bool HasModels { get; set; }
 
     [ObservableProperty]
     public partial string Title { get; set; } = "";
@@ -62,9 +65,6 @@ public sealed partial class NewDocumentViewModel : ObservableObject
 
     [ObservableProperty]
     public partial bool IsSingleFile { get; set; }
-
-    [ObservableProperty]
-    public partial bool LlmReady { get; set; }
 
     public bool IsMineru
     {
@@ -90,10 +90,6 @@ public sealed partial class NewDocumentViewModel : ObservableObject
         }
     }
 
-    public string TranslatorDetail => Translator?.Choice.Kind == "llm"
-        ? "大模型翻译：理解上下文、术语更统一，适合精读；速度和费用取决于服务商和模型。"
-        : "免费，无需 API Key，速度快，适合快速阅读。需要能访问 Google 的网络。";
-
     public string AcceptedHint => IsNative
         ? "仅支持带文本层的 PDF；扫描件请选择 MinerU 解析翻译"
         : "支持 PDF、Word、PowerPoint、Excel、图片与网页文件";
@@ -109,14 +105,14 @@ public sealed partial class NewDocumentViewModel : ObservableObject
             return;
         }
         Mode = settings.Preferences.DefaultMode;
-        LoadTranslators(settings, settings.Preferences.DefaultTranslator.Key);
+        LoadTranslators(settings, settings.Preferences.DefaultTranslator?.Key);
         Refresh();
     }
 
-    /// <summary>Google plus every usable provider model; keeps the choice while it is offered.</summary>
+    /// <summary>Every usable provider model; keeps the choice while it is offered, else the default, else the first.</summary>
     public void LoadTranslators(SettingsInfo settings, string? preferred = null)
     {
-        var wanted = preferred ?? Translator?.Choice.Key ?? settings.Preferences.DefaultTranslator.Key;
+        var wanted = preferred ?? Translator?.Choice.Key ?? settings.Preferences.DefaultTranslator?.Key;
         var options = settings.TranslatorOptions();
         if (!options.Select(option => (option.Choice.Key, option.Label)).SequenceEqual(Translators.Select(option => (option.Choice.Key, option.Label))))
         {
@@ -126,7 +122,11 @@ public sealed partial class NewDocumentViewModel : ObservableObject
                 Translators.Add(option);
             }
         }
-        Translator = Translators.FirstOrDefault(option => option.Choice.Key == wanted) ?? Translators[0];
+        HasModels = Translators.Count > 0;
+        var fallback = settings.Preferences.DefaultTranslator?.Key;
+        Translator = Translators.FirstOrDefault(option => option.Choice.Key == wanted)
+            ?? Translators.FirstOrDefault(option => option.Choice.Key == fallback)
+            ?? Translators.FirstOrDefault();
     }
 
     public void AddFiles(IEnumerable<string> paths)
@@ -175,7 +175,6 @@ public sealed partial class NewDocumentViewModel : ObservableObject
     public void Refresh()
     {
         var capabilities = AppHost.Settings?.Capabilities;
-        LlmReady = capabilities?.LlmReady == true;
         var extensions = AcceptedExtensions;
         var maxBytes = (capabilities?.MaxUploadMb ?? 200) * 1024 * 1024;
         foreach (var file in Files)
@@ -197,7 +196,7 @@ public sealed partial class NewDocumentViewModel : ObservableObject
                 : IsNative && !capabilities.Pdf2zhReady
                     ? $"PDF 原生翻译暂不可用：{capabilities.Pdf2zhIssue ?? "运行环境不完整"}"
                     : Translator is null
-                        ? "请选择翻译服务"
+                        ? HasModels ? "请选择翻译模型" : "还没有可用的大模型：请在设置中添加服务商、填写 API Key 并获取模型。"
                         : null;
         HasFiles = Files.Count > 0;
         IsSingleFile = Files.Count == 1;

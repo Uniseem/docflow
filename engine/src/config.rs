@@ -5,8 +5,6 @@ use std::{
 
 use anyhow::{Context, Result};
 
-pub const GOOGLE_TRANSLATE_URL: &str = "https://translate.googleapis.com/translate_a/single";
-
 /// Command line accepted from the host application.
 #[derive(Debug, Default)]
 pub struct Args {
@@ -52,8 +50,6 @@ pub struct Config {
     pub resources_root: PathBuf,
     pub max_upload_bytes: u64,
     pub translation_queue_capacity: usize,
-    /// Google Translate's free endpoint (DOCFLOW_GOOGLE_URL overrides it for tests).
-    pub google_translate_url: String,
     pub mineru_poll_seconds: u64,
     pub mineru_max_wait_seconds: u64,
     pub webp_quality: u8,
@@ -102,8 +98,6 @@ impl Config {
             resources_root,
             max_upload_bytes: 200 * 1024 * 1024,
             translation_queue_capacity: 4_096,
-            google_translate_url: env::var("DOCFLOW_GOOGLE_URL")
-                .unwrap_or_else(|_| GOOGLE_TRANSLATE_URL.to_string()),
             mineru_poll_seconds: 5,
             mineru_max_wait_seconds: 7_200,
             webp_quality: 86,
@@ -143,7 +137,6 @@ impl Config {
             data_root,
             max_upload_bytes: 200 * 1024 * 1024,
             translation_queue_capacity: 4_096,
-            google_translate_url: GOOGLE_TRANSLATE_URL.to_string(),
             mineru_poll_seconds: 1,
             mineru_max_wait_seconds: 60,
             webp_quality: 86,

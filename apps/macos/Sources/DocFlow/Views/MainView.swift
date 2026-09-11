@@ -18,6 +18,14 @@ struct MainView: View {
             DetailView()
         }
         .searchable(text: $model.query, placement: .toolbar, prompt: "搜索标题或文件名")
+        .overlay(alignment: .bottom) {
+            if let toast = model.toast {
+                ToastView(toast: toast)
+                    .padding(.bottom, 20)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+        }
+        .animation(.easeOut(duration: 0.2), value: model.toast)
         .sheet(isPresented: $model.isNewTranslationPresented) {
             NewTranslationSheet()
         }
@@ -73,6 +81,49 @@ struct MainView: View {
             return "删除“\(document.title)”？"
         }
         return "删除 \(candidates.count) 个文档？"
+    }
+}
+
+/// A finished export (or another short confirmation) at the bottom of the
+/// window. It goes away by itself; failures use an alert instead.
+@MainActor
+private struct ToastView: View {
+    @Environment(AppModel.self) private var model
+    let toast: Toast
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "checkmark.circle.fill")
+                .font(.title3)
+                .foregroundStyle(.green)
+            Text(toast.message)
+                .lineLimit(2)
+                .truncationMode(.middle)
+            if let file = toast.file {
+                Button("在访达中显示") {
+                    FileActions.reveal(file.path)
+                    model.dismissToast()
+                }
+            }
+            Button {
+                model.dismissToast()
+            } label: {
+                Image(systemName: "xmark")
+            }
+            .buttonStyle(.borderless)
+            .foregroundStyle(.secondary)
+            .help("关闭")
+            .accessibilityLabel("关闭")
+        }
+        .padding(.leading, 14)
+        .padding(.trailing, 10)
+        .padding(.vertical, 8)
+        .background(.regularMaterial, in: Capsule())
+        .overlay {
+            Capsule().strokeBorder(Color.primary.opacity(0.12))
+        }
+        .shadow(color: .black.opacity(0.18), radius: 10, y: 3)
+        .frame(maxWidth: 560)
     }
 }
 

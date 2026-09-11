@@ -13,7 +13,8 @@ struct DocumentInfo: Decodable, Identifiable, Hashable, Sendable {
     var mimeType: String?
     var processingMode: String
     var translationTier: Int
-    /// "Google 翻译（免费）" or "服务商 · 模型"; absent for older documents.
+    /// "服务商 · 模型" (3.0.0 documents may say "Google 翻译（免费）");
+    /// absent for older documents.
     var translatorLabel: String?
     var mineruModel: String
     var status: String
@@ -123,9 +124,9 @@ struct SettingsInfo: Decodable, Sendable {
         providers.first { $0.id == id }
     }
 
-    /// Google, then every model of every usable provider.
+    /// Every model of every usable provider.
     var translatorOptions: [TranslatorOption] {
-        var options = [TranslatorOption.google]
+        var options: [TranslatorOption] = []
         for provider in providers where provider.isUsable(fake: capabilities.fakeProviders) {
             for model in provider.models {
                 options.append(TranslatorOption(
@@ -140,26 +141,22 @@ struct SettingsInfo: Decodable, Sendable {
 
 struct Preferences: Codable, Equatable, Sendable {
     var mineruModel: String
-    var defaultTranslator: TranslatorChoice
+    /// Nil until the user picks a model; "新建翻译" then offers the first one.
+    var defaultTranslator: TranslatorChoice?
     var defaultMode: String
     var proxy: ProxySettings
     var workerConcurrency: Int
 }
 
-/// `{"kind": "google"}` or `{"kind": "llm", "provider_id": …, "model": …}`.
-/// Absent optionals are left out when encoding, as the engine requires.
+/// `{"kind": "llm", "provider_id": …, "model": …}`: a model of a provider.
 struct TranslatorChoice: Codable, Hashable, Sendable {
     var kind: String
     var providerId: String?
     var model: String?
 
-    static let google = TranslatorChoice(kind: "google")
-
     static func llm(providerID: String, model: String) -> TranslatorChoice {
         TranslatorChoice(kind: "llm", providerId: providerID, model: model)
     }
-
-    var isLLM: Bool { kind == "llm" }
 }
 
 struct TranslatorOption: Identifiable, Hashable, Sendable {
@@ -167,8 +164,6 @@ struct TranslatorOption: Identifiable, Hashable, Sendable {
     var label: String
 
     var id: TranslatorChoice { choice }
-
-    static let google = TranslatorOption(choice: .google, label: "Google 翻译（免费）")
 }
 
 /// `{"mode": "system" | "direct"}` or `{"mode": "custom", "url": "…"}`.
@@ -178,15 +173,9 @@ struct ProxySettings: Codable, Equatable, Sendable {
 }
 
 struct TranslationRuntime: Codable, Equatable, Sendable {
-    var google: GoogleRuntime
     var llm: LLMRuntime
     var perDocumentConcurrency: Int
     var systemPrompt: String
-}
-
-struct GoogleRuntime: Codable, Equatable, Sendable {
-    var concurrency: Int
-    var chunkChars: Int
 }
 
 struct LLMRuntime: Codable, Equatable, Sendable {
@@ -198,8 +187,6 @@ struct LLMRuntime: Codable, Equatable, Sendable {
 
 struct RuntimeLimits: Decodable, Sendable {
     var minChunkChars: Int
-    var googleConcurrencyMax: Int
-    var googleChunkCharsMax: Int
     var llmChunkCharsMax: Int
     var llmSegmentsPerRequestMax: Int
     var llmRequestCharsMin: Int
@@ -289,7 +276,6 @@ struct Capabilities: Decodable, Sendable {
     var mineruReady: Bool
     var pdf2zhReady: Bool
     var pdf2zhIssue: String?
-    var googleReady: Bool
     var llmReady: Bool
     var fakeProviders: Bool
     var maxUploadMb: Int

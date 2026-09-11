@@ -13,6 +13,12 @@ namespace DocFlow;
 /// </summary>
 public static partial class Program
 {
+    /// <summary>
+    /// Exists while DocFlow runs: its installer and uninstaller (AppMutex in
+    /// apps\windows\installer\DocFlow.iss) ask to close it before touching files.
+    /// </summary>
+    private static Mutex? s_running;
+
     [STAThread]
     private static int Main(string[] args)
     {
@@ -24,6 +30,7 @@ public static partial class Program
             instance.RedirectActivationToAsync(activation).AsTask().Wait();
             return 0;
         }
+        s_running = new Mutex(false, "DocFlow.Running");
 
         instance.Activated += (_, activation) =>
         {

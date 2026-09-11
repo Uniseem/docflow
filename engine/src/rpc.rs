@@ -35,7 +35,7 @@ use crate::{
     verify, worker,
 };
 
-pub const PROTOCOL_VERSION: u32 = 2;
+pub const PROTOCOL_VERSION: u32 = 3;
 const MAX_REQUEST_BYTES: usize = 4 * 1024 * 1024;
 
 #[derive(Debug, Deserialize)]
@@ -232,7 +232,6 @@ impl Server {
                         &serde_json::to_string(&runtime).map_err(anyhow::Error::from)?,
                     )
                     .await?;
-                    apply_runtime(state, &runtime);
                 }
                 view_value(settings_view(state).await?)
             }
@@ -296,12 +295,6 @@ impl Server {
                     .ok_or_else(|| RpcError::invalid("请选择一个模型用于检查"))?;
                 let (endpoint, key, name) = input.resolve(state)?;
                 let result = verify::provider(&state.network, &endpoint, key.as_deref(), &model, &name)
-                    .await
-                    .map_err(|error| RpcError::user(format!("{error:#}")))?;
-                view_value(result)
-            }
-            "google.check" => {
-                let result = verify::google(&state.network, &state.config.google_translate_url)
                     .await
                     .map_err(|error| RpcError::user(format!("{error:#}")))?;
                 view_value(result)
@@ -504,12 +497,6 @@ pub fn apply_preferences(state: &AppState, preferences: &Preferences) -> Result<
     Ok(())
 }
 
-pub fn apply_runtime(state: &AppState, runtime: &TranslationRuntimeSettings) {
-    if let Some(pools) = &state.translation_pools {
-        pools.set_google_concurrency(runtime.google.concurrency);
-    }
-}
-
 #[derive(Debug, Serialize)]
 struct SecretStatus {
     configured: bool,
@@ -533,7 +520,6 @@ struct Capabilities {
     mineru_ready: bool,
     pdf2zh_ready: bool,
     pdf2zh_issue: Option<String>,
-    google_ready: bool,
     /// At least one enabled provider with a model and a key.
     llm_ready: bool,
     fake_providers: bool,
@@ -603,7 +589,6 @@ async fn settings_view(state: &AppState) -> Result<SettingsView> {
             mineru_ready: state.secrets.configured(secrets::MINERU) || state.config.fake_mineru_zip.is_some(),
             pdf2zh_ready: state.config.pdf2zh_available(),
             pdf2zh_issue: pdf2zh_issue(state),
-            google_ready: true,
             llm_ready,
             fake_providers: fake,
             max_upload_mb: state.config.max_upload_mb(),

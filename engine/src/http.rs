@@ -1,5 +1,5 @@
-//! Outbound HTTP configuration. Desktop users often need a proxy to reach
-//! Google Translate or a model provider, so every client honours one setting.
+//! Outbound HTTP configuration. Desktop users often need a proxy to reach a
+//! model provider or MinerU, so every client honours one setting.
 //! "System" reads the Windows registry proxy or the macOS network settings.
 
 use std::sync::RwLock;

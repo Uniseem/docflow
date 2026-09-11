@@ -1,7 +1,8 @@
 #requires -Version 5.1
 <#
 .SYNOPSIS
-  Builds the Windows app into apps\windows\dist\DocFlow (and optionally a zip).
+  Builds the Windows app into apps\windows\dist\DocFlow, and optionally its
+  setup program (-Installer) or a zip (-Zip).
 
 .DESCRIPTION
   1. docflow-engine (Rust, release, static C runtime)
@@ -20,17 +21,21 @@
        -SignPfx <file.pfx> with the password in DOCFLOW_SIGN_PASSWORD
      (or DOCFLOW_SIGN_THUMBPRINT / DOCFLOW_SIGN_PFX), timestamped by
      -TimestampUrl (default http://timestamp.digicert.com).
+  7. -Installer: dist\DocFlow-win-x64-setup.exe (installer\DocFlow.iss, a
+     per-user setup program), signed like the app when signing is set up.
 
   Requirements: Rust (MSVC toolchain), .NET 10 SDK, Visual Studio or Build
-  Tools with the C++ workload. The .NET SDK is taken from PATH, or from
-  .dev\dotnet in the repository if present.
+  Tools with the C++ workload, and for -Installer Inno Setup 6.6 or later.
+  The .NET SDK is taken from PATH, or from .dev\dotnet in the repository if
+  present; Inno Setup from PATH, its installation, or .dev\innosetup.
 
 .EXAMPLE
-  ./apps/windows/build.ps1 -Zip
+  ./apps/windows/build.ps1 -Installer
 .EXAMPLE
-  $env:DOCFLOW_SIGN_PASSWORD = "..."; ./apps/windows/build.ps1 -Zip -SignPfx C:\keys\docflow.pfx
+  $env:DOCFLOW_SIGN_PASSWORD = "..."; ./apps/windows/build.ps1 -Installer -SignPfx C:\keys\docflow.pfx
 #>
 param(
+    [switch]$Installer,
     [switch]$Zip,
     [switch]$SkipRuntime,
     [string]$SignThumbprint = $env:DOCFLOW_SIGN_THUMBPRINT,
@@ -64,6 +69,28 @@ function Find-SignTool {
         if ($tool) { return $tool.FullName }
     }
     throw "signtool.exe not found; install the Windows SDK."
+}
+
+function Find-InnoCompiler {
+    $onPath = Get-Command ISCC.exe -ErrorAction SilentlyContinue
+    if ($onPath) { return $onPath.Source }
+    $places = @(Join-Path $Repo ".dev\innosetup")
+    foreach ($key in @(
+        "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\Inno Setup 6_is1",
+        "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Inno Setup 6_is1",
+        "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Inno Setup 6_is1")) {
+        $location = (Get-ItemProperty $key -ErrorAction SilentlyContinue).InstallLocation
+        if ($location) { $places += $location }
+    }
+    $places += @(
+        (Join-Path ${env:ProgramFiles(x86)} "Inno Setup 6"),
+        (Join-Path $env:ProgramFiles "Inno Setup 6"),
+        (Join-Path $env:LOCALAPPDATA "Programs\Inno Setup 6"))
+    foreach ($place in $places) {
+        $compiler = Join-Path $place "ISCC.exe"
+        if (Test-Path $compiler) { return $compiler }
+    }
+    throw "ISCC.exe not found; install Inno Setup 6.6 or later (https://jrsoftware.org/isdl.php)."
 }
 
 $localDotnet = Join-Path $Repo ".dev\dotnet"
@@ -115,6 +142,7 @@ $checker = Join-Path $Repo "runtime\check-windows-dlls.py"
 $checkPython = if (Test-Path $bundledPython) { $bundledPython } else { (Get-Command python -ErrorAction Stop).Source }
 Invoke-Native "DLL import check" { & $checkPython -B $checker $App }
 
+$signArgs = $null
 if ($SignThumbprint -or $SignPfx) {
     Write-Host "==> Authenticode signing"
     $signtool = Find-SignTool
@@ -133,6 +161,24 @@ if ($SignThumbprint -or $SignPfx) {
         Invoke-Native "signtool sign" { & $signtool @signArgs @batch }
     }
     Invoke-Native "signtool verify" { & $signtool verify /pa /q (Join-Path $App "DocFlow.exe") (Join-Path $engineDir "docflow-engine.exe") }
+}
+
+if ($Installer) {
+    $setup = Join-Path $Dist "DocFlow-win-x64-setup.exe"
+    if (Test-Path $setup) { Remove-Item -Force $setup }
+    Write-Host "==> $setup"
+    $project = Get-Content (Join-Path $PSScriptRoot "DocFlow\DocFlow.csproj") -Raw
+    if ($project -notmatch "<Version>([^<]+)</Version>") { throw "no <Version> in DocFlow.csproj" }
+    $version = $Matches[1]
+    $compiler = Find-InnoCompiler
+    Invoke-Native "Inno Setup" {
+        & $compiler /Qp "/DAppVersion=$version" "/DAppDir=$App" "/DOutputDir=$Dist" (Join-Path $PSScriptRoot "installer\DocFlow.iss")
+    }
+    if ($signArgs) {
+        Invoke-Native "signtool sign" { & $signtool @signArgs $setup }
+        Invoke-Native "signtool verify" { & $signtool verify /pa /q $setup }
+    }
+    Write-Host ("Setup: {0:N0} MB" -f ((Get-Item $setup).Length / 1MB))
 }
 
 if ($Zip) {

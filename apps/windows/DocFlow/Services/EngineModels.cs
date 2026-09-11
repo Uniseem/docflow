@@ -16,7 +16,7 @@ public sealed class DocumentInfo
     public string? MimeType { get; set; }
     public string ProcessingMode { get; set; } = "mineru";
     public int TranslationTier { get; set; }
-    /// <summary>"Google 翻译（免费）" or "服务商 · 模型"; absent for older documents.</summary>
+    /// <summary>"服务商 · 模型" (3.0.0 documents may say "Google 翻译（免费）"); absent for older documents.</summary>
     public string? TranslatorLabel { get; set; }
     public string MineruModel { get; set; } = "";
     public string Status { get; set; } = "";
@@ -131,10 +131,10 @@ public sealed class SettingsInfo
 
     public ProviderInfo? Provider(string id) => Providers.FirstOrDefault(provider => provider.Id == id);
 
-    /// <summary>Everything a document can be translated with right now.</summary>
+    /// <summary>Every model a document can be translated with right now.</summary>
     public List<TranslatorOption> TranslatorOptions()
     {
-        var options = new List<TranslatorOption> { TranslatorOption.Google };
+        var options = new List<TranslatorOption>();
         foreach (var provider in Providers.Where(provider => provider.Usable(Capabilities.FakeProviders)))
         {
             options.AddRange(provider.Models.Select(model => new TranslatorOption(
@@ -148,16 +148,19 @@ public sealed class SettingsInfo
 public sealed class Preferences
 {
     public string MineruModel { get; set; } = "vlm";
-    public TranslatorChoice DefaultTranslator { get; set; } = TranslatorChoice.Google;
+
+    /// <summary>Null until the user picks a model; "新建翻译" then offers the first one.</summary>
+    public TranslatorChoice? DefaultTranslator { get; set; }
+
     public string DefaultMode { get; set; } = "pdf2zh";
     public ProxySettings Proxy { get; set; } = new();
     public int WorkerConcurrency { get; set; } = 2;
 }
 
-/// <summary><c>{"kind":"google"}</c> or <c>{"kind":"llm","provider_id":…,"model":…}</c>.</summary>
+/// <summary><c>{"kind":"llm","provider_id":…,"model":…}</c>: a model of a provider.</summary>
 public sealed class TranslatorChoice
 {
-    public string Kind { get; set; } = "google";
+    public string Kind { get; set; } = "llm";
 
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? ProviderId { get; set; }
@@ -165,19 +168,15 @@ public sealed class TranslatorChoice
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Model { get; set; }
 
-    public static TranslatorChoice Google => new();
-
     public static TranslatorChoice Llm(string providerId, string model) =>
         new() { Kind = "llm", ProviderId = providerId, Model = model };
 
     [JsonIgnore]
-    public string Key => Kind == "llm" ? $"llm:{ProviderId}:{Model}" : "google";
+    public string Key => $"{Kind}:{ProviderId}:{Model}";
 }
 
 public sealed record TranslatorOption(TranslatorChoice Choice, string Label)
 {
-    public static TranslatorOption Google { get; } = new(TranslatorChoice.Google, "Google 翻译（免费）");
-
     public override string ToString() => Label;
 }
 
@@ -191,16 +190,9 @@ public sealed class ProxySettings
 
 public sealed class TranslationRuntime
 {
-    public GoogleRuntime Google { get; set; } = new();
     public LlmRuntime Llm { get; set; } = new();
     public int PerDocumentConcurrency { get; set; }
     public string SystemPrompt { get; set; } = "";
-}
-
-public sealed class GoogleRuntime
-{
-    public int Concurrency { get; set; }
-    public int ChunkChars { get; set; }
 }
 
 public sealed class LlmRuntime
@@ -214,8 +206,6 @@ public sealed class LlmRuntime
 public sealed class RuntimeLimits
 {
     public int MinChunkChars { get; set; }
-    public int GoogleConcurrencyMax { get; set; }
-    public int GoogleChunkCharsMax { get; set; }
     public int LlmChunkCharsMax { get; set; }
     public int LlmSegmentsPerRequestMax { get; set; }
     public int LlmRequestCharsMin { get; set; }
@@ -317,7 +307,6 @@ public sealed class Capabilities
     public bool MineruReady { get; set; }
     public bool Pdf2zhReady { get; set; }
     public string? Pdf2zhIssue { get; set; }
-    public bool GoogleReady { get; set; }
     public bool LlmReady { get; set; }
     public bool FakeProviders { get; set; }
     public long MaxUploadMb { get; set; }

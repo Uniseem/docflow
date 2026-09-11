@@ -26,72 +26,9 @@
                 Message="DOCFLOW_FAKE_PROVIDERS=1：翻译由本地测试文本代替，不会调用云端服务。"
                 IsOpen="{x:Bind ViewModel.FakeProviders, Mode=OneWay}" />
 
-            <!-- Google Translate -->
-            <TextBlock Text="翻译服务" Style="{StaticResource SectionHeaderTextBlockStyle}" />
-            <Expander Style="{StaticResource SettingsExpanderStyle}">
-                <Expander.Header>
-                    <Grid ColumnSpacing="16" Padding="0,4">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="Auto" />
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="Auto" />
-                        </Grid.ColumnDefinitions>
-                        <FontIcon Glyph="&#xE909;" FontSize="20" VerticalAlignment="Center" />
-                        <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="2">
-                            <TextBlock Text="Google 翻译（免费）" />
-                            <TextBlock Style="{StaticResource SecondaryTextBlockStyle}" TextWrapping="Wrap" Text="无需 API Key，速度快，适合快速阅读。所在网络无法直接访问 Google 时，请在下方“网络”中设置代理。" />
-                        </StackPanel>
-                        <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
-                            <FontIcon Glyph="&#xEC61;" FontSize="14" Foreground="{ThemeResource SystemFillColorSuccessBrush}" />
-                            <TextBlock Text="可以使用" Style="{StaticResource SecondaryTextBlockStyle}" />
-                        </StackPanel>
-                    </Grid>
-                </Expander.Header>
-                <StackPanel Spacing="16">
-                    <Grid ColumnSpacing="12">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="Auto" />
-                            <ColumnDefinition Width="*" />
-                        </Grid.ColumnDefinitions>
-                        <Button Click="OnCheckGoogle" IsEnabled="{x:Bind helpers:Format.Not(ViewModel.IsCheckingGoogle), Mode=OneWay}">
-                            <StackPanel Orientation="Horizontal" Spacing="8">
-                                <ProgressRing Width="14" Height="14" IsActive="{x:Bind ViewModel.IsCheckingGoogle, Mode=OneWay}" Visibility="{x:Bind helpers:Format.Show(ViewModel.IsCheckingGoogle), Mode=OneWay}" />
-                                <TextBlock Text="测试连接" />
-                            </StackPanel>
-                        </Button>
-                        <TextBlock
-                            Grid.Column="1"
-                            VerticalAlignment="Center"
-                            TextWrapping="Wrap"
-                            IsTextSelectionEnabled="True"
-                            Style="{StaticResource CaptionTextBlockStyle}"
-                            Foreground="{x:Bind helpers:Brushes.Message(ViewModel.GoogleStatusIsError), Mode=OneWay}"
-                            Text="{x:Bind ViewModel.GoogleStatus, Mode=OneWay}" />
-                    </Grid>
-                    <Grid ColumnSpacing="16">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="Auto" />
-                        </Grid.ColumnDefinitions>
-                        <StackPanel VerticalAlignment="Center" Spacing="2">
-                            <TextBlock Text="并发请求数" Style="{StaticResource BodyStrongTextBlockStyle}" />
-                            <TextBlock Style="{StaticResource SecondaryTextBlockStyle}" TextWrapping="Wrap" Text="免费接口对频率敏感，默认 8。遇到限流会自动降低并重试。" />
-                        </StackPanel>
-                        <NumberBox
-                            Grid.Column="1"
-                            MinWidth="140"
-                            Minimum="1"
-                            Maximum="{x:Bind ViewModel.Limits.GoogleConcurrencyMax, Mode=OneWay}"
-                            SpinButtonPlacementMode="Compact"
-                            VerticalAlignment="Center"
-                            AutomationProperties.Name="Google 翻译并发请求数"
-                            Value="{x:Bind ViewModel.GoogleConcurrency, Mode=TwoWay}" />
-                    </Grid>
-                </StackPanel>
-            </Expander>
-
             <!-- Large-model providers -->
-            <Grid Margin="0,24,0,4" ColumnSpacing="12">
+            <TextBlock Text="翻译服务" Style="{StaticResource SectionHeaderTextBlockStyle}" />
+            <Grid Margin="0,0,0,4" ColumnSpacing="12">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*" />
                     <ColumnDefinition Width="Auto" />
@@ -113,7 +50,7 @@
             <Border Style="{StaticResource CardBorderStyle}" Visibility="{x:Bind helpers:Format.Hide(ViewModel.HasProviders), Mode=OneWay}">
                 <StackPanel Spacing="4">
                     <TextBlock Text="还没有添加大模型服务商" Style="{StaticResource BodyStrongTextBlockStyle}" />
-                    <TextBlock Style="{StaticResource SecondaryTextBlockStyle}" TextWrapping="Wrap" Text="点右上角“添加服务商”，支持 DeepSeek、OpenAI、Anthropic、Gemini、硅基流动、阿里云百炼、火山引擎、Kimi、智谱、OpenRouter、Ollama 等，以及任何 OpenAI 兼容接口。" />
+                    <TextBlock Style="{StaticResource SecondaryTextBlockStyle}" TextWrapping="Wrap" Text="DocFlow 用大模型翻译文档，请先添加一个服务商：点右上角“添加服务商”，支持 DeepSeek、OpenAI、Anthropic、Gemini、硅基流动、阿里云百炼、火山引擎、Kimi、智谱、OpenRouter、Ollama 等，以及任何 OpenAI 兼容接口。" />
                 </StackPanel>
             </Border>
             <ItemsControl ItemsSource="{x:Bind ViewModel.Providers}">
@@ -158,19 +95,27 @@
                     <x:String>MinerU 解析翻译</x:String>
                 </ComboBox>
             </controls:SettingsCard>
-            <controls:SettingsCard Glyph="&#xE8C1;" Header="默认翻译服务" Description="新建翻译时预先选择的翻译服务；可以选 Google 翻译或已配置好的大模型">
-                <ComboBox
-                    MinWidth="200"
-                    MaxWidth="320"
-                    ItemsSource="{x:Bind ViewModel.TranslatorOptions}"
-                    SelectedItem="{x:Bind ViewModel.DefaultTranslator, Mode=TwoWay}"
-                    AutomationProperties.Name="默认翻译服务">
-                    <ComboBox.ItemTemplate>
-                        <DataTemplate x:DataType="services:TranslatorOption">
-                            <TextBlock Text="{x:Bind Label}" TextTrimming="CharacterEllipsis" />
-                        </DataTemplate>
-                    </ComboBox.ItemTemplate>
-                </ComboBox>
+            <controls:SettingsCard Glyph="&#xE8C1;" Header="默认翻译模型" Description="新建翻译时预先选中的大模型">
+                <Grid>
+                    <ComboBox
+                        MinWidth="200"
+                        MaxWidth="320"
+                        ItemsSource="{x:Bind ViewModel.TranslatorOptions}"
+                        SelectedItem="{x:Bind ViewModel.DefaultTranslator, Mode=TwoWay}"
+                        Visibility="{x:Bind helpers:Format.Show(ViewModel.HasModels), Mode=OneWay}"
+                        AutomationProperties.Name="默认翻译模型">
+                        <ComboBox.ItemTemplate>
+                            <DataTemplate x:DataType="services:TranslatorOption">
+                                <TextBlock Text="{x:Bind Label}" TextTrimming="CharacterEllipsis" />
+                            </DataTemplate>
+                        </ComboBox.ItemTemplate>
+                    </ComboBox>
+                    <TextBlock
+                        VerticalAlignment="Center"
+                        Style="{StaticResource SecondaryTextBlockStyle}"
+                        Text="尚未添加大模型服务商"
+                        Visibility="{x:Bind helpers:Format.Hide(ViewModel.HasModels), Mode=OneWay}" />
+                </Grid>
             </controls:SettingsCard>
             <controls:SettingsCard Glyph="&#xE9D9;" Header="同时处理的文档数" Description="更多并行会占用更多 CPU 和内存；翻译请求的并发由各服务商的“并发请求数”控制">
                 <NumberBox
@@ -200,7 +145,7 @@
                         <FontIcon Glyph="&#xE774;" FontSize="20" VerticalAlignment="Center" />
                         <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="2">
                             <TextBlock Text="代理" />
-                            <TextBlock Style="{StaticResource SecondaryTextBlockStyle}" TextWrapping="Wrap" Text="访问 Google 翻译、大模型服务商和 MinerU 时使用的网络代理。“跟随系统”会读取 Windows 的代理设置" />
+                            <TextBlock Style="{StaticResource SecondaryTextBlockStyle}" TextWrapping="Wrap" Text="访问大模型服务商和 MinerU 时使用的网络代理。“跟随系统”会读取 Windows 的代理设置" />
                         </StackPanel>
                         <ComboBox Grid.Column="2" MinWidth="160" VerticalAlignment="Center" SelectedIndex="{x:Bind ViewModel.ProxyModeIndex, Mode=TwoWay}">
                             <x:String>跟随系统</x:String>
@@ -240,18 +185,6 @@
                     </Grid>
                 </Expander.Header>
                 <StackPanel Spacing="16">
-                    <TextBlock Text="Google 翻译" Style="{StaticResource BodyStrongTextBlockStyle}" />
-                    <NumberBox
-                        MaxWidth="320"
-                        HorizontalAlignment="Left"
-                        Header="每次请求最多字符"
-                        Minimum="{x:Bind ViewModel.Limits.MinChunkChars, Mode=OneWay}"
-                        Maximum="{x:Bind ViewModel.Limits.GoogleChunkCharsMax, Mode=OneWay}"
-                        SmallChange="100"
-                        LargeChange="1000"
-                        SpinButtonPlacementMode="Compact"
-                        Value="{x:Bind ViewModel.GoogleChunkChars, Mode=TwoWay}" />
-                    <TextBlock Text="大模型" Style="{StaticResource BodyStrongTextBlockStyle}" />
                     <Grid ColumnSpacing="12" RowSpacing="12">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*" />

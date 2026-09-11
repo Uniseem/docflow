@@ -23,7 +23,8 @@ struct PendingFile: Identifiable, Hashable {
 final class NewTranslationModel {
     private(set) var files: [PendingFile] = []
     var mode = "pdf2zh"
-    var translator = TranslatorChoice.google
+    /// Nil while no model is usable yet.
+    var translator: TranslatorChoice?
     var title = ""
     private(set) var isSubmitting = false
     private(set) var submitError: String?
@@ -52,21 +53,15 @@ final class NewTranslationModel {
             : "支持 PDF、Word、PowerPoint、Excel、图片与网页文件。"
     }
 
-    /// Google plus every usable provider model.
+    /// Every model of every usable provider.
     var translatorOptions: [TranslatorOption] {
-        app?.translatorOptions ?? [.google]
+        app?.translatorOptions ?? []
     }
+
+    var hasModels: Bool { !translatorOptions.isEmpty }
 
     var isTranslatorAvailable: Bool {
         translatorOptions.contains { $0.choice == translator }
-    }
-
-    var llmReady: Bool { capabilities?.llmReady == true }
-
-    var translatorDetail: String {
-        translator.isLLM
-            ? "大模型翻译：理解上下文、术语更统一，适合精读；速度和费用取决于服务商和模型。"
-            : "免费，无需 API Key，速度快，适合快速阅读。需要能访问 Google 的网络。"
     }
 
     /// Why the files cannot be submitted right now, if anything.
@@ -78,8 +73,11 @@ final class NewTranslationModel {
         if isNative && !capabilities.pdf2zhReady {
             return "PDF 原生翻译暂不可用：\(capabilities.pdf2zhIssue ?? "运行环境不完整")"
         }
+        if !hasModels {
+            return "还没有可用的大模型：请在设置的“翻译服务”中添加服务商、填写 API Key 并获取模型。"
+        }
         if !isTranslatorAvailable {
-            return "所选的大模型已停用或已删除，请换一个翻译服务。"
+            return "所选的模型已停用或已删除，请换一个模型。"
         }
         return nil
     }
@@ -122,10 +120,15 @@ final class NewTranslationModel {
         submitProblems = [:]
         if let preferences = app?.settings?.preferences {
             mode = preferences.defaultMode
-            translator = preferences.defaultTranslator
         }
+        translator = app?.defaultTranslatorPreference
+    }
+
+    /// A model became usable (or the chosen one went away) while the sheet
+    /// is open: keep a usable choice.
+    func refreshTranslator() {
         if !isTranslatorAvailable {
-            translator = .google
+            translator = app?.defaultTranslatorPreference
         }
     }
 
@@ -156,7 +159,7 @@ final class NewTranslationModel {
     /// Queues every file; returns the ids of the created documents. Files
     /// the engine rejects stay in the list with the reason.
     func submit() async -> [String] {
-        guard canSubmit, let app else { return [] }
+        guard canSubmit, let app, let translator else { return [] }
         isSubmitting = true
         submitError = nil
         let single = files.count == 1

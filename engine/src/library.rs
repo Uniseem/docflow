@@ -183,8 +183,9 @@ async fn import(
     };
     let preferences = settings::load_preferences(&state.pool).await?;
     let runtime = settings::load_translation_runtime(&state.pool).await?;
-    // translation_tier stays for older documents: 1 Google, 2 large model.
-    let tier = if matches!(translator, TranslatorChoice::Google) { 1 } else { 2 };
+    // translation_tier only describes documents from before `translator`
+    // existed (1 was Google Translate); new documents use a large model.
+    let tier = 2;
     sqlx::query(concat!(
         "INSERT INTO documents (id,title,title_custom,original_filename,storage_key,source_path,source_size,source_sha256,mime_type,processing_mode,translation_tier,translation_runtime_snapshot,mineru_model,translator,translator_label,status,stage,progress,queue_available_at,created_at,updated_at) \
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,'queued','queued',2,",
@@ -273,10 +274,7 @@ async fn copy_with_digest(source: &Path, destination: &Path) -> Result<(u64, Str
 /// Checks the chosen translation service and returns its display name.
 async fn translator_label(state: &AppState, choice: &TranslatorChoice) -> Result<String> {
     choice.validate().map_err(|error| user(error.to_string()))?;
-    let (provider_id, model) = match choice {
-        TranslatorChoice::Google => return Ok("Google 翻译（免费）".into()),
-        TranslatorChoice::Llm { provider_id, model } => (provider_id, model),
-    };
+    let TranslatorChoice::Llm { provider_id, model } = choice;
     let provider = providers::load(&state.pool)
         .await?
         .into_iter()
@@ -769,9 +767,31 @@ mod tests {
         assert_eq!(safe_file_stem("论文 标题."), "论文 标题");
     }
 
+    /// A keyless local model, so documents can be queued in tests.
+    async fn add_local_model(state: &AppState) {
+        crate::providers::upsert(
+            &state.pool,
+            serde_json::from_value(serde_json::json!({
+                "id": "local", "name": "本机模型", "type": "openai",
+                "base_url": "http://localhost:11434/v1", "models": [{"id": "qwen3"}]
+            }))
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    }
+
+    fn local_model() -> TranslatorChoice {
+        TranslatorChoice::Llm {
+            provider_id: "local".into(),
+            model: "qwen3".into(),
+        }
+    }
+
     #[tokio::test]
     async fn import_validates_mode_specific_formats_and_copies_the_source() {
         let state = state().await;
+        add_local_model(&state).await;
         let docx = state.config.data_root.join("paper.docx");
         std::fs::write(&docx, b"not really a document").unwrap();
         let error = create(
@@ -780,7 +800,7 @@ mod tests {
                 path: docx.clone(),
                 title: None,
                 mode: "pdf2zh".into(),
-                translator: TranslatorChoice::Google,
+                translator: local_model(),
             },
         )
         .await
@@ -811,26 +831,14 @@ mod tests {
         .contains("服务商不存在")
         .then_some(())
         .expect("an unknown provider is rejected");
-        crate::providers::upsert(
-            &state.pool,
-            serde_json::from_value(serde_json::json!({
-                "id": "local", "name": "本机模型", "type": "openai",
-                "base_url": "http://localhost:11434/v1", "models": [{"id": "qwen3"}]
-            }))
-            .unwrap(),
-        )
-        .await
-        .unwrap();
+        add_local_model(&state).await;
         let view = create(
             &state,
             CreateInput {
                 path: source.clone(),
                 title: Some("  自定义标题 ".into()),
                 mode: "mineru".into(),
-                translator: TranslatorChoice::Llm {
-                    provider_id: "local".into(),
-                    model: "qwen3".into(),
-                },
+                translator: local_model(),
             },
         )
         .await

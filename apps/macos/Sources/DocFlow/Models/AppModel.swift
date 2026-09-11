@@ -58,6 +58,15 @@ struct AppAlert: Identifiable {
     var message: String
 }
 
+/// A short confirmation at the bottom of the window (an export finished,
+/// say); it goes away by itself.
+struct Toast: Identifiable, Equatable {
+    let id = UUID()
+    var message: String
+    /// Offered as "在访达中显示".
+    var file: URL?
+}
+
 /// App-wide state: the engine connection, the library list, the selection
 /// and the dialogs that act on documents. There is one library window.
 @MainActor
@@ -99,6 +108,8 @@ final class AppModel {
     let newTranslation: NewTranslationModel
     var isInspectorPresented = false
     var alert: AppAlert?
+    private(set) var toast: Toast?
+    @ObservationIgnored private var toastTimer: Task<Void, Never>?
     var deleteCandidates: [DocumentInfo] = []
     var cancelCandidate: DocumentInfo?
     var renameCandidate: DocumentInfo?
@@ -540,8 +551,9 @@ final class AppModel {
             }
             do {
                 try FileActions.copy(path, to: destination)
+                exported(destination)
             } catch {
-                alert = AppAlert(title: "导出失败", message: error.localizedDescription)
+                exportFailed(destination, error)
             }
         }
     }
@@ -554,11 +566,45 @@ final class AppModel {
             }
             do {
                 let _: ExportResult = try await call("documents.exportBundle", ExportParams(id: document.id, destination: destination.path))
-                FileActions.reveal(destination.path)
+                exported(destination)
             } catch {
-                alert = AppAlert(title: "导出失败", message: error.localizedDescription)
+                exportFailed(destination, error)
             }
         }
+    }
+
+    private func exported(_ destination: URL) {
+        guard FileManager.default.fileExists(atPath: destination.path) else {
+            exportFailed(destination, CocoaError(.fileNoSuchFile))
+            return
+        }
+        showToast("已导出“\(destination.lastPathComponent)”", file: destination)
+    }
+
+    private func exportFailed(_ destination: URL, _ error: Error) {
+        alert = AppAlert(
+            title: "导出失败",
+            message: "“\(destination.lastPathComponent)”没有导出：\(error.localizedDescription)"
+        )
+    }
+
+    // MARK: - Confirmations
+
+    func showToast(_ message: String, file: URL? = nil) {
+        let toast = Toast(message: message, file: file)
+        self.toast = toast
+        AccessibilityNotification.Announcement(message).post()
+        toastTimer?.cancel()
+        toastTimer = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 6_000_000_000)
+            guard !Task.isCancelled, let self, self.toast?.id == toast.id else { return }
+            self.toast = nil
+        }
+    }
+
+    func dismissToast() {
+        toastTimer?.cancel()
+        toast = nil
     }
 
     // MARK: - Dialog state for bindings
@@ -590,8 +636,16 @@ final class AppModel {
         set { setPreference(\.defaultMode, newValue) }
     }
 
-    var defaultTranslatorPreference: TranslatorChoice {
-        get { settings?.preferences.defaultTranslator ?? .google }
+    /// The saved default model while it is usable, else the first usable
+    /// model; nil while there is none.
+    var defaultTranslatorPreference: TranslatorChoice? {
+        get {
+            let options = translatorOptions
+            if let saved = settings?.preferences.defaultTranslator, options.contains(where: { $0.choice == saved }) {
+                return saved
+            }
+            return options.first?.choice
+        }
         set { setPreference(\.defaultTranslator, newValue) }
     }
 
@@ -605,9 +659,9 @@ final class AppModel {
         set { setPreference(\.mineruModel, newValue) }
     }
 
-    /// Google and every model of every usable provider.
+    /// Every model of every usable provider.
     var translatorOptions: [TranslatorOption] {
-        settings?.translatorOptions ?? [.google]
+        settings?.translatorOptions ?? []
     }
 
     func setPreference<Value: Equatable>(_ keyPath: WritableKeyPath<Preferences, Value>, _ value: Value) {
@@ -708,10 +762,6 @@ final class AppModel {
 
     func checkModel(_ endpoint: EndpointParams) async throws -> CheckResult {
         try await call("providers.check", endpoint)
-    }
-
-    func checkGoogle() async throws -> CheckResult {
-        try await call("google.check", NoParams())
     }
 
     /// Uses (or creates) a "DocFlow" library inside the chosen folder and

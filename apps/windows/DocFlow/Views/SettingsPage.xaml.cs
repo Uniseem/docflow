@@ -39,8 +39,6 @@ public sealed partial class SettingsPage : Page
     // Keep unsaved edits of the advanced form; refresh everything else.
     private void OnSettingsChanged() => ViewModel.Load(keepRuntimeForm: true);
 
-    private async void OnCheckGoogle(object sender, RoutedEventArgs e) => await ViewModel.CheckGoogleAsync();
-
     private void OnPresetMenuOpening(object sender, object e)
     {
         PresetMenu.Items.Clear();

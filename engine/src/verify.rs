@@ -1,12 +1,10 @@
-//! Live checks behind the settings buttons: the MinerU key, Google's free
-//! endpoint and large-model providers (model list and a test request).
-//! Keys are never logged; provider error bodies are redacted before they
-//! reach the user.
+//! Live checks behind the settings buttons: the MinerU key and large-model
+//! providers (model list and a test request). Keys are never logged;
+//! provider error bodies are redacted before they reach the user.
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use anyhow::{Context, Result};
-use serde::Serialize;
 
 use crate::{
     http::Network,
@@ -29,27 +27,6 @@ pub async fn mineru(network: &Network, key: &str) -> Result<()> {
         anyhow::bail!("MinerU API Key 无效或没有权限");
     }
     Ok(())
-}
-
-#[derive(Debug, Serialize)]
-pub struct GoogleCheck {
-    pub ok: bool,
-    pub latency_ms: u128,
-    pub reply: String,
-}
-
-/// Sends the same request a translation would.
-pub async fn google(network: &Network, url: &str) -> Result<GoogleCheck> {
-    let started = Instant::now();
-    let client = client(network, 30)?;
-    let reply = crate::translation_pool::call_google(&client, url, "Hello, world.")
-        .await
-        .map_err(|error| anyhow::anyhow!(error.message))?;
-    Ok(GoogleCheck {
-        ok: true,
-        latency_ms: started.elapsed().as_millis(),
-        reply,
-    })
 }
 
 fn client(network: &Network, seconds: u64) -> Result<reqwest::Client> {

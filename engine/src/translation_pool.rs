@@ -1,5 +1,5 @@
-//! Shared request pools: one for Google Translate's free endpoint and one per
-//! large-model provider. Each pool is a FIFO queue with a concurrency limit.
+//! Shared request pools, one per large-model provider. Each pool is a FIFO
+//! queue with a concurrency limit.
 //! The limit adapts to rate limiting: it halves when the service answers
 //! "too many requests" and climbs back to the configured value as requests
 //! succeed again.
@@ -15,11 +15,7 @@ use std::{
 
 use anyhow::{Context, Result};
 use regex::Regex;
-use reqwest::{
-    Client,
-    header::{CONTENT_TYPE, USER_AGENT},
-};
-use serde_json::Value;
+use reqwest::Client;
 use tokio::{
     sync::{mpsc, oneshot, watch},
     task::JoinSet,
@@ -35,11 +31,8 @@ use crate::{
 /// the proxy; requests already in flight finish on the previous client.
 type SharedClient = Arc<RwLock<Client>>;
 
-pub const GOOGLE_LABEL: &str = "Google 翻译";
-const GOOGLE_TIMEOUT: Duration = Duration::from_secs(90);
 /// How long a key that failed with a credential error sits out.
 const KEY_BENCH: Duration = Duration::from_secs(600);
-const BROWSER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0 Safari/537.36";
 
 /// Where a large-model request goes. Captured when a document starts.
 #[derive(Debug, Clone)]
@@ -59,17 +52,13 @@ impl LlmTarget {
     }
 }
 
+/// One request to a large model.
 #[derive(Debug, Clone)]
-pub enum PoolRequest {
-    Google {
-        text: String,
-    },
-    Llm {
-        target: Arc<LlmTarget>,
-        system: String,
-        user: String,
-        max_tokens: Option<u32>,
-    },
+pub struct PoolRequest {
+    pub target: Arc<LlmTarget>,
+    pub system: String,
+    pub user: String,
+    pub max_tokens: Option<u32>,
 }
 
 #[derive(Debug, Clone)]
@@ -140,7 +129,7 @@ struct ProviderPool {
 }
 
 impl ProviderPool {
-    fn spawn(label: String, concurrency: usize, capacity: usize, client: SharedClient, google_url: String, fake: bool) -> Self {
+    fn spawn(label: String, concurrency: usize, capacity: usize, client: SharedClient, fake: bool) -> Self {
         let concurrency = concurrency.max(1);
         let (sender, receiver) = mpsc::channel::<PoolJob>(capacity);
         let (limit_sender, limit_receiver) = watch::channel(concurrency);
@@ -162,7 +151,6 @@ impl ProviderPool {
             let throttle = worker_throttle.clone();
             let limit = worker_limit.clone();
             let keys = worker_keys.clone();
-            let google_url = google_url.clone();
             async move {
                 if job.response.is_closed() {
                     return;
@@ -175,7 +163,7 @@ impl ProviderPool {
                         if fake {
                             fake_execute(job.request).await
                         } else {
-                            execute(&client, &google_url, &keys, job.request).await
+                            execute(&client, &keys, job.request).await
                         }
                     } => result,
                 };
@@ -302,11 +290,9 @@ async fn dispatch<T, F, Fut>(
 }
 
 pub struct TranslationPools {
-    google: ProviderPool,
     llm: StdMutex<HashMap<String, Arc<ProviderPool>>>,
     client: SharedClient,
     capacity: usize,
-    google_url: String,
     fake: bool,
 }
 
@@ -326,18 +312,9 @@ impl TranslationPools {
             tracing::warn!("DOCFLOW_FAKE_PROVIDERS=1：翻译请求由本地测试译文代替，不会调用云端服务");
         }
         Ok(Arc::new(Self {
-            google: ProviderPool::spawn(
-                GOOGLE_LABEL.into(),
-                crate::settings::GOOGLE_DEFAULT_CONCURRENCY,
-                config.translation_queue_capacity,
-                client.clone(),
-                config.google_translate_url.clone(),
-                config.fake_providers,
-            ),
             llm: StdMutex::new(HashMap::new()),
             client,
             capacity: config.translation_queue_capacity,
-            google_url: config.google_translate_url.clone(),
             fake: config.fake_providers,
         }))
     }
@@ -350,10 +327,6 @@ impl TranslationPools {
             .write()
             .unwrap_or_else(|error| error.into_inner()) = client;
         Ok(())
-    }
-
-    pub fn set_google_concurrency(&self, concurrency: usize) {
-        self.google.set_configured(concurrency);
     }
 
     /// New keys were entered for a provider: give every key another chance.
@@ -383,7 +356,6 @@ impl TranslationPools {
                     target.concurrency,
                     self.capacity,
                     self.client.clone(),
-                    self.google_url.clone(),
                     self.fake,
                 ))
             })
@@ -391,178 +363,73 @@ impl TranslationPools {
     }
 
     pub async fn submit(&self, request: PoolRequest) -> Result<PoolResponse, ProviderError> {
-        match &request {
-            PoolRequest::Google { .. } => self.google.submit(request).await,
-            PoolRequest::Llm { target, .. } => {
-                let pool = self.llm_pool(target);
-                pool.submit(request).await
-            }
-        }
+        let pool = self.llm_pool(&request.target);
+        pool.submit(request).await
     }
 
     /// Requests the pool for this target may have in flight right now.
-    pub fn concurrency(&self, target: Option<&LlmTarget>) -> usize {
-        match target {
-            None => self.google.effective(),
-            Some(target) => self.llm_pool(target).effective(),
-        }
+    pub fn concurrency(&self, target: &LlmTarget) -> usize {
+        self.llm_pool(target).effective()
     }
 }
 
-async fn execute(
-    client: &Client,
-    google_url: &str,
-    keys: &KeyRing,
-    request: PoolRequest,
-) -> Result<PoolResponse, ProviderError> {
-    match request {
-        PoolRequest::Google { text } => {
-            let text = tokio::time::timeout(GOOGLE_TIMEOUT, call_google(client, google_url, &text))
-                .await
-                .map_err(|_| ProviderError::new(ErrorKind::Transient, "Google 翻译请求超时"))??;
-            Ok(PoolResponse {
-                text,
-                finish: Finish::Complete,
-                queue_wait: Duration::ZERO,
-                service_time: Duration::ZERO,
-                usage_detail: None,
-            })
-        }
-        PoolRequest::Llm {
-            target,
-            system,
-            user,
-            max_tokens,
-        } => {
-            let key = if target.keys.is_empty() {
-                None
-            } else {
-                Some(keys.pick(&target.keys).ok_or_else(|| {
-                    ProviderError::new(
-                        ErrorKind::Credential,
-                        format!(
-                            "{}：全部 {} 个 API Key 都无法使用（无效、受限或余额不足），请在设置中更新 Key",
-                            target.provider_name,
-                            target.keys.len()
-                        ),
-                    )
-                })?)
-            };
-            let reply = providers::chat(
-                client,
-                &target.endpoint,
-                key,
-                &ChatRequest {
-                    model: &target.model,
-                    system: &system,
-                    user: &user,
-                    max_tokens,
-                },
-                &target.provider_name,
+async fn execute(client: &Client, keys: &KeyRing, request: PoolRequest) -> Result<PoolResponse, ProviderError> {
+    let PoolRequest { target, system, user, max_tokens } = request;
+    let key = if target.keys.is_empty() {
+        None
+    } else {
+        Some(keys.pick(&target.keys).ok_or_else(|| {
+            ProviderError::new(
+                ErrorKind::Credential,
+                format!(
+                    "{}：全部 {} 个 API Key 都无法使用（无效、受限或余额不足），请在设置中更新 Key",
+                    target.provider_name,
+                    target.keys.len()
+                ),
             )
-            .await;
-            let reply = match (reply, key) {
-                (Err(error), Some(key)) if error.kind == ErrorKind::Credential && target.keys.len() > 1 => {
-                    keys.bench(key);
-                    let remaining = keys.usable(&target.keys).len();
-                    if remaining == 0 {
-                        return Err(error);
-                    }
-                    tracing::warn!(provider = %target.provider_name, remaining, "credential error; key benched");
-                    let tail = crate::secrets::tail(key);
-                    let which = if tail.is_empty() { "其中一个 Key".to_string() } else { format!("尾号 {tail} 的 Key") };
-                    return Err(ProviderError::new(
-                        ErrorKind::Transient,
-                        format!("{}。{which} 已暂停使用 10 分钟，改用其余 {remaining} 个 Key", error.message),
-                    ));
-                }
-                (reply, _) => reply?,
-            };
-            let usage = match (reply.input_tokens, reply.output_tokens) {
-                (Some(input), Some(output)) => Some(format!("输入 {input} tokens，输出 {output} tokens")),
-                _ => None,
-            };
-            Ok(PoolResponse {
-                text: reply.text,
-                finish: reply.finish,
-                queue_wait: Duration::ZERO,
-                service_time: Duration::ZERO,
-                usage_detail: usage,
-            })
+        })?)
+    };
+    let reply = providers::chat(
+        client,
+        &target.endpoint,
+        key,
+        &ChatRequest {
+            model: &target.model,
+            system: &system,
+            user: &user,
+            max_tokens,
+        },
+        &target.provider_name,
+    )
+    .await;
+    let reply = match (reply, key) {
+        (Err(error), Some(key)) if error.kind == ErrorKind::Credential && target.keys.len() > 1 => {
+            keys.bench(key);
+            let remaining = keys.usable(&target.keys).len();
+            if remaining == 0 {
+                return Err(error);
+            }
+            tracing::warn!(provider = %target.provider_name, remaining, "credential error; key benched");
+            let tail = crate::secrets::tail(key);
+            let which = if tail.is_empty() { "其中一个 Key".to_string() } else { format!("尾号 {tail} 的 Key") };
+            return Err(ProviderError::new(
+                ErrorKind::Transient,
+                format!("{}。{which} 已暂停使用 10 分钟，改用其余 {remaining} 个 Key", error.message),
+            ));
         }
-    }
-}
-
-/// Google Translate's free web endpoint (`translate_a/single`, client
-/// `gtx`). The text is sent in the body, so long segments fit.
-pub async fn call_google(client: &Client, url: &str, text: &str) -> Result<String, ProviderError> {
-    let body = format!(
-        "q={}",
-        url::form_urlencoded::byte_serialize(text.as_bytes()).collect::<String>()
-    );
-    let response = client
-        .post(url)
-        .query(&[("client", "gtx"), ("sl", "auto"), ("tl", "zh-CN"), ("dt", "t")])
-        .header(USER_AGENT, BROWSER_AGENT)
-        .header(CONTENT_TYPE, "application/x-www-form-urlencoded;charset=utf-8")
-        .body(body)
-        .send()
-        .await
-        .map_err(google_network_error)?;
-    let status = response.status();
-    let retry_after = providers::retry_after(&response);
-    let raw = response.text().await.map_err(google_network_error)?;
-    if status.as_u16() == 429 || status.as_u16() == 503 || raw.trim_start().starts_with('<') {
-        // Too many requests, or the "unusual traffic" page.
-        let mut error = ProviderError::new(
-            ErrorKind::RateLimited,
-            format!("Google 翻译暂时限制了请求频率（HTTP {status}），稍后自动重试"),
-        );
-        error.retry_after = Some(retry_after.unwrap_or(Duration::from_secs(15)));
-        return Err(error);
-    }
-    if !status.is_success() {
-        let kind = if status.is_server_error() {
-            ErrorKind::Transient
-        } else {
-            ErrorKind::Rejected
-        };
-        return Err(ProviderError::new(
-            kind,
-            format!("Google 翻译返回 HTTP {status}：{}", providers::snippet(&raw)),
-        ));
-    }
-    let value: Value = serde_json::from_str(&raw).map_err(|_| {
-        ProviderError::new(ErrorKind::Output, "Google 翻译返回了无法解析的内容")
-    })?;
-    let translated = parse_google(&value);
-    if translated.trim().is_empty() && !text.trim().is_empty() {
-        return Err(ProviderError::new(ErrorKind::Output, "Google 翻译返回了空译文"));
-    }
-    Ok(translated)
-}
-
-/// Google's endpoint is unreachable from some networks (mainland China among
-/// them) without a proxy; say so instead of a bare connection error.
-pub fn google_network_error(error: reqwest::Error) -> ProviderError {
-    let unreachable = error.is_connect() || error.is_timeout();
-    let mut failure = providers::network_error(GOOGLE_LABEL, error);
-    if unreachable {
-        failure.message.push_str("。如果所在网络无法直接访问 Google，请在设置中填写代理，或改用大模型服务商");
-    }
-    failure
-}
-
-pub fn parse_google(value: &Value) -> String {
-    value[0]
-        .as_array()
-        .map(|sentences| {
-            sentences
-                .iter()
-                .filter_map(|sentence| sentence[0].as_str())
-                .collect::<String>()
-        })
-        .unwrap_or_default()
+        (reply, _) => reply?,
+    };
+    let usage = match (reply.input_tokens, reply.output_tokens) {
+        (Some(input), Some(output)) => Some(format!("输入 {input} tokens，输出 {output} tokens")),
+        _ => None,
+    };
+    Ok(PoolResponse {
+        text: reply.text,
+        finish: reply.finish,
+        queue_wait: Duration::ZERO,
+        service_time: Duration::ZERO,
+        usage_detail: usage,
+    })
 }
 
 /// Deterministic local "translations" for development and automated tests
@@ -577,20 +444,16 @@ async fn fake_execute(request: PoolRequest) -> Result<PoolResponse, ProviderErro
         format!("{body}〔测试译文〕{}", &text[body.len()..])
     }
     tokio::time::sleep(Duration::from_millis(60)).await;
-    let text = match request {
-        PoolRequest::Google { text } => translate(&text),
-        PoolRequest::Llm { user, .. } => {
-            let segments = Regex::new(r#"(?s)<segment id="(\d+)">\n(.*?)\n</segment>"#).expect("static regex");
-            if segments.is_match(&user) {
-                segments
-                    .captures_iter(&user)
-                    .map(|capture| format!("<segment id=\"{}\">\n{}\n</segment>", &capture[1], translate(&capture[2])))
-                    .collect::<Vec<_>>()
-                    .join("\n")
-            } else {
-                translate(&user)
-            }
-        }
+    let user = request.user;
+    let segments = Regex::new(r#"(?s)<segment id="(\d+)">\n(.*?)\n</segment>"#).expect("static regex");
+    let text = if segments.is_match(&user) {
+        segments
+            .captures_iter(&user)
+            .map(|capture| format!("<segment id=\"{}\">\n{}\n</segment>", &capture[1], translate(&capture[2])))
+            .collect::<Vec<_>>()
+            .join("\n")
+    } else {
+        translate(&user)
     };
     Ok(PoolResponse {
         text,
@@ -608,14 +471,6 @@ mod runtime_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
-
-    #[test]
-    fn google_free_reply_concatenates_sentences() {
-        let value = json!([[["你好，", "Hello, ", null, null, 10], ["世界。", "world.", null, null, 10]], null, "en"]);
-        assert_eq!(parse_google(&value), "你好，世界。");
-        assert_eq!(parse_google(&json!({})), "");
-    }
 
     #[tokio::test]
     async fn fake_provider_keeps_segment_tags_and_markers() {
@@ -631,8 +486,8 @@ mod tests {
             keys: vec![],
             concurrency: 1,
         });
-        let response = fake_execute(PoolRequest::Llm {
-            target,
+        let response = fake_execute(PoolRequest {
+            target: target.clone(),
             system: "s".into(),
             user: "<segment id=\"4\">\nb DOCFLOWKEEP000000TOKEN\n</segment>\n\n<segment id=\"2\">\na {v0}\n</segment>".into(),
             max_tokens: None,
@@ -643,8 +498,10 @@ mod tests {
             response.text,
             "<segment id=\"4\">\nb DOCFLOWKEEP000000TOKEN〔测试译文〕\n</segment>\n<segment id=\"2\">\na {v0}〔测试译文〕\n</segment>"
         );
-        let google = fake_execute(PoolRequest::Google { text: " \n".into() }).await.unwrap();
-        assert_eq!(google.text, " \n");
+        let blank = fake_execute(PoolRequest { target, system: "s".into(), user: " \n".into(), max_tokens: None })
+            .await
+            .unwrap();
+        assert_eq!(blank.text, " \n");
     }
 
     #[test]

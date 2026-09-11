@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
 """Local stand-ins for the translation services, for integration tests.
 
-Serves the OpenAI-compatible (/v1), Anthropic (/anthropic/v1), Gemini
-(/gemini/v1beta) and Google free (/google/translate_a/single) APIs. The
-"translations" append 〔模拟译文〕 and misbehave on purpose, so the engine's
-repair paths get exercised:
+Serves the OpenAI-compatible (/v1), Anthropic (/anthropic/v1) and Gemini
+(/gemini/v1beta) APIs. The "translations" append 〔模拟译文〕 and misbehave
+on purpose, so the engine's repair paths get exercised:
 
-- every 9th chat request and every 3rd Google request answer HTTP 429;
+- every 9th request answers HTTP 429;
 - a request longer than 3000 characters is cut in half (finish "length");
 - a segment containing DROP_ME is left out of multi-segment replies;
 - DAMAGE_MARKERS: placeholders come back with spaces inside;
@@ -161,7 +160,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         path = urllib.parse.urlparse(self.path).path
         raw = self.read_body()
-        api = "google" if path.startswith("/google/") else "anthropic" if path.startswith("/anthropic/") else "gemini" if path.startswith("/gemini/") else "openai"
+        api = "anthropic" if path.startswith("/anthropic/") else "gemini" if path.startswith("/gemini/") else "openai"
         number = State.enter(api)
         try:
             self.answer(api, number, path, raw)
@@ -169,20 +168,6 @@ class Handler(BaseHTTPRequestHandler):
             State.leave(api)
 
     def answer(self, api: str, number: int, path: str, raw: bytes) -> None:
-        if api == "google":
-            if number % 3 == 0:
-                State.count("google_rate_limited")
-                page = b"<html><body>Our systems have detected unusual traffic from your computer network.</body></html>"
-                return self.send_body(429, page, "text/html")
-            query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
-            form = urllib.parse.parse_qs(raw.decode("utf-8"))
-            text = form.get("q", [""])[0]
-            if query.get("client") != ["gtx"] or query.get("tl") != ["zh-CN"] or query.get("dt") != ["t"]:
-                return self.send_json(400, {"error": "unsupported request"})
-            # Like the real endpoint: one entry per sentence or line.
-            lines = translate_text(text).split("\n")
-            sentences = [[line + ("\n" if index < len(lines) - 1 else ""), "", None, None, 10] for index, line in enumerate(lines)]
-            return self.send_json(200, [sentences, None, "en"])
         if number % 9 == 0:
             State.count("rate_limited")
             return self.send_json(429, {"error": {"message": "Rate limit reached, please retry"}}, {"Retry-After": "1"})

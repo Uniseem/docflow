@@ -162,15 +162,16 @@ pub async fn process(state: Arc<AppState>, id: &str) -> Result<()> {
 /// The document's translation service with its current configuration and
 /// keys. Missing providers or keys stop the job with a clear message.
 async fn translator_for(state: &AppState, choice: Option<&str>, tier: i64) -> Result<translate::Translator> {
-    let choice = match choice {
-        Some(json) => serde_json::from_str::<TranslatorChoice>(json).context("任务的翻译服务设置无效")?,
-        // Documents from before providers existed: tier 1 was Google.
-        None if tier <= 1 => TranslatorChoice::Google,
-        None => return Err(permanent("这是旧版本创建的任务，请删除后重新选择翻译服务提交")),
+    // Tier 1 and {"kind":"google"} were Google Translate, which DocFlow no
+    // longer offers.
+    const GOOGLE_REMOVED: &str = "这个文档选用的 Google 翻译已不再提供，请删除它，再重新添加文件并选择大模型翻译";
+    let Some(json) = choice else {
+        return Err(permanent(if tier <= 1 { GOOGLE_REMOVED } else { "这是旧版本创建的任务，请删除后重新选择翻译服务提交" }));
     };
-    let (provider_id, model) = match choice {
-        TranslatorChoice::Google => return Ok(translate::Translator::Google),
-        TranslatorChoice::Llm { provider_id, model } => (provider_id, model),
+    let TranslatorChoice::Llm { provider_id, model } = match serde_json::from_str::<TranslatorChoice>(json) {
+        Ok(choice) => choice,
+        Err(_) if json.contains("\"google\"") => return Err(permanent(GOOGLE_REMOVED)),
+        Err(_) => return Err(permanent("任务的翻译服务设置无效，请删除后重新选择翻译服务提交")),
     };
     let provider = providers::load(&state.pool)
         .await?
@@ -184,7 +185,7 @@ async fn translator_for(state: &AppState, choice: Option<&str>, tier: i64) -> Re
     if keys.is_empty() && !provider.key_optional() && !state.config.fake_providers {
         return Err(permanent(format!("尚未填写“{}”的 API Key，请在设置中填写后重新处理", provider.name)));
     }
-    Ok(translate::Translator::Llm(Arc::new(LlmTarget {
+    Ok(translate::Translator(Arc::new(LlmTarget {
         provider_id: provider.id.clone(),
         provider_name: provider.name.clone(),
         endpoint: provider.endpoint(),
@@ -201,4 +202,25 @@ pub fn document_root(work_root: &Path, id: &str) -> Result<PathBuf> {
         anyhow::bail!("工作目录越界");
     }
     Ok(root)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn google_translate_documents_stop_with_a_clear_reason() {
+        let state = AppState::for_tests(crate::config::Config::for_tests()).await;
+        for (choice, tier) in [(Some("{\"kind\":\"google\"}"), 1), (None, 1)] {
+            let error = translator_for(&state, choice, tier).await.unwrap_err();
+            assert!(is_permanent(&error), "{error:#}");
+            assert!(error.to_string().contains("Google 翻译已不再提供"), "{error:#}");
+        }
+        let error = translator_for(&state, Some("{\"kind\":\"llm\"}"), 2).await.unwrap_err();
+        assert!(is_permanent(&error) && error.to_string().contains("无效"), "{error:#}");
+        let error = translator_for(&state, Some("{\"kind\":\"llm\",\"provider_id\":\"gone\",\"model\":\"m\"}"), 2)
+            .await
+            .unwrap_err();
+        assert!(is_permanent(&error) && error.to_string().contains("已被删除"), "{error:#}");
+    }
 }
