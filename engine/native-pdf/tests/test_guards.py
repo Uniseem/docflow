@@ -140,7 +140,11 @@ with probe:
     import numpy as np
     from sklearn.cluster import DBSCAN
     info = threadpoolctl.threadpool_info()
-    assert any(item['user_api'] == 'blas' for item in info)
+    # NumPy's and SciPy's macOS 14+ wheels use Apple Accelerate, which
+    # threadpoolctl does not list; scikit-learn's OpenMP runtime shows that
+    # the enumeration still ran there.
+    expected = 'openmp' if sys.platform == 'darwin' else 'blas'
+    assert any(item['user_api'] == expected for item in info), info
     labels = DBSCAN(eps=0.4, min_samples=1, metric='manhattan', algorithm='brute').fit_predict(
         np.array([[0.0, 0.0], [0.2, 0.0], [8.0, 8.0]])
     )
