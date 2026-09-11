@@ -1,14 +1,31 @@
-.env
-backend/.venv/
-backend/.pytest_cache/
-backend/**/__pycache__/
-backend/**/*.pyc
-frontend/node_modules/
-frontend/dist/
-server/target/
-server/pdf-assets/node_modules/
-server/native-pdf/**/__pycache__/
-server/native-pdf/**/*.pyc
+# Local toolchains, caches and scratch data
+.dev/
 data/
 output/
 tmp/
+
+# Python caches (engine tests, native-pdf adapter)
+__pycache__/
+*.pyc
+
+# Engine
+engine/target/
+
+# Bundled Python runtime and BabelDOC assets (built by runtime/ scripts)
+runtime/build/
+runtime/cache/
+
+# Windows app
+apps/windows/**/bin/
+apps/windows/**/obj/
+apps/windows/**/AppPackages/
+apps/windows/**/*.user
+apps/windows/.vs/
+apps/windows/dist/
+
+# macOS app
+apps/macos/.build/
+apps/macos/.swiftpm/
+apps/macos/dist/
+apps/macos/**/*.xcodeproj/xcuserdata/
+.DS_Store

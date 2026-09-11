@@ -1,444 +1,211 @@
-# 文流（DocFlow）
+# DocFlow
 
-文流是一个可自托管的文档解析、中文翻译与阅读服务。上传时可选 **MinerU 文档转换** 或 **PDF 原生翻译（pdf2zh）**：前者输出 Markdown 阅读页和重新排版的 PDF，后者保留原 PDF 页面布局并输出中文 PDF 与双语 PDF。两条路线共享后台翻译设置、任务快照及全站 Google / DeepSeek 任务池，不需要为原生翻译另配密钥。所有文件永久保存在本地，Cloudflare R2 仅是可选镜像。
+DocFlow 是 Windows 与 macOS 上的文档翻译应用。把 PDF、Word、PowerPoint、Excel、图片或网页交给它，它会译成简体中文，并把源文件、译文、PDF 和完整的处理记录保存在本机文档库里。
 
-极速档使用 Google Cloud Translation；均衡档使用 `deepseek-v4-flash` 非思考模式；精准档使用同一模型的思考模式。多个文档、两条处理路线的请求合计受同一个服务池并发上限约束。
+- **PDF 原生翻译**：基于 pdf2zh-next 使用的 [BabelDOC 0.6.4](https://github.com/funstory-ai/BabelDOC/releases/tag/v0.6.4) 排版内核，保留原 PDF 的版式、图表和公式，生成中文 PDF 与双语对照 PDF。不需要 MinerU。
+- **MinerU 解析翻译**：由 [MinerU](https://mineru.net/) 解析文档结构，生成可阅读的译文（阅读视图，公式由 KaTeX 渲染）和由 Typst 排版的 A4 期刊风格 PDF。适合扫描件、Office 文档和图片。
 
-新文档默认私有，没有普通用户账户，也没有删除接口。上传响应会给当前浏览器设置每份文档独立的 HttpOnly 访问凭证；管理员在 `/admin` 能看到全部文档，并可逐份公开或恢复私有。管理后台固定在 `/admin`，前台不显示入口；首次访问后台的用户可以注册为唯一管理员。
+两种方式共用同一套翻译服务：
+
+- **Google 翻译（免费）**：使用 Google 翻译的免费网页接口，无需 API Key，开箱即用。
+- **大模型服务商**：参考 [Cherry Studio](https://github.com/CherryHQ/cherry-studio) 的服务商接入方式——从预设中选择服务商（DeepSeek、OpenAI、Anthropic、Google Gemini、OpenRouter、硅基流动、阿里云百炼、火山引擎、Kimi、智谱、腾讯混元、阶跃星辰、零一万物、xAI、Groq、Mistral、Azure OpenAI、Ollama、LM Studio），或添加任何 OpenAI 兼容 / Anthropic / Gemini 接口；填写 API 地址和 Key 后一键**获取模型列表**，勾选要用的模型即可。每个服务商的并发请求数可以手动调整，默认 100。
+
+两个应用都是原生界面：Windows 版使用 WinUI 3 与 Fluent Design，macOS 版使用 SwiftUI 并遵循 Apple 人机界面指南。它们共享同一个处理引擎，文档库格式相同。
+
+## 系统要求
+
+| | Windows | macOS |
+| --- | --- | --- |
+| 系统 | Windows 10 2004（19041）或更高版本，x64 | macOS 14 Sonoma 或更高版本，Apple 芯片或 Intel |
+| 其他 | Microsoft Edge WebView2 运行时（Windows 11 已自带）；Visual C++ 运行库已内置，无需另装 | — |
+| 磁盘 | 应用约 1.3 GB（含 Python 与 BabelDOC 离线资源），另需文档库空间 | 同左 |
+
+翻译需要联网访问所选服务；PDF 原生翻译的版面分析在本机 CPU 上进行，不需要 GPU。
+
+## 安装
+
+### Windows
+
+解压 `DocFlow-win-x64.zip`，运行其中的 `DocFlow.exe`。不需要管理员权限，也不需要另外安装 .NET 或 Visual C++ 运行库；可以放在任何文件夹，包括含中文的路径。
+
+没有代码签名的构建第一次运行时，Windows 可能显示“Windows 已保护你的电脑”：点“更多信息 → 仍要运行”即可，之后不再询问。
+
+### macOS
+
+双击 `DocFlow-macos-<架构>.pkg` 安装包，按提示安装到“应用程序”文件夹。Apple 芯片的 Mac 用 arm64 版，Intel 芯片的 Mac 用 x86_64 版。
+
+经过 Apple 公证的安装包可以直接打开。**未公证的安装包**第一次打开时，macOS 会提示“无法验证开发者”（macOS 15 显示“未打开”）——这是 macOS 对所有未公证软件的统一提示，手动允许一次即可：
+
+- macOS 15 及以后：双击安装包，在提示中点“完成”；打开“系统设置 → 隐私与安全性”，在页面下方点“仍要打开”并输入登录密码，再点“打开”。
+- macOS 14：按住 Control 点按安装包，选“打开”，再点“打开”。
+
+之后安装器会把 DocFlow 放进“应用程序”文件夹。由安装器安装的应用不带下载隔离标记，打开 DocFlow 时不会再有任何提示，也不会出现“已损坏”之类的错误。
+
+## 使用
+
+1. **选择翻译服务**：Google 翻译无需设置即可使用。要使用大模型，打开“设置 → 翻译服务”，点“添加服务商”选择预设，填写 API Key（多个 Key 用英文逗号分隔，会轮流使用），点“获取模型列表”勾选要用的模型；每个模型旁的“检查”会发送一个测试请求。使用 MinerU 解析翻译时，在“设置 → 文档解析”填写 MinerU 的 API Key。
+2. **新建翻译**：把文件拖到窗口里，或点“新建翻译”选择文件，选好处理方式和翻译服务即可开始。一次可以加入多个文件。
+3. **查看进度**：文档库按“全部 / 进行中 / 已完成 / 失败与取消”分类，可搜索标题和文件名。处理中的文档显示当前阶段、各阶段状态和逐条处理记录（可只看警告和错误）。
+4. **阅读与导出**：完成后可以在应用内阅读中文 PDF、双语对照、阅读视图或期刊 PDF，也可以导出单个文件或包含全部文件与处理记录的 ZIP。
+
+失败的文档可以重新处理，已通过校验的翻译分段会作为断点复用。关闭应用时，进行中的任务会停止，下次启动后从断点继续。在 macOS 上关闭窗口不会停止任务，按 ⌘Q 退出应用时才会停止；在 Windows 上关闭窗口即退出应用。
+
+所在网络无法直接访问 Google 或某个服务商时，在“设置 → 网络”选择代理：跟随系统（读取 Windows / macOS 的系统代理）、不使用代理或自定义（HTTP、HTTPS、SOCKS5）。
+
+### 数据保存在哪里
+
+| | Windows | macOS |
+| --- | --- | --- |
+| 文档库（默认） | `%LOCALAPPDATA%\DocFlow` | `~/Library/Application Support/DocFlow` |
+| API Key | Windows 凭据管理器（`DocFlow/mineru`、`DocFlow/provider:<服务商>`） | 钥匙串（服务 `DocFlow`，所有 Key 在一个条目中） |
+
+文档库可以在设置中移到其他文件夹。BabelDOC 只能处理纯英文（ASCII）路径：在 Windows 上，如果文档库或应用所在路径含中文（例如中文用户名），引擎会自动改用 `%ProgramData%\DocFlow`——处理中的临时文件放在只有当前用户能打开的子文件夹里，BabelDOC 的离线资源在首次使用时链接或复制到那里。macOS 的用户文件夹总是英文路径；把文档库移到含中文的文件夹时，PDF 原生翻译会提示原因。
+
+文档库的结构：
+
+```text
+DocFlow/
+├── docflow.db        # SQLite：文档、处理记录与设置（含服务商配置，不含 Key）
+├── archives/<key>/   # 每个文档：源文件、Markdown、PDF、阅读视图、图片、MinerU 原始结果
+├── work/             # 处理中的临时文件与翻译断点
+├── reader-assets/    # 阅读视图共用的 KaTeX 与样式
+├── native-pdf/       # PDF 原生翻译的适配脚本
+└── logs/             # 引擎日志（engine.log）和应用日志
+```
+
+API Key 只保存在系统的凭据存储中，启动时由应用在内存中交给引擎，不会写入文档库或日志；服务商返回的错误信息在显示前会去掉 Key。PDF 原生翻译的 Python 进程不持有任何 Key，也不直接访问翻译服务；它把段落交给引擎，由引擎统一调度。
+
+## 翻译与自动修复
+
+**分段**：公式、代码、图片、链接地址、HTML 标签、脚注等先由本地占位符保护，表格（HTML 与 Markdown 管道表格）按单元格翻译、结构不动。之后每个段落是一段，超过上限的长段落在句子边界拆开（从不切开占位符）；只有公式、图片或代码的段落不发送。多个段落合并成一次请求：大模型用 `<segment id="…">` 标记区分段落，Google 翻译按行数把译文分回各段。
+
+**校验与修复**：每段译文都要通过校验才会保存，出现问题时逐级修复：
+
+1. 批量请求中缺失、重复或未通过校验的段落单独重译；输出被截断时，已完整返回的段落直接保留。
+2. 占位符被模型改动（加空格、反引号、改大小写、调换顺序）时先在本地修复；修复不了则用更严格的要求重译。
+3. 输出被截断、被服务拒绝、请求超出上下文长度或仍未通过校验的长段落，在段落或句子边界一分为二，每半段带着公式和标记照常翻译。
+4. 仍然失败的短段落改为只翻译占位符之间的普通文本；被拒绝的片段继续拆小，实在无法翻译的少量文字保留原文并在处理记录中给出警告。无法翻译的文字过多时任务失败并说明原因，不会发布大半没翻译的结果。
+
+**网络与服务错误**：限流（HTTP 429）时服务商的并发自动减半，恢复后逐步回升；网络超时和临时故障退避后重试。多个 Key 中某个失效、受限或余额不足时，它会暂停使用 10 分钟，其余 Key 继续完成任务；全部失效时任务停止并说明原因。Key 错误、模型不存在、账户余额不足等无法自动恢复的错误会立即失败并给出原因，修正设置后可重新处理。整个任务最多自动尝试 3 次，断点保证不重复翻译已完成的段落。
+
+### 参数
+
+“设置 → 翻译服务”中可以调整 Google 翻译和每个服务商的并发请求数；“设置 → 高级”中可以调整分段与组批参数和大模型的翻译提示词。新任务提交时会保存一份参数快照，修改设置不影响进行中的任务，手动重新处理时使用最新设置。
+
+| 参数 | 默认值 | 范围 |
+| --- | --- | --- |
+| Google 翻译并发请求数 | 8 | 1–64 |
+| Google 翻译每次请求最多字符 | 3,000 | 100–5,000 |
+| 每个大模型服务商的并发请求数 | 100 | 1–2,000 |
+| 大模型每段最多字符 | 4,000 | 100–32,000 |
+| 大模型单次请求最多段数 | 8 | 1–64 |
+| 大模型单次请求最多字符 | 8,000 | 500–100,000 |
+| 大模型最大输出 tokens | 0（使用服务商默认值） | 0–1,000,000 |
+| 单个文档最多同时发出的请求数 | 100 | 1–1,000 |
+| 同时处理的文档数（通用设置） | 2 | 1–4 |
+
+每个服务商还可以填写“附加请求参数”（JSON），合并进每个请求，例如 `{"temperature": 0.3}` 或关闭思考模式的参数。本机模型（Ollama、LM Studio 等 localhost 地址）不需要 Key。思考类模型写在正文中的 `<think>` 内容和单独返回的思考内容都不会混入译文。
+
+## 构建
+
+目前没有预编译的发行版，需要从源码构建。两个平台的构建脚本都会依次构建处理引擎、准备内置的 Python + BabelDOC 运行环境（首次需要下载约 1 GB 的依赖和模型），再构建应用并组装成可直接运行的目录。
+
+### Windows
+
+需要 Rust（MSVC 工具链）、.NET 10 SDK，以及带 C++ 工作负载的 Visual Studio 或 Build Tools（提供可再分发的 Visual C++ 运行库）。在 PowerShell 中：
+
+```powershell
+./apps/windows/build.ps1 -Zip
+```
+
+产物是 `apps/windows/dist/DocFlow/DocFlow.exe`（自包含，无需安装 .NET），`-Zip` 另外生成 `DocFlow-win-x64.zip`。脚本会：
+
+- 以静态 C 运行库链接引擎，并把 Visual C++ 运行库放在内置的 `python.exe` 旁边（onnxruntime、PyMuPDF 等依赖它），使应用能在没有安装 VC++ 运行库的电脑上运行；
+- 检查应用、引擎和 Python 运行环境中每个 `.exe/.dll/.pyd` 的依赖都能在干净的 Windows 上找到（`runtime/check-windows-dlls.py`），否则构建失败；
+- 可选地用 Authenticode 签名所有未签名的二进制文件：`-SignPfx 证书.pfx`（密码放在 `DOCFLOW_SIGN_PASSWORD`）或 `-SignThumbprint <证书指纹>`，使用 RFC 3161 时间戳。签名后 SmartScreen 与“智能应用控制”不再拦截（新证书需要积累信誉）。
+
+### macOS
+
+需要 Xcode 15.3 或更高版本（或对应的 Command Line Tools）和 Rust：
+
+```bash
+bash apps/macos/build.sh --pkg
+```
+
+产物是 `apps/macos/dist/DocFlow.app`，`--pkg` 另外生成安装包 `DocFlow-macos-<arch>.pkg`（没有 Developer ID 时推荐用它分发）；`--dmg` 和 `--zip` 生成磁盘映像和 zip。默认为当前 Mac 的架构构建，`--arch x86_64` 可在 Apple 芯片上为 Intel Mac 构建（运行环境这一步需要 Rosetta）。
+
+- 运行环境构建会检查每个二进制文件要求的最低系统版本不高于 macOS 14：在更新的 macOS 上构建时，pip 可能选到只支持新系统的 wheel，那样的构建会在 macOS 14 上无法导入。请在 macOS 14 上构建发行版（CI 即如此）。
+- 没有 Developer ID 时使用临时（ad-hoc）签名：内置 Python 的每个二进制文件、引擎和应用都会由内向外重新签名并封存，构建时逐一严格校验，并拒绝指向包外的符号链接。“已损坏”只会出现在签名无效的应用上，这些检查保证构建出的应用签名有效。安装包只包含与签名时完全一致的应用（打包后会再校验一次），装好的应用不带下载隔离标记。
+- 有 Apple Developer ID 时，可以签名并公证，用户打开时没有任何提示：
+
+  ```bash
+  xcrun notarytool store-credentials docflow --apple-id <Apple ID> --team-id <团队 ID> --password <App 专用密码>
+  bash apps/macos/build.sh --sign "Developer ID Application: 姓名 (团队 ID)" \
+      --installer-sign "Developer ID Installer: 姓名 (团队 ID)" --notarize docflow --pkg --dmg
+  ```
+
+  脚本由内向外以强化运行时和安全时间戳签名全部 Mach-O 文件（只有 Python 解释器带必要的例外权限），签名安装包，提交公证、等待结果并把公证票据装订到应用、安装包和磁盘映像上。
+
+`.github/workflows/desktop.yml` 在 macOS 14（arm64 与 x86_64）和 Windows 上构建两个应用；配置了签名相关的仓库机密时自动签名和公证，没有时 macOS 只生成未签名的安装包，Windows 生成未签名的 zip。
 
 ## 架构
 
-- Rust、Axum、Tokio：带文档级访问控制的 HTTP API、管理 API、上传流、SSE 实时进度和后台 Worker。
-- SQLx、PostgreSQL：元数据、三种 Markdown、最终 HTML、PDF 路径与大小、管理员、加密配置、任务租约和不可删除的详细事件。
-- PostgreSQL 持久队列：Worker 通过 `FOR UPDATE SKIP LOCKED` 并发领取任务，不再依赖 Redis/Celery。
-- Tokio 全站翻译池：Google 与 DeepSeek 使用彼此独立的 FIFO 队列和并发执行槽；多个分段可合并为一个请求，单篇文档还有独立的在途请求上限。管理员可在后台调整两个池的并发、分段长度、每请求段数和全局翻译提示词。
-- Python / BabelDOC 0.6.4：pdf2zh-next 使用的原生 PDF 排版内核，在受管控的独立进程中执行 CPU 版面分析与译文回填。它不持有云服务密钥，也不直接调用 Google / DeepSeek；通过有界 JSONL 管道把段落交给 Rust 的现有翻译池。
-- VPS 当前目录：`./data` 绑定挂载 PostgreSQL、实例密钥、源文件、MinerU ZIP、三种 Markdown、期刊排版 PDF、HTML、WebP、事件和归档清单，不使用 Docker 命名卷。
-- Cloudflare R2：可选的异地对象镜像；失败不会阻止本地任务发布，也不会触发本地删除。
-- Vue 3、Ant Design Vue、Vite：提交页、公开文库、阅读页、SSE 进度页和 `/admin` 管理后台；界面使用标准 Ant Design 的布局、表单、表格和反馈组件。
-- Nginx：同源反向代理、SSE 透传和 SPA 路由。
-
-旧 Python/FastAPI 代码保留在 `backend/` 仅用于迁移审计，Compose 不再构建或运行它。
-
-## 两种处理方式
-
-| | MinerU 文档转换 | PDF 原生翻译（pdf2zh） |
-| --- | --- | --- |
-| 输入 | MinerU 支持的 PDF、Office、图片、HTML | 带可用文本层、未加密的 PDF |
-| 版面 | 解析为 Markdown，再生成统一版式 PDF | 尽量保持原文页面布局、尺寸、图像及公式 |
-| 下载 | Markdown、PDF、完整文件包 | 中文 PDF、双语对照 PDF、完整文件包 |
-| 阅读页 | 默认渲染 Markdown | 显示文件与处理记录，点击后才在新窗口预览 PDF |
-| MinerU 密钥 | 需要 | 不需要 |
-| 翻译与存储 | 共用三档服务、全站池、后台参数；本地永久归档 | 与左侧完全相同，无第二套翻译配置 |
-
-原生模式使用 [BabelDOC 0.6.4](https://github.com/funstory-ai/BabelDOC/releases/tag/v0.6.4)，不是把 pdf2zh 的 Web 服务再部署一套。选择它是为了把 pdf2zh-next 的排版能力接到本项目的统一调度中；接口按精确版本固定并有契约测试，升级不能直接换成 `latest`。[pdf2zh-next 上游说明](https://pdf2zh-next.com/)
-
-扫描页、仅含页码文本的扫描件、无文本层或加密 PDF 会停止原生处理，提示改用 MinerU 或先解密，不会悄悄当作成功。混合扫描文档也建议使用 MinerU。当前采用逐段文本回填，关闭上游额外的 LLM 组批、术语抽取和跨页段落拼接，以免绕过全站设置。复杂行内粗斜体等富文本不保证逐项复刻；竖排及无法提取的文字也不适合此模式。
-
-## 数据规则
-
-- 新文档和处理事件默认私有：只有持有该文档浏览器凭证的上传者和管理员可读取；管理员主动公开后才会出现在公开文库。
-- 文档详情、SSE 事件、Markdown、源文件、ZIP 和图片使用同一套权限判断，私有状态不是仅在列表中隐藏。
-- MinerU 的 Markdown 永久保存：数据库和本地 `.md` 文件同时持久化原稿、中文译稿和规范化终稿。原生路线不伪造 Markdown、HTML 或 MinerU ZIP；这些字段为空是正常情况。
-- MinerU 的 PDF 在 Worker 内使用本地 Chromium 打印；KaTeX、字体和图片均来自容器或永久目录，不依赖外部 CDN。版式包含 A4 版心、衬线中英文字体、摘要区、分级标题、表格/图片分页控制、页眉和页码。
-- 原生路线生成与原文页数相同的中文 PDF，以及原文/译文交替排列、页数为原文两倍的双语 PDF；两份 PDF 均须通过页数、页面尺寸、逐页解析与文件完整性检查。任何段落回调错误或排版错误都会使本次任务失败，不发布部分未翻译的结果。
-- Chromium 以非特权用户运行，每次 PDF 渲染使用独立且可写的临时配置、缓存和用户数据目录；单次浏览器异常会在 PDF 阶段内使用全新运行目录重试，不必立即重跑整份文档。
-- 翻译分块可以并行完成，但会按原始序号合并；每块都独立校验公式、代码、图片和链接占位符。常见的空格、反引号、编号改写或重复编号会按原文顺序在本地无损修复；仍无法确认时自动改为“保护内容留在本机、只翻译普通文本片段”的隔离模式。
-- 每个通过校验的译文分块都会写入工作目录断点，并校验源文本、翻译档位与本次翻译配置是否一致。网络、服务或后续步骤失败导致任务重跑时复用相符的断点；更换提示词后不会误用旧译文。发布成功后才随可再生工作区一起清理。
-- 图片不使用 MinerU 链接：本地或远程图片会下载、去重、转成 WebP，并改写为本站稳定 API 路径。
-- 展示标题、原始上传名和可修改的下载名保存在 PostgreSQL；磁盘只使用随机 `storage_key`、UUID 目录与 `source.pdf` 等 ASCII 物理名。
-- 管理员重命名只更新数据库映射，不移动或覆盖磁盘文件，也不改变图片 URL。
-- `GET /api/v1/jobs/{id}/pdf` 下载本任务的主 PDF：MinerU 返回重新排版 PDF，原生任务返回中文 PDF；原生任务的 `?variant=dual` 返回双语 PDF。`GET /api/v1/jobs/{id}/bundle` 包含源文件、该模式全部已有产物与元数据。
-- 原生输出只进入 `archives/{storage_key}/pdf2zh/mono.pdf` 和 `dual.pdf`，不写入公开静态目录。下载与主动预览均走原有文档鉴权，展示文件名由数据库生成，不影响磁盘路径。
-- 发布完成后只删除 `/data/work/{文档 UUID}` 中可再生的 MinerU 解压临时目录；`/data/archives` 永不自动清理。
-- R2 未配置时照常上传和处理；配置后在本地归档完成后追加镜像与 `HeadObject` 校验。
-- 历史 Redis 卷不会在升级中删除，但新架构不再挂载或运行 Redis。
-
-## 工作流与进度
-
-MinerU 路线：
-
-1. `0–4%`：流式上传、SHA-256、PostgreSQL 入队、并发 Worker 原子领取。
-2. `5–52%`：申请 MinerU 上传地址、直传源文件、逐次轮询和页面进度。
-3. `53–64%`：校验公网地址、分块下载 ZIP、防路径穿越和解压规模检查。
-4. `65–70%`：扫描图片、逐张转 WebP、内容寻址去重、改写本站资源路径。
-5. `71–87%`：按任务创建时固定的档位、分段参数和提示词翻译。极速档进入 Google 共享池；均衡档和精准档共用 DeepSeek 池，分别使用非思考和思考模式。分段按配置组批，FIFO 排队、并行执行、按原始序号合并；每次排队、服务调用、限流退避、标记自愈、隔离降级、断点复用、完成数量和耗时都会写入永久事件。整块翻译连续无法通过无损校验时，程序不发布损坏文章，而是把公式、代码、图片和链接留在本地，仅翻译中间的普通文本后原位拼回。
-6. `88–93%`：统一公式定界符、中英文间距、CommonMark/GFM 解析、HTML 白名单消毒，并使用本地 KaTeX 与 Chromium 生成 A4 期刊排版 PDF。
-7. `94–98%`：源文件、Markdown、PDF、打印版 HTML、WebP、MinerU ZIP 与元数据写入本地永久归档并生成清单。
-8. `99–100%`：可选 R2 镜像；无 R2 或镜像失败时保留告警并正常发布，最后只清理可再生工作区。
-
-每个细分步骤都会追加到 `processing_events`。网页通过 SSE 接收实时事件；REST 增量接口可在断线后从任意事件 ID 恢复。
-
-原生路线共用接收、归档和发布步骤，中间阶段为：`5–9%` 文本层检查；`10–29%` 页面、表格、段落和公式分析；`30–79%` 共享池分段翻译；`80–89%` 译文回填、字体与绘制指令；`90–93%` 双 PDF 校验。页面显示具体阶段计数、组批信息、队列等待时间、服务耗时、重试和断点复用。
-
-排版回调凑不满一批时约 25 ms 后即允许提交，避免“每次最多段数”大于排版线程数时相互等待。PDF 公式和样式标记会先在 Rust 保护，译文校验后恢复并按原段落编号回填。原生模式只修复标记的大小写和空格等形式差异；编号或顺序变化时转入隔离重译，不按位置重编号，以免调换公式的语义。重试优先复用匹配当前提示词、档位和分段参数的已验证段落断点；原生缓存与 Markdown 缓存隔离。
-
-## 开放 API
-
-机器可读规范：`GET /api/openapi.json`  
-人类可读说明：`GET /api/docs`
-
-主要 v1 接口：
-
 ```text
-POST /api/v1/jobs                         multipart 创建任务
-GET  /api/v1/jobs                         管理员主动公开的任务列表
-GET  /api/v1/jobs/{id}                    状态与最终文章（私有任务需 Cookie）
-GET  /api/v1/jobs/{id}/events             永久事件增量读取
-GET  /api/v1/jobs/{id}/events/stream      SSE 实时进度
-GET  /api/v1/jobs/{id}/markdown           original/translated/normalized
-GET  /api/v1/jobs/{id}/pdf                主 PDF，或 ?variant=journal|mono|dual
-GET  /api/v1/jobs/{id}/source             原始文件
-GET  /api/v1/jobs/{id}/bundle             含 PDF 的完整本地归档 ZIP
-GET  /api/v1/jobs/{id}/assets/{name}      本地 WebP（R2 仅作回退）
+apps/windows/   WinUI 3 应用（.NET 10、Windows App SDK、Fluent Design）
+apps/macos/     SwiftUI 应用（macOS 14+，Swift Package + 组装 .app 的脚本）
+apps/shared/    应用图标的生成脚本
+engine/         docflow-engine：Rust 编写的处理引擎
+  src/            文档库、调度、服务商与翻译池、MinerU、Typst 排版、BabelDOC 监管、JSON-RPC
+  typeset/        期刊 PDF 的 Typst 模板与内置的 MiTeX（LaTeX 公式转 Typst）
+  reader/         阅读视图的样式、脚本与 KaTeX
+  native-pdf/     BabelDOC 适配脚本（在内置 Python 中运行）
+  migrations/     SQLite 结构
+  tests/          端到端测试与模拟服务商
+runtime/        构建内置 Python 3.12 + BabelDOC 运行环境的脚本（Windows / macOS）
 ```
 
-示例：
+- **引擎**（`docflow-engine`）是应用启动的子进程，通过标准输入输出上逐行的 JSON-RPC 通信，日志写入文档库的 `logs/`。标准输入关闭时引擎自行退出，因此不会在应用退出后残留。
+- **存储**：SQLite（WAL 模式）保存文档、处理记录、服务商配置和设置；文件保存在 `archives/`，全部使用随机的 ASCII 物理名，展示标题只存在数据库里。
+- **服务商**：支持四种接口——OpenAI 兼容 Chat Completions、Azure OpenAI、Anthropic Messages、Gemini generateContent——以及各自的模型列表接口。Google 翻译和每个服务商各有一个全局共享的 FIFO 翻译池，并发上限可调，遇到限流自动收缩。
+- **期刊 PDF**：由嵌入引擎的 Typst 0.15 排版，公式经 MiTeX 从 LaTeX 转换，无法转换的公式保留源码而不会让整篇失败。不依赖浏览器。
+- **PDF 原生翻译**：引擎启动内置 Python 中的 BabelDOC 适配脚本，通过有界的 JSONL 管道交换段落；Python 进程不继承任何凭据，任务结束或取消时会被结束。
+- **应用**：Windows 版用 WebView2 显示阅读视图和 PDF，用 Windows 凭据管理器保存 Key；macOS 版用 PDFKit 显示 PDF、WKWebView 显示阅读视图，用钥匙串保存 Key，任务完成时在后台发送通知，Dock 图标显示进行中的文档数。
+
+### 引擎协议
+
+请求 `{"id": 1, "method": "documents.list", "params": {…}}`，响应 `{"id": 1, "result": …}` 或 `{"id": 1, "error": {"code": "…", "message": "…"}}`；引擎另外推送没有 `id` 的通知：`event`（新的处理记录）、`document.changed`、`document.removed`。当前协议版本为 2。
+
+| 方法 | 作用 |
+| --- | --- |
+| `engine.initialize` | 传入 API Key（`mineru`、`provider:<id>`），启动调度器，返回版本和全部设置 |
+| `engine.shutdown` | 停止引擎（关闭标准输入效果相同） |
+| `settings.get` / `settings.update` | 读取、修改偏好设置（含默认翻译服务）和翻译参数 |
+| `secrets.set` / `secrets.verify` | 在内存中设置 Key；向 MinerU 验证 Key |
+| `providers.save` / `providers.delete` | 新增或修改、删除大模型服务商 |
+| `providers.models` / `providers.check` | 获取服务商的模型列表；用某个模型发送测试请求 |
+| `google.check` | 测试能否访问 Google 翻译 |
+| `documents.create` | 以本地文件路径、处理方式和翻译服务（`{"kind":"google"}` 或 `{"kind":"llm","provider_id":…,"model":…}`）新建任务 |
+| `documents.list` / `documents.get` / `documents.events` | 列表与计数、单个文档及其文件路径、分页读取处理记录 |
+| `documents.rename` / `retry` / `cancel` / `delete` | 重命名、重新处理、取消、删除 |
+| `documents.exportBundle` | 把一个文档的全部文件和处理记录导出为 ZIP |
+
+## 开发与测试
 
 ```bash
-curl -c docflow.cookies -F "file=@paper.pdf" -F "title=文档标题" -F "translation_tier=3" \
-  http://你的服务器IP:38100/api/v1/jobs
+cargo test --manifest-path engine/Cargo.toml          # 引擎单元测试（分段、占位符修复、表格、服务商协议、Typst 排版…）
+python engine/tests/e2e.py --engine engine/target/debug/docflow-engine \
+    --resources runtime/build/<平台>/resources --work-dir <临时目录> [--mock] [--pdf <文本层 PDF>]
 ```
 
-上传响应中的 Cookie 是该私有文档的访问凭证。命令行后续读取进度或下载时使用 `-b docflow.cookies`。网页会自动管理该凭证。全站始终翻译为中文；`translation_tier` 可选 1–3，不传时采用管理员默认值，最终选择会在任务创建时固定。客户端提交的旧版 `translate` 字段会被兼容接收但忽略。
+`e2e.py` 通过 JSON-RPC 驱动真实的引擎，不需要 API Key，也不产生费用：
 
-原生模式在同一上传请求中增加 `-F "processing_mode=pdf2zh"`。`processing_mode` 省略时仍使用 `mineru`，已有任务也保留 MinerU 模式；模式创建后不可改变，重新选择模式需提交新任务。原生任务只接受 PDF，不依赖 MinerU Key；两条路线都至少需要一个已配置的翻译服务。
+- 默认设置 `DOCFLOW_FAKE_PROVIDERS=1`，用本地测试译文代替云端翻译，并用合成的 MinerU 结果走完 MinerU 路线；给出 `--resources` 和 `--pdf` 时还会用真实的 BabelDOC 运行环境完成一次 PDF 原生翻译。
+- `--mock` 改为通过真实的 HTTP 请求访问本地的模拟服务（`engine/tests/mock_providers.py`：Google 免费接口、OpenAI 兼容、Anthropic、Gemini）。模拟服务会故意限流、截断输出、漏掉段落、改坏或删掉占位符、拒绝翻译，并返回错误的 Key 等，用来验证获取模型列表、多 Key 轮换和上面的每一级自动修复。
 
-`GET /api/config/public` 的 `processing_modes` 分别报告可用性与允许的扩展名。旧字段 `accepting_uploads` 只代表默认 MinerU 模式，不应用它阻止原生模式。详情中的 `pdf_variants_available: {journal, mono, dual}` 和 `markdown_available` 用于判断已有产物。`?inline=true` 仅改变 PDF 的浏览器显示方式，不放宽访问权限。
+`engine/native-pdf/` 下另有 BabelDOC 适配层的单元测试和离线排版冒烟测试（见其中的 README）。
 
-极速档使用 Google Cloud Translation Basic v2 官方接口，需要管理员配置已启用 Cloud Translation API 的 Google Cloud API Key。Google 每月前 50 万字符有抵扣额度，超出后按官方定价计费。均衡档和精准档需要 DeepSeek API Key，模型固定为 `deepseek-v4-flash`，不能由前端改成语义不明的其他模型。管理员设置上传页默认档位，访问者可以为单次任务选择任一已开放档位。
+开发时可以直接运行应用：Windows 版在 Visual Studio 或 `dotnet build` 后运行，macOS 版在 `apps/macos` 中执行 `swift run`。两个应用都会自动使用 `engine/target` 下已构建的引擎和 `runtime/build` 下的运行环境；也可以用 `DOCFLOW_ENGINE`、`DOCFLOW_RESOURCES` 和 `DOCFLOW_DATA_DIR` 环境变量分别指定引擎、运行环境和文档库。想在应用里试用大模型流程而不花钱时，可以运行 `python engine/tests/mock_providers.py 8765 --open`，再添加一个 API 地址为 `http://127.0.0.1:8765/v1` 的自定义服务商。
 
-### 翻译并发与长度保护
+## 许可
 
-管理员在 `/admin` 的翻译运行参数中分别配置两个服务。这里的“每次提交”指 Worker 发给翻译服务的一次 HTTP 请求，不是用户一次上传可提交的文件数；“段”指按长度切出的翻译分段。
-
-| 参数 | Google 极速档 | DeepSeek 均衡档与精准档 |
-| --- | --- | --- |
-| 全站并发请求数 | 默认 32；范围 1–256 | 默认 64；范围 1–2,000，两档合计 |
-| 每段最长字符数 | 默认 4,000；范围 100–4,000 | Compose 默认 12,000；范围 100–12,000 |
-| 每次请求最多提交段数 | 默认 4；范围 1–100 | 默认 4；范围 1–64 |
-
-每篇文档的在途请求数另设全局上限，默认 8，可设为 1–32。字符数按 Unicode code points 计算，不按 UTF-8 字节或中文“词”计算。段数和段长都是上限：不足一批会直接提交，超过请求体或模型预算会自动拆成更小的批次。
-
-- Google Basic v2 的单次请求硬限制是 100 KB，本项目将实际 JSON 请求体控制在 80,000 字节以内。官方另建议每次请求不超过 5,000 字符以降低延迟，这不是硬限制；需要低延迟时可降低每批段数或段长。[Google Cloud Translation 配额](https://docs.cloud.google.com/translate/quotas)
-- Google 官方未为 Basic 文本翻译单列并发连接上限；256 是本项目的应用安全阈值，不是 Google 的额度承诺。内置分钟限流器按默认配额预留 20% 余量，最多每分钟 480 万字符、24 万次请求；实际仍受账号自定义配额和同一项目其他调用影响。[Google Cloud Translation 配额](https://docs.cloud.google.com/translate/quotas)
-- DeepSeek 的 2,000 上限取 `deepseek-v4-flash` 官方账号级 2,500 并发的 80%。均衡档、精准档共用这一个池；同账号在其他应用中的请求也计入官方总额，应相应调低后台并发。[DeepSeek 限流说明](https://api-docs.deepseek.com/quick_start/rate_limit/)
-- DeepSeek V4 Flash 的上下文窗口为 100 万 tokens，最大输出为 38.4 万 tokens。本项目把每批待译正文控制在 32,000 字符以内；同时以 UTF-8 字节数保守估计提示词和输入的 token 用量，再计入输出预算与协议余量，控制在上下文窗口的 80% 以内，输出预算也不超过官方最大值的 80%。超出任一预算会拆批，不能把“每段字符数 × 每批段数”直接当成模型可以接收的 token 数。[DeepSeek 模型与定价](https://api-docs.deepseek.com/quick_start/pricing/)
-- 均衡档显式关闭思考，精准档显式开启思考；思考模式会预留更大的输出预算，返回的思考过程不混入译文。[DeepSeek 思考模式](https://api-docs.deepseek.com/guides/thinking_mode/)
-- 收到限流、可重试的服务故障、网络超时或 `Retry-After` 时，任务会退避后重新进入同一队列。整份任务最多自动尝试 3 次；最终失败时继续保留源文件、事件和翻译断点，管理员可以修复配置后手动重试。
-- Worker 启动时持有 PostgreSQL advisory lock，保证整个站点只有一个翻译池所有者；不要使用 `docker compose up --scale worker=...` 横向复制 Worker。锁由独立连接持有并定期检查，锁连接失效时会停止本进程的 Worker 和翻译池，退出后由 Compose 重启并重新竞争锁。
-
-### 全局翻译提示词与生效时机
-
-后台可编辑 1–12,000 个 Unicode 字符的全局系统提示词。两条路线的 DeepSeek 两档每次翻译请求、拆分请求和请求重试都会使用该任务固定的提示词。可填写术语、语气和格式要求。程序会在其后追加不可编辑的结构保护规则及批次输出协议：MinerU 保护 Markdown、公式、代码和链接；原生路线只翻译段落，禁止额外生成 Markdown 标题/围栏，并恢复 PDF 公式与样式标记。Google Basic v2 没有系统提示词参数，因此该项不影响极速档。
-
-运行参数作为一份 JSON 原子写入 PostgreSQL，避免读到一半新、一半旧的配置。全局提示词只通过已登录的管理接口读取，不在公开配置、任务响应或事件中下发。
-
-- **两个池的并发数**：Worker 正常运行时约每 2 秒同步后台设置，无需重启。调低上限时已发出的请求继续完成，新请求等待空位；暂时读取失败时沿用上次有效并发，恢复连接后继续同步。
-- **段长、每批段数、单文档并发和提示词**：新任务提交时保存快照。修改后台设置不会改变正在处理或等待自动重试的任务，自动重试继续使用原快照。
-- **管理员手动重试**：失败任务保留原档位，但改用重试时的最新运行参数与提示词；只复用与新配置匹配的断点。
-- **旧任务**：升级前尚无快照的任务首次进入翻译阶段时补写快照，此后按同一规则重试。
-- **环境变量**：只用于未保存后台运行配置时的初始值。已有后台配置优先；修改 `.env` 不会覆盖已保存的设置。直接运行服务器、不使用 Compose 时，DeepSeek 初始段长为 10,000；本 README 的 Compose 显式设为 12,000。
-
-管理 API（需要管理员 Cookie 或 Bearer token）：
-
-```text
-GET /api/admin/settings
-    返回 translation_runtime、translation_runtime_defaults、translation_runtime_limits
-PUT /api/admin/settings/translation-runtime
-    整体校验并保存运行参数，返回更新后的管理设置
-```
-
-`PUT` 请求体示例（直接提交对象，不要再包一层 `translation_runtime`）：
-
-```json
-{
-  "google": {
-    "concurrency": 32,
-    "chunk_chars": 4000,
-    "max_segments_per_request": 4
-  },
-  "deepseek": {
-    "concurrency": 64,
-    "chunk_chars": 12000,
-    "max_segments_per_request": 4
-  },
-  "per_document_concurrency": 8,
-  "system_prompt": "请将输入内容忠实翻译为简体中文，统一术语，不添加解释。"
-}
-```
-
-越界、缺少字段、类型错误或未知字段会返回 HTTP 400，原配置保持不变。上述硬限制不替代账号额度管理；应根据 VPS 资源、实际限流和调用费用逐步调整。
-
-## VPS 一键部署
-
-默认监听所有网卡的 `38100` 端口，部署后访问 `http://你的服务器IP:38100`。VPS 只需要 Docker Engine 和 Docker Compose，不需要 Git、Rust、Node 或手工创建 `.env`。Compose 直接拉取 GHCR 公共镜像，首次启动自动生成数据库密码与实例密钥，已有密钥永不覆盖；域名、HTTPS 和反向代理由部署者按需配置。
-
-```bash
-mkdir -p /opt/docflow && cd /opt/docflow
-curl -fsSLO https://raw.githubusercontent.com/FengYuchen1314/docflow/main/docker-compose.yml
-docker compose up -d
-```
-
-### 手动创建 `docker-compose.yml`（完整内容）
-
-不需要克隆仓库。可以在 VPS 的任意空目录中手动新建 `docker-compose.yml`，完整复制下面的内容。以下代码块与仓库根目录的 `docker-compose.yml` 保持一致：
-
-```yaml
-name: docflow
-
-x-logging: &default_logging
-  driver: json-file
-  options:
-    max-size: "10m"
-    max-file: "5"
-
-x-backend-environment: &backend_environment
-  APP_NAME: ${APP_NAME:-文流}
-  DATABASE_HOST: db
-  DATABASE_PORT: "5432"
-  DATABASE_NAME: ${POSTGRES_DB:-docflow}
-  DATABASE_USER: ${POSTGRES_USER:-docflow}
-  DATABASE_PASSWORD_FILE: /run/docflow/postgres_password
-  SECRET_KEY_FILE: /run/docflow/secret_key
-  DATA_ROOT: /data
-  MAX_UPLOAD_MB: ${MAX_UPLOAD_MB:-200}
-  TRANSLATION_CHUNK_CHARS: ${TRANSLATION_CHUNK_CHARS:-12000}
-  TRANSLATION_PER_DOCUMENT_CONCURRENCY: ${TRANSLATION_PER_DOCUMENT_CONCURRENCY:-8}
-  TRANSLATION_QUEUE_CAPACITY: ${TRANSLATION_QUEUE_CAPACITY:-4096}
-  GOOGLE_TRANSLATION_CONCURRENCY: ${GOOGLE_TRANSLATION_CONCURRENCY:-32}
-  DEEPSEEK_TRANSLATION_CONCURRENCY: ${DEEPSEEK_TRANSLATION_CONCURRENCY:-64}
-  MINERU_POLL_SECONDS: ${MINERU_POLL_SECONDS:-5}
-  MINERU_MAX_WAIT_SECONDS: ${MINERU_MAX_WAIT_SECONDS:-7200}
-  WEBP_QUALITY: ${WEBP_QUALITY:-88}
-  PDF_RENDER_TIMEOUT_SECONDS: ${PDF_RENDER_TIMEOUT_SECONDS:-180}
-  PDF2ZH_CONCURRENCY: ${PDF2ZH_CONCURRENCY:-1}
-  PDF2ZH_TIMEOUT_SECONDS: ${PDF2ZH_TIMEOUT_SECONDS:-7200}
-  DATABASE_POOL_SIZE: ${DATABASE_POOL_SIZE:-20}
-  PUBLIC_ORIGIN: "${PUBLIC_ORIGIN:-}"
-  RUST_LOG: ${RUST_LOG:-docflow_server=info,tower_http=info}
-  TZ: ${TZ:-Asia/Shanghai}
-
-services:
-  # 第一次启动时生成实例密钥，并准备宿主机持久化目录。已有文件永不覆盖。
-  init:
-    image: alpine:3.22
-    restart: "no"
-    logging: *default_logging
-    user: "0:0"
-    command:
-      - /bin/sh
-      - -ec
-      - |
-        mkdir -p /config /documents/archives /documents/work
-        if [ ! -s /config/secret_key ]; then
-          head -c 64 /dev/urandom | sha256sum | cut -d ' ' -f 1 > /config/secret_key
-        fi
-        if [ ! -s /config/postgres_password ]; then
-          head -c 64 /dev/urandom | sha256sum | cut -d ' ' -f 1 > /config/postgres_password
-        fi
-        chmod 755 /config /documents
-        chmod 644 /config/secret_key /config/postgres_password
-        if [ ! -e /config/documents_permissions_v1 ]; then
-          chown -R 10001:10001 /documents
-          touch /config/documents_permissions_v1
-        fi
-    volumes:
-      - type: bind
-        source: ./data/config
-        target: /config
-      - type: bind
-        source: ./data/documents
-        target: /documents
-
-  db:
-    image: postgres:17-alpine
-    restart: unless-stopped
-    logging: *default_logging
-    environment:
-      POSTGRES_DB: ${POSTGRES_DB:-docflow}
-      POSTGRES_USER: ${POSTGRES_USER:-docflow}
-      POSTGRES_PASSWORD_FILE: /run/docflow/postgres_password
-      TZ: ${TZ:-Asia/Shanghai}
-    depends_on:
-      init:
-        condition: service_completed_successfully
-    volumes:
-      - type: bind
-        source: ./data/postgres
-        target: /var/lib/postgresql/data
-      - type: bind
-        source: ./data/config
-        target: /run/docflow
-        read_only: true
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-docflow} -d ${POSTGRES_DB:-docflow}"]
-      interval: 5s
-      timeout: 5s
-      retries: 20
-
-  migrate:
-    image: ghcr.io/fengyuchen1314/docflow-server:latest
-    pull_policy: always
-    environment: *backend_environment
-    command: ["migrate"]
-    depends_on:
-      db:
-        condition: service_healthy
-    volumes:
-      - type: bind
-        source: ./data/documents
-        target: /data
-      - type: bind
-        source: ./data/config
-        target: /run/docflow
-        read_only: true
-    restart: "on-failure:5"
-    logging: *default_logging
-
-  api:
-    image: ghcr.io/fengyuchen1314/docflow-server:latest
-    pull_policy: always
-    restart: unless-stopped
-    logging: *default_logging
-    environment: *backend_environment
-    command: ["api"]
-    depends_on:
-      migrate:
-        condition: service_completed_successfully
-    volumes:
-      - type: bind
-        source: ./data/documents
-        target: /data
-      - type: bind
-        source: ./data/config
-        target: /run/docflow
-        read_only: true
-    healthcheck:
-      test: ["CMD", "docflow-server", "healthcheck"]
-      interval: 10s
-      timeout: 5s
-      retries: 12
-
-  worker:
-    image: ghcr.io/fengyuchen1314/docflow-server:latest
-    pull_policy: always
-    restart: unless-stopped
-    logging: *default_logging
-    environment:
-      <<: *backend_environment
-      WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-3}
-    command: ["worker"]
-    depends_on:
-      migrate:
-        condition: service_completed_successfully
-    volumes:
-      - type: bind
-        source: ./data/documents
-        target: /data
-      - type: bind
-        source: ./data/config
-        target: /run/docflow
-        read_only: true
-
-  web:
-    image: ghcr.io/fengyuchen1314/docflow-web:latest
-    pull_policy: always
-    restart: unless-stopped
-    logging: *default_logging
-    depends_on:
-      api:
-        condition: service_healthy
-    ports:
-      - "0.0.0.0:${HTTP_PORT:-38100}:80"
-    volumes:
-      - type: bind
-        source: ./data/documents
-        target: /data
-        read_only: true
-```
-
-保存文件后，在同一目录启动并查看容器状态：
-
-```bash
-docker compose up -d
-docker compose ps
-```
-
-默认监听端口为 `38100`，无需指定服务器 IP。如需修改，只需在同目录创建 `.env`：
-
-```dotenv
-HTTP_PORT=9000
-```
-
-`PUBLIC_ORIGIN` 默认留空，OpenAPI 会使用相对地址并自动跟随当前 IP、域名或反向代理入口。如确实需要在 OpenAPI 中固定绝对地址，可另外设置 `PUBLIC_ORIGIN=https://你的域名`。
-
-运行后目录即完整实例：
-
-```text
-/opt/docflow/
-├── docker-compose.yml
-└── data/
-    ├── config/       # 实例密钥与 PostgreSQL 密码
-    ├── postgres/     # 完整 PostgreSQL 数据目录
-    └── documents/    # 源文件、Markdown、PDF、HTML、WebP、MinerU ZIP 与工作区
-```
-
-端口、Worker 文档并发等启动参数都有保守默认值；如需覆盖，可在同目录创建可选 `.env`，参考仓库中的 `.env.example`。翻译池并发、分段、批次和提示词应在 `/admin` 保存，无需编辑 Compose 或重启服务。MinerU、Google Cloud Translation、DeepSeek 和可选 R2 凭据也始终在 `/admin` 中配置，而不是写入 Compose 或 `.env`。
-
-原生排版的 ONNX 模型、字体、CMap 与 tokenizer 资源在镜像构建时下载并校验，任务期间禁止 Python 排版进程主动访问外网；因此新版服务端镜像和首次构建会比仅 MinerU 的版本大。无需新增服务、额外端口或 GPU。`PDF2ZH_CONCURRENCY` 是本机同时排版的 PDF 数（默认 1，范围 1–4），不是另一个翻译并发池；`PDF2ZH_TIMEOUT_SECONDS` 是单次原生执行的总时限（默认 7,200 秒，范围 300–14,400）。应先观察 VPS 的内存与 CPU 再提高本机并行数。等待排版位和云服务时都会续租，超时或 Worker 停止会关闭子进程，保留源文件及断点供重试。
-
-管理员访问 `http://你的服务器IP:38100/admin`：
-
-1. 尚无管理员时，直接设置账号、密码并确认密码即可注册，无需初始化密钥、邀请码或读取服务器文件。首位成功注册者成为唯一管理员，之后关闭注册，只显示登录表单。部署后请及时注册；已有 Python 版本的 Argon2 密码可直接登录，不会重置原管理员。
-2. 使用 MinerU 路线时配置并验证 MinerU API Key 与模型；只用 PDF 原生翻译可以跳过。
-3. 配置并验证 Google Cloud Translation API Key 后开放极速档。
-4. 配置并验证 DeepSeek API Key 后开放均衡档（V4 Flash 非思考）和精准档（V4 Flash 思考）；模型名称由系统固定。
-5. 在“默认翻译档位”中设置上传页默认值；访问者仍可为单次任务选择其他已开放档位。
-6. 在翻译运行参数中分别设置 Google、DeepSeek 的并发、每段字数和每请求段数；按需调整单文档并发与全局系统提示词，保存后会显示实际生效规则。
-7. 如需异地镜像，可选配置 R2 Account ID、Access Key ID、Secret Access Key 和 Bucket。凭据在数据库中使用 `data/config/secret_key` 派生的 Fernet 密钥加密。
-8. 在“文档管理”中查看全部文档、切换公开/私有状态，并修改展示标题与下载文件名；扩展名必须保持一致，后端物理路径不会变化。
-
-Cloudflare R2 凭据应仅授予目标存储桶对象读写权限。**存储桶必须保持私有**：镜像包含私有文档，请关闭公开访问、`r2.dev` 和公开自定义域名，后台旧版“公开域名”字段建议留空。应用只能保护经本站下载接口的访问，不能保护公开桶的对象直链。应用没有 R2 删除调用，也不配置生命周期规则。
-
-## 运维与备份
-
-```bash
-docker compose ps
-docker compose logs -f api worker
-curl --fail http://127.0.0.1:38100/api/health
-```
-
-完整迁移或冷备份时先停服务，再打包 Compose 与整个 `data` 目录：
-
-```bash
-cd /opt/docflow
-docker compose stop
-tar -czf ../docflow-backup-$(date +%Y%m%d-%H%M%S).tar.gz docker-compose.yml data
-docker compose start
-```
-
-在新 VPS 原样解压后执行 `docker compose up -d` 即可恢复。不要只复制 `documents`：数据库、加密凭据和文件路径映射需要作为同一实例一起迁移。R2 若已配置，只是额外镜像，不替代本地 `data` 备份。
-
-首次启动会幂等创建旧版 Alembic 基础表，再执行 Rust 的 SQLx 增量迁移；因此全新空库和旧版数据库都可直接启动。现有 SQLx 迁移文件不会改写，不会触发历史迁移 checksum 冲突。所有数据库变更均为非破坏性操作，不提供降级或删除逻辑。
-
-## 发布前验证
-
-GitHub Actions 在发布镜像前并行检查前后端。前端使用与生产构建一致的 Node.js 24，执行 `npm ci`、`npm test`、Vue/TypeScript 类型检查和 Vite 构建；后端执行 Rust 格式、测试、Clippy、全新数据库迁移、重复迁移和非特权 Chromium PDF 渲染检查。另有真实 PostgreSQL 集成检查，验证单连接池可启动 Worker、第二个 Worker 无法取得同一全站锁、锁连接被终止后原 Worker 有限时退出。运行参数的 HTTP 集成检查会验证管理员权限、边界与 Unicode 字符计数、配置原子保存、两条路线的任务快照、手动重试、下载权限和公开接口的提示词隔离。两个检查任务全部通过才会发布任何镜像。
-
-原生引擎另有 Python 标准库测试与 BabelDOC 0.6.4 的实际 API 契约检查。`server/native-pdf/smoke.py` 用本地确定性测试译文走真实 CPU 排版，检查中文字体、两栏、矢量图、页数、尺寸、原译双语对照，以及回调失败、扫描件和加密文件拒绝。CI 在非特权、`--network none` 容器中执行它，既验证离线资源完整，也不产生翻译服务费用。它验证运行链路与产物，不替代真实翻译质量评估。
-
-集成检查只连接 CI 临时 PostgreSQL。独占锁检查在没有文档、管理员和服务密钥的空库中启动临时 Worker；运行参数 HTTP 检查随后只启动 API，不启动 Worker，测试密钥直接写入该临时库作为非真实 fixture。两者均不调用 MinerU、Google 或 DeepSeek，不产生翻译费用。不要把 `scripts/worker-pool-smoke.py` 或 `scripts/translation-runtime-smoke.py` 指向已有实例或真实业务数据库。README 中的 Compose 复制块由 `python3 scripts/verify-compose-readme.py` 校验，与根目录文件逐字一致。
-
-## 安全边界
-
-- 新上传默认私有，但当前使用的是明文 HTTP；同网段攻击者仍可能窃取 Cookie 或管理员凭据。敏感材料应在配置 HTTPS 后使用。
-- 管理员密码使用 Argon2，管理会话为 12 小时 HS256 JWT，并同步写入 HttpOnly、SameSite=Lax Cookie；数据库只保存文档访问凭证的 SHA-256 哈希。
-- ZIP 解压限制路径、条目数与总大小；外链下载拒绝私网、回环和链路本地地址。
-- HTML 由 Comrak 渲染，并经 Ammonia 白名单消毒。
-- 原生排版子进程不继承数据库、实例或翻译密钥；进出消息、回调数量和日志尾部均有上限。解析器仍处理不可信 PDF，Python 侧网络保护不等同于完整系统沙箱，应保持非特权容器运行并及时更新安全修复。
-- 当前入口是明文 IP + 端口。管理员填写凭据时应使用可信网络、VPN 或 SSH 隧道；长期公网运行建议后续增加域名和 HTTPS。
-
-## 开源组件与许可
-
-本仓库原有代码的 MIT 许可证保留不变。原生 PDF 镜像同时包含 **AGPL-3.0** 的 BabelDOC / PyMuPDF 等组件，不能将整个镜像理解为仅适用 MIT。上游版本、源码入口、许可证及本项目适配说明见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。部署、再分发或修改这些组件时须遵守其对应许可证与源码提供要求；网页页脚提供源码和许可入口。
+DocFlow 本身以 [MIT 许可证](LICENSE)发布。构建产物中内置的 BabelDOC 与 PyMuPDF 以 **GNU AGPL v3** 发布，因此包含 PDF 原生翻译运行环境的应用包整体不能视为仅适用 MIT；再分发或修改这些组件时须遵守其许可证与源码提供要求。期刊 PDF 由 Typst 排版，公式由 MiTeX 转换，阅读视图使用 KaTeX；Windows 版内置 Microsoft Visual C++ 可再分发运行库。各组件、字体与模型保留其原始许可证，详见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。

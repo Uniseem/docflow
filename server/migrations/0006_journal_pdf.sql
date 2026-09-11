@@ -1,4 +1,0 @@
-ALTER TABLE documents
-    ADD COLUMN IF NOT EXISTS pdf_path TEXT,
-    ADD COLUMN IF NOT EXISTS pdf_size BIGINT;
-

@@ -1,0 +1,115 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>zh_CN</string>
+	<key>CFBundleLocalizations</key>
+	<array>
+		<string>zh-Hans</string>
+	</array>
+	<key>CFBundleName</key>
+	<string>DocFlow</string>
+	<key>CFBundleDisplayName</key>
+	<string>DocFlow</string>
+	<key>CFBundleExecutable</key>
+	<string>DocFlow</string>
+	<key>CFBundleIdentifier</key>
+	<string>io.github.fengyuchen1314.docflow</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>__VERSION__</string>
+	<key>CFBundleVersion</key>
+	<string>__BUILD__</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>14.0</string>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.productivity</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>NSPrincipalClass</key>
+	<string>NSApplication</string>
+	<key>NSSupportsAutomaticTermination</key>
+	<false/>
+	<key>NSSupportsSuddenTermination</key>
+	<false/>
+	<key>NSHumanReadableCopyright</key>
+	<string>© 2026 FengYuchen1314 · MIT License</string>
+	<key>NSDesktopFolderUsageDescription</key>
+	<string>DocFlow 需要读取你选择翻译的文件，并把导出的文件保存到你指定的位置。</string>
+	<key>NSDocumentsFolderUsageDescription</key>
+	<string>DocFlow 需要读取你选择翻译的文件，并把导出的文件保存到你指定的位置。</string>
+	<key>NSDownloadsFolderUsageDescription</key>
+	<string>DocFlow 需要读取你选择翻译的文件，并把导出的文件保存到你指定的位置。</string>
+	<key>NSRemovableVolumesUsageDescription</key>
+	<string>DocFlow 需要读取你选择翻译的文件，并把导出的文件保存到你指定的位置。</string>
+	<key>NSNetworkVolumesUsageDescription</key>
+	<string>DocFlow 需要读取你选择翻译的文件，并把导出的文件保存到你指定的位置。</string>
+	<key>CFBundleDocumentTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>PDF 文档</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>LSHandlerRank</key>
+			<string>Alternate</string>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>com.adobe.pdf</string>
+			</array>
+		</dict>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>Office 文档</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>LSHandlerRank</key>
+			<string>Alternate</string>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>org.openxmlformats.wordprocessingml.document</string>
+				<string>com.microsoft.word.doc</string>
+				<string>org.openxmlformats.presentationml.presentation</string>
+				<string>com.microsoft.powerpoint.ppt</string>
+				<string>org.openxmlformats.spreadsheetml.sheet</string>
+				<string>com.microsoft.excel.xls</string>
+			</array>
+		</dict>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>图片</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>LSHandlerRank</key>
+			<string>Alternate</string>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>public.png</string>
+				<string>public.jpeg</string>
+				<string>public.jpeg-2000</string>
+				<string>org.webmproject.webp</string>
+				<string>com.compuserve.gif</string>
+				<string>com.microsoft.bmp</string>
+			</array>
+		</dict>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>网页</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>LSHandlerRank</key>
+			<string>Alternate</string>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>public.html</string>
+			</array>
+		</dict>
+	</array>
+</dict>
+</plist>

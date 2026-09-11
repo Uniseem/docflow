@@ -1,5 +1,0 @@
-target
-.env*
-**/__pycache__
-**/*.pyc
-native-pdf/.venv

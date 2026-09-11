@@ -1,0 +1,187 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Page
+    x:Class="DocFlow.Views.LibraryPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:vm="using:DocFlow.ViewModels"
+    xmlns:helpers="using:DocFlow.Helpers"
+    NavigationCacheMode="Required">
+
+    <Grid
+        x:Name="Root"
+        Padding="36,20,36,0"
+        AllowDrop="True"
+        DragOver="OnDragOver"
+        DragLeave="OnDragLeave"
+        Drop="OnDrop">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <!-- Header -->
+        <Grid ColumnSpacing="8">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <TextBlock Text="文档库" Style="{StaticResource TitleTextBlockStyle}" VerticalAlignment="Center" />
+            <Button Grid.Column="1" ToolTipService.ToolTip="刷新" AutomationProperties.Name="刷新" Click="OnRefresh">
+                <FontIcon Glyph="&#xE72C;" FontSize="16" />
+            </Button>
+            <Button Grid.Column="2" Style="{StaticResource AccentButtonStyle}" AutomationProperties.Name="新建翻译" Click="OnNewDocument">
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                    <FontIcon Glyph="&#xE710;" FontSize="14" />
+                    <TextBlock Text="新建翻译" />
+                </StackPanel>
+            </Button>
+        </Grid>
+
+        <SelectorBar x:Name="FilterBar" Grid.Row="1" Margin="-12,12,0,8" SelectionChanged="OnFilterChanged">
+            <SelectorBarItem x:Name="AllFilter" Tag="all" Text="全部" IsSelected="True" />
+            <SelectorBarItem x:Name="ActiveFilter" Tag="active" Text="进行中" />
+            <SelectorBarItem x:Name="CompletedFilter" Tag="completed" Text="已完成" />
+            <SelectorBarItem x:Name="FailedFilter" Tag="failed" Text="失败与取消" />
+        </SelectorBar>
+
+        <ListView
+            x:Name="DocumentList"
+            Grid.Row="2"
+            Margin="-12,0,-12,0"
+            Padding="0,0,0,24"
+            ItemsSource="{x:Bind ViewModel.Items}"
+            SelectionMode="None"
+            IsItemClickEnabled="True"
+            ItemClick="OnItemClick">
+            <ListView.ItemContainerStyle>
+                <Style TargetType="ListViewItem" BasedOn="{StaticResource DefaultListViewItemStyle}">
+                    <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                    <Setter Property="Padding" Value="12,0" />
+                    <Setter Property="Margin" Value="0,2" />
+                </Style>
+            </ListView.ItemContainerStyle>
+            <ListView.ItemTemplate>
+                <DataTemplate x:DataType="vm:DocumentItemViewModel">
+                    <Grid MinHeight="64" Padding="0,10" ColumnSpacing="14" Background="Transparent">
+                        <Grid.ContextFlyout>
+                            <MenuFlyout>
+                                <MenuFlyoutItem Text="打开" Click="OnOpenItem" Tag="{x:Bind Id}">
+                                    <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE8A7;" /></MenuFlyoutItem.Icon>
+                                </MenuFlyoutItem>
+                                <MenuFlyoutItem Text="在文件资源管理器中显示" Click="OnRevealItem" Tag="{x:Bind Id}">
+                                    <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE838;" /></MenuFlyoutItem.Icon>
+                                </MenuFlyoutItem>
+                                <MenuFlyoutSeparator />
+                                <MenuFlyoutItem Text="重新处理" Click="OnRetryItem" Tag="{x:Bind Id}" IsEnabled="{x:Bind CanRetry, Mode=OneWay}">
+                                    <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE72C;" /></MenuFlyoutItem.Icon>
+                                </MenuFlyoutItem>
+                                <MenuFlyoutItem Text="取消处理" Click="OnCancelItem" Tag="{x:Bind Id}" IsEnabled="{x:Bind IsActive, Mode=OneWay}">
+                                    <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE711;" /></MenuFlyoutItem.Icon>
+                                </MenuFlyoutItem>
+                                <MenuFlyoutSeparator />
+                                <MenuFlyoutItem Text="删除" Click="OnDeleteItem" Tag="{x:Bind Id}">
+                                    <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE74D;" /></MenuFlyoutItem.Icon>
+                                </MenuFlyoutItem>
+                            </MenuFlyout>
+                        </Grid.ContextFlyout>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+
+                        <Border
+                            Width="40"
+                            Height="40"
+                            CornerRadius="{StaticResource ControlCornerRadius}"
+                            Background="{ThemeResource SubtleFillColorSecondaryBrush}">
+                            <FontIcon Glyph="{x:Bind ModeGlyph, Mode=OneWay}" FontSize="20" Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" />
+                        </Border>
+
+                        <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="2">
+                            <TextBlock Text="{x:Bind Title, Mode=OneWay}" Style="{StaticResource BodyStrongTextBlockStyle}" TextTrimming="CharacterEllipsis" />
+                            <TextBlock Text="{x:Bind Subtitle, Mode=OneWay}" Style="{StaticResource CaptionTextBlockStyle}" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextTrimming="CharacterEllipsis" />
+                            <TextBlock
+                                Text="{x:Bind StageText, Mode=OneWay}"
+                                Style="{StaticResource CaptionTextBlockStyle}"
+                                Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                                TextTrimming="CharacterEllipsis"
+                                Visibility="{x:Bind helpers:Format.ShowText(StageText), Mode=OneWay}" />
+                        </StackPanel>
+
+                        <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
+                            <ProgressBar
+                                Width="120"
+                                Value="{x:Bind Progress, Mode=OneWay}"
+                                Maximum="100"
+                                VerticalAlignment="Center"
+                                Visibility="{x:Bind helpers:Format.Show(IsActive), Mode=OneWay}" />
+                            <FontIcon Glyph="&#xEC61;" FontSize="16" Foreground="{ThemeResource SystemFillColorSuccessBrush}" Visibility="{x:Bind helpers:Format.Show(IsCompleted), Mode=OneWay}" />
+                            <FontIcon Glyph="&#xEB90;" FontSize="16" Foreground="{ThemeResource SystemFillColorCriticalBrush}" Visibility="{x:Bind helpers:Format.Show(IsFailed), Mode=OneWay}" />
+                            <FontIcon Glyph="&#xE711;" FontSize="14" Foreground="{ThemeResource TextFillColorTertiaryBrush}" Visibility="{x:Bind helpers:Format.Show(IsCancelled), Mode=OneWay}" />
+                            <TextBlock
+                                MinWidth="72"
+                                Text="{x:Bind StatusText, Mode=OneWay}"
+                                Style="{StaticResource CaptionTextBlockStyle}"
+                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                VerticalAlignment="Center" />
+                        </StackPanel>
+                    </Grid>
+                </DataTemplate>
+            </ListView.ItemTemplate>
+        </ListView>
+
+        <!-- Empty states -->
+        <StackPanel
+            Grid.Row="2"
+            MaxWidth="420"
+            HorizontalAlignment="Center"
+            VerticalAlignment="Center"
+            Spacing="12"
+            Visibility="{x:Bind helpers:Format.Show(ViewModel.IsEmpty), Mode=OneWay}">
+            <FontIcon Glyph="&#xE8A5;" FontSize="48" Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
+            <TextBlock
+                HorizontalAlignment="Center"
+                Style="{StaticResource SubtitleTextBlockStyle}"
+                Text="{x:Bind EmptyTitle(ViewModel.IsLibraryEmpty), Mode=OneWay}" />
+            <TextBlock
+                HorizontalAlignment="Center"
+                TextAlignment="Center"
+                Style="{StaticResource SecondaryTextBlockStyle}"
+                Text="{x:Bind EmptyDetail(ViewModel.IsLibraryEmpty), Mode=OneWay}" />
+            <Button
+                HorizontalAlignment="Center"
+                Style="{StaticResource AccentButtonStyle}"
+                Content="选择文件"
+                Click="OnNewDocument"
+                Visibility="{x:Bind helpers:Format.Show(ViewModel.IsLibraryEmpty), Mode=OneWay}" />
+        </StackPanel>
+
+        <InfoBar
+            Grid.Row="2"
+            VerticalAlignment="Top"
+            Severity="Error"
+            Title="无法读取文档库"
+            Message="{x:Bind ViewModel.Error, Mode=OneWay}"
+            IsOpen="{x:Bind HasError(ViewModel.Error), Mode=OneWay}"
+            IsClosable="False" />
+
+        <!-- Drop target overlay -->
+        <Border
+            x:Name="DropOverlay"
+            Grid.RowSpan="3"
+            Margin="-24,-8,-24,12"
+            Visibility="Collapsed"
+            CornerRadius="{StaticResource OverlayCornerRadius}"
+            BorderThickness="2"
+            BorderBrush="{ThemeResource AccentFillColorDefaultBrush}"
+            Background="{ThemeResource SolidBackgroundFillColorBaseAltBrush}">
+            <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="8">
+                <FontIcon Glyph="&#xE896;" FontSize="40" Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" />
+                <TextBlock Text="松开以添加文档" Style="{StaticResource SubtitleTextBlockStyle}" HorizontalAlignment="Center" />
+            </StackPanel>
+        </Border>
+    </Grid>
+</Page>
