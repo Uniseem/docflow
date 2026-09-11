@@ -261,6 +261,8 @@ def configure_cpu_runtime() -> None:
     """
     for key in (
         "OPENBLAS_NUM_THREADS",
+        # Apple Accelerate, used by NumPy's and SciPy's macOS 14+ wheels.
+        "VECLIB_MAXIMUM_THREADS",
         "OMP_NUM_THREADS",
         "MKL_NUM_THREADS",
         "NUMEXPR_NUM_THREADS",
