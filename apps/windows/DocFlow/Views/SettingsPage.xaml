@@ -337,7 +337,7 @@
                     </StackPanel>
                     <StackPanel Grid.Row="1" Grid.ColumnSpan="2" Spacing="6">
                         <TextBlock Style="{StaticResource SecondaryTextBlockStyle}" TextWrapping="Wrap" Text="DocFlow 本身以 MIT 许可证发布。PDF 原生翻译内置的 BabelDOC 与 PyMuPDF 以 GNU AGPL v3 许可证发布；期刊 PDF 由 Typst 排版，公式由 MiTeX 转换，阅读视图使用 KaTeX。各组件保留其原始许可证。" />
-                        <HyperlinkButton Padding="0" Content="源代码与第三方许可" NavigateUri="https://github.com/FengYuchen1314/docflow" />
+                        <HyperlinkButton Padding="0" Content="源代码与第三方许可" NavigateUri="https://github.com/Uniseem/docflow" />
                     </StackPanel>
                 </Grid>
             </Border>
