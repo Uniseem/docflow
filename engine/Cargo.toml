@@ -1,0 +1,56 @@
+[package]
+name = "docflow-engine"
+version = "3.0.0"
+edition = "2024"
+description = "DocFlow desktop processing engine, driven by the Windows and macOS apps over stdio JSON-RPC"
+license = "MIT"
+publish = false
+
+[dependencies]
+ammonia = "4"
+anyhow = "1"
+chrono = { version = "0.4", features = ["serde"] }
+comemo = "0.5"
+comrak = { version = "0.48", default-features = false }
+ego-tree = "0.11"
+futures = "0.3"
+hex = "0.4"
+html-escape = "0.2"
+image = { version = "0.25", default-features = false, features = ["bmp", "gif", "jpeg", "png", "tiff", "webp"] }
+mime_guess = "2"
+regex = "1"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "rustls-tls-native-roots", "stream", "http2", "charset", "macos-system-configuration", "socks"] }
+scraper = "0.27"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite", "chrono", "json", "migrate", "macros"] }
+thiserror = "2"
+tokio = { version = "1", features = ["full"] }
+tokio-util = { version = "0.7", features = ["io"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+typst = "0.15"
+typst-kit = { version = "0.15", default-features = false, features = ["scan-fonts", "embedded-fonts"] }
+typst-layout = "0.15"
+typst-pdf = "0.15"
+url = "2"
+uuid = { version = "1", features = ["v4", "serde"] }
+walkdir = "2"
+webp = "0.3"
+zip = { version = "4", default-features = false, features = ["deflate", "bzip2", "zstd"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.60", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_Storage_FileSystem"] }
+
+[dev-dependencies]
+tempfile = "3"
+
+[profile.release]
+strip = true
+lto = "thin"
+codegen-units = 1
+
+# Typst and image decoding are slow in unoptimized builds; tests render real PDFs.
+[profile.dev.package."*"]
+opt-level = 2
