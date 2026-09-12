@@ -54,6 +54,15 @@ jobs:
         with:
           path: runtime/cache
           key: runtime-macos-${{ matrix.arch }}-${{ hashFiles('runtime/build-macos.sh', 'engine/native-pdf/requirements.txt', 'engine/native-pdf/prepare_assets.py', 'engine/native-pdf/asset_bundle.py') }}
+      # The offline assets come from a CDN that rate-limits, so they are kept
+      # between runs. prepare_assets.py still checks every file against the
+      # SHA3-256 that the pinned BabelDOC carries and writes the readiness
+      # marker itself, so a restored bundle is verified in full and a stale
+      # one cannot slip through.
+      - uses: actions/cache@v4
+        with:
+          path: runtime/build/macos-${{ matrix.arch }}/resources/pdf-assets
+          key: pdf-assets-macos-${{ matrix.arch }}-${{ hashFiles('engine/native-pdf/requirements.txt', 'engine/native-pdf/prepare_assets.py', 'engine/native-pdf/asset_bundle.py') }}
       - name: Python + BabelDOC runtime
         run: bash runtime/build-macos.sh ${{ matrix.arch }}
       # A tarball, so the symlinks and permissions of the runtime survive the
@@ -186,6 +195,17 @@ jobs:
         with:
           path: runtime/cache
           key: runtime-windows-x64-${{ hashFiles('runtime/build-windows.ps1', 'engine/native-pdf/requirements.txt', 'engine/native-pdf/prepare_assets.py', 'engine/native-pdf/asset_bundle.py') }}
+      - uses: actions/cache@v4
+        with:
+          path: runtime/build/windows-x64/resources/pdf-assets
+          key: pdf-assets-windows-x64-${{ hashFiles('engine/native-pdf/requirements.txt', 'engine/native-pdf/prepare_assets.py', 'engine/native-pdf/asset_bundle.py') }}
+      # build.ps1 reads the readiness marker as "the runtime is already here"
+      # and would skip building Python itself, so the restored bundle keeps
+      # its files but not its marker; prepare_assets.py writes it again once
+      # it has verified them.
+      - name: Restored assets keep their files, not their marker
+        shell: pwsh
+        run: Remove-Item -Force -ErrorAction Ignore runtime/build/windows-x64/resources/pdf-assets/.ready
       - name: Engine tests
         run: cargo test --locked --manifest-path engine/Cargo.toml
       - name: Signing certificate
