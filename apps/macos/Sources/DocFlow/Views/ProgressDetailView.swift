@@ -33,6 +33,8 @@ struct ProgressDetailView: View {
                 .frame(maxWidth: 900, alignment: .leading)
                 .frame(maxWidth: .infinity)
             }
+            // The page slides under the toolbar's glass and fades there.
+            .softScrollEdges(.top)
         }
     }
 }
@@ -48,6 +50,7 @@ private struct FailureBox: View {
             HStack(alignment: .top, spacing: 12) {
                 Image(systemName: cancelled ? "xmark.circle.fill" : "exclamationmark.triangle.fill")
                     .font(.title2)
+                    .symbolRenderingMode(.hierarchical)
                     .foregroundStyle(cancelled ? Color.secondary : Color.red)
                 VStack(alignment: .leading, spacing: 6) {
                     Text(cancelled ? "已取消处理" : "处理失败")
@@ -58,7 +61,7 @@ private struct FailureBox: View {
                             .textSelection(.enabled)
                     }
                     Button("重新处理") { model.retry(info.id) }
-                        .buttonStyle(.borderedProminent)
+                        .prominentGlassAction()
                         .padding(.top, 4)
                 }
                 Spacer(minLength: 0)
