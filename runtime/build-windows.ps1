@@ -90,10 +90,27 @@ if (-not $SkipTests) {
     } finally { Pop-Location }
 }
 
+# BabelDOC verifies every asset's SHA3-256 and downloads only the files it
+# does not already have, so an attempt after a pause continues where the last
+# one stopped. Its own retries are three tries seconds apart, which the CDN's
+# rate limiting (HTTP 429 on a busy day) outlasts; these wait minutes.
 if (-not $SkipAssets) {
     $assets = Join-Path $Output "pdf-assets"
     Write-Host "Preparing BabelDOC offline assets (models, fonts, CMaps, tokenizer)"
-    Invoke-Native "asset preparation" { & $python -B (Join-Path $NativePdf "prepare_assets.py") --asset-dir $assets }
+    $attempts = if ($env:DOCFLOW_ASSET_ATTEMPTS) { [int]$env:DOCFLOW_ASSET_ATTEMPTS } else { 3 }
+    $attempt = 1
+    while ($true) {
+        try {
+            Invoke-Native "asset preparation" { & $python -B (Join-Path $NativePdf "prepare_assets.py") --asset-dir $assets }
+            break
+        } catch {
+            if ($attempt -ge $attempts) { throw }
+            $delay = $attempt * 60
+            Write-Host ("{0}; attempt {1}/{2} in {3}s" -f $_.Exception.Message, ($attempt + 1), $attempts, $delay)
+            Start-Sleep -Seconds $delay
+            $attempt++
+        }
+    }
     Invoke-Native "asset verification" { & $python -B (Join-Path $NativePdf "prepare_assets.py") --asset-dir $assets --verify-only }
 }
 

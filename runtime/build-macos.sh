@@ -87,8 +87,23 @@ if [ "${SKIP_TESTS:-0}" != "1" ]; then
   (cd "$NATIVE_PDF" && "$PYTHON" -B -m unittest discover -s tests -v)
 fi
 
+# BabelDOC verifies every asset's SHA3-256 and downloads only the files it
+# does not already have, so an attempt after a pause continues where the last
+# one stopped. Its own retries are three tries seconds apart, which the CDN's
+# rate limiting (HTTP 429 on a busy day) outlasts; these wait minutes.
 if [ "${SKIP_ASSETS:-0}" != "1" ]; then
-  "$PYTHON" -B "$NATIVE_PDF/prepare_assets.py" --asset-dir "$OUTPUT/pdf-assets"
+  ATTEMPTS="${DOCFLOW_ASSET_ATTEMPTS:-3}"
+  attempt=1
+  until "$PYTHON" -B "$NATIVE_PDF/prepare_assets.py" --asset-dir "$OUTPUT/pdf-assets"; do
+    if [ "$attempt" -ge "$ATTEMPTS" ]; then
+      echo "error: preparing the offline assets failed $attempt times" >&2
+      exit 1
+    fi
+    delay=$((attempt * 60))
+    echo "preparing the offline assets failed; attempt $((attempt + 1))/$ATTEMPTS in ${delay}s" >&2
+    sleep "$delay"
+    attempt=$((attempt + 1))
+  done
   "$PYTHON" -B "$NATIVE_PDF/prepare_assets.py" --asset-dir "$OUTPUT/pdf-assets" --verify-only
 fi
 
