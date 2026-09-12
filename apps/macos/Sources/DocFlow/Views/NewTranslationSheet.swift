@@ -99,10 +99,7 @@ struct NewTranslationSheet: View {
             .formStyle(.grouped)
             .overlay {
                 if isDropTargeted {
-                    RoundedRectangle(cornerRadius: 12)
-                        .strokeBorder(Color.accentColor, lineWidth: 3)
-                        .padding(6)
-                        .allowsHitTesting(false)
+                    DropTargetOutline(cornerRadius: 12, inset: 6)
                 }
             }
             .dropDestination(for: URL.self) { urls, _ in
@@ -111,27 +108,32 @@ struct NewTranslationSheet: View {
             } isTargeted: { targeted in
                 isDropTargeted = targeted
             }
-
-            Divider()
-
-            HStack {
-                Button("添加文件…") { isImporterPresented = true }
-                Spacer()
-                if form.isSubmitting {
-                    ProgressView()
-                        .controlSize(.small)
+            // The actions ride on glass at the bottom edge and the form
+            // scrolls under them, so no divider separates the two.
+            .softScrollEdges(.bottom)
+            .glassBar(edge: .bottom) {
+                HStack {
+                    Button("添加文件…") { isImporterPresented = true }
+                        .glassAction()
+                    Spacer()
+                    if form.isSubmitting {
+                        ProgressView()
+                            .controlSize(.small)
+                    }
+                    Button("取消", role: .cancel) {
+                        app.isNewTranslationPresented = false
+                    }
+                    .glassAction()
+                    .keyboardShortcut(.cancelAction)
+                    Button(form.files.count > 1 ? "开始翻译 \(form.files.count) 个文件" : "开始翻译") {
+                        submit()
+                    }
+                    .prominentGlassAction()
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(!form.canSubmit)
                 }
-                Button("取消", role: .cancel) {
-                    app.isNewTranslationPresented = false
-                }
-                .keyboardShortcut(.cancelAction)
-                Button(form.files.count > 1 ? "开始翻译 \(form.files.count) 个文件" : "开始翻译") {
-                    submit()
-                }
-                .keyboardShortcut(.defaultAction)
-                .disabled(!form.canSubmit)
+                .padding(16)
             }
-            .padding(16)
         }
         .frame(width: 580, height: 640)
         .onChange(of: form.translatorOptions) {
@@ -170,10 +172,14 @@ private struct DropPrompt: View {
         VStack(spacing: 10) {
             Image(systemName: "doc.badge.plus")
                 .font(.system(size: 36, weight: .light))
+                .symbolRenderingMode(.hierarchical)
                 .foregroundStyle(.secondary)
             Text("将文件拖到这里")
                 .font(.headline)
+            // The one action of an empty sheet, and glass alone would be
+            // almost invisible on the form's light background.
             Button("选择文件…", action: choose)
+                .prominentGlassAction()
         }
         .frame(maxWidth: .infinity, minHeight: 150)
     }

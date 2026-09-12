@@ -36,6 +36,11 @@ struct DocumentDetailView: View {
         }
     }
 
+    /// Two groups of toolbar items — what to do with the document, and how
+    /// to look at it — with a spacer between them, so macOS 26 gives each
+    /// group its own glass capsule instead of running everything together.
+    /// Before macOS 26 there is no glass to split, and the groups simply
+    /// follow one another.
     @ToolbarContentBuilder
     private var toolbar: some ToolbarContent {
         if document.availableViews.count > 1 {
@@ -50,14 +55,11 @@ struct DocumentDetailView: View {
                 .help("切换视图")
             }
         }
-        ToolbarItemGroup(placement: .primaryAction) {
-            if let info = document.info {
-                if info.isCompleted && document.selectedView == .reader {
-                    Toggle(isOn: Bindable(model).readerSerif) {
-                        Label("衬线字体", systemImage: "textformat")
-                    }
-                    .help("阅读视图使用衬线字体")
-                }
+        // Every status puts something in this group, so it never leaves an
+        // empty capsule behind; while the document loads it is left out
+        // along with the spacer.
+        if let info = document.info {
+            ToolbarItemGroup(placement: .primaryAction) {
                 if info.isStopped {
                     Button {
                         model.retry(info.id)
@@ -83,6 +85,19 @@ struct DocumentDetailView: View {
                     .help("用默认应用打开译文")
                     ExportMenu(info: info)
                 }
+            }
+            #if compiler(>=6.2)
+            if #available(macOS 26.0, *) {
+                ToolbarSpacer(.fixed, placement: .primaryAction)
+            }
+            #endif
+        }
+        ToolbarItemGroup(placement: .primaryAction) {
+            if let info = document.info, info.isCompleted, document.selectedView == .reader {
+                Toggle(isOn: Bindable(model).readerSerif) {
+                    Label("衬线字体", systemImage: "textformat")
+                }
+                .help("阅读视图使用衬线字体")
             }
             Button {
                 model.isInspectorPresented.toggle()
@@ -143,6 +158,7 @@ struct ResultContent: View {
                     .frame(maxWidth: 900)
                     .frame(maxWidth: .infinity)
             }
+            .softScrollEdges(.top)
         case .reader:
             if let path = document.path(for: .reader) {
                 ReaderView(
@@ -234,6 +250,7 @@ struct DocumentInspector: View {
                 }
             }
             .formStyle(.grouped)
+            .softScrollEdges(.top)
         } else {
             ContentUnavailableView("没有文档信息", systemImage: "info.circle")
         }

@@ -86,43 +86,52 @@ struct MainView: View {
 
 /// A finished export (or another short confirmation) at the bottom of the
 /// window. It goes away by itself; failures use an alert instead.
+///
+/// The one piece of chrome DocFlow floats over its own content, so it is
+/// Liquid Glass: a capsule lens with no border and no shadow. The close
+/// button sits in its own circle of glass beside it rather than inside the
+/// capsule, because glass never stacks on glass; one container renders the
+/// two together and animates them as a unit.
 @MainActor
 private struct ToastView: View {
     @Environment(AppModel.self) private var model
     let toast: Toast
 
     var body: some View {
-        HStack(spacing: 10) {
-            Image(systemName: "checkmark.circle.fill")
-                .font(.title3)
-                .foregroundStyle(.green)
-            Text(toast.message)
-                .lineLimit(2)
-                .truncationMode(.middle)
-            if let file = toast.file {
-                Button("在访达中显示") {
-                    FileActions.reveal(file.path)
-                    model.dismissToast()
+        GlassGroup(spacing: 0) {
+            HStack(spacing: 8) {
+                HStack(spacing: 10) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.title3)
+                        .foregroundStyle(.green)
+                    Text(toast.message)
+                        .lineLimit(2)
+                        .truncationMode(.middle)
+                    if let file = toast.file {
+                        Button("在访达中显示") {
+                            FileActions.reveal(file.path)
+                            model.dismissToast()
+                        }
+                        .buttonStyle(.borderless)
+                    }
                 }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 10)
+                .glassChrome(in: Capsule())
+
+                Button {
+                    model.dismissToast()
+                } label: {
+                    Image(systemName: "xmark")
+                        .frame(width: 18, height: 18)
+                }
+                .glassAction()
+                .buttonBorderShape(.circle)
+                .controlSize(.large)
+                .help("关闭")
+                .accessibilityLabel("关闭")
             }
-            Button {
-                model.dismissToast()
-            } label: {
-                Image(systemName: "xmark")
-            }
-            .buttonStyle(.borderless)
-            .foregroundStyle(.secondary)
-            .help("关闭")
-            .accessibilityLabel("关闭")
         }
-        .padding(.leading, 14)
-        .padding(.trailing, 10)
-        .padding(.vertical, 8)
-        .background(.regularMaterial, in: Capsule())
-        .overlay {
-            Capsule().strokeBorder(Color.primary.opacity(0.12))
-        }
-        .shadow(color: .black.opacity(0.18), radius: 10, y: 3)
         .frame(maxWidth: 560)
     }
 }
@@ -143,7 +152,10 @@ struct SidebarView: View {
             }
         }
         .listStyle(.sidebar)
-        .safeAreaInset(edge: .bottom) {
+        .softScrollEdges(.top)
+        // A glass bar, so the list scrolls behind the status instead of
+        // stopping at a divider above it.
+        .glassBar(edge: .bottom) {
             EngineStatusFooter()
         }
     }
