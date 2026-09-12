@@ -1,6 +1,6 @@
 [package]
 name = "docflow-engine"
-version = "3.0.1"
+version = "3.1.0"
 edition = "2024"
 description = "DocFlow desktop processing engine, driven by the Windows and macOS apps over stdio JSON-RPC"
 license = "MIT"
