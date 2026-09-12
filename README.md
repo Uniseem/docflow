@@ -7,7 +7,7 @@ DocFlow 是 Windows 与 macOS 上的文档翻译应用。把 PDF、Word、PowerP
 
 两种方式都由大模型翻译。服务商的接入方式参考 [Cherry Studio](https://github.com/CherryHQ/cherry-studio)：从预设中选择服务商（DeepSeek、OpenAI、Anthropic、Google Gemini、OpenRouter、硅基流动、阿里云百炼、火山引擎、Kimi、智谱、腾讯混元、阶跃星辰、零一万物、xAI、Groq、Mistral、Azure OpenAI、Ollama、LM Studio），或添加任何 OpenAI 兼容 / Anthropic / Gemini 接口；填写 API 地址和 Key 后一键**获取模型列表**，勾选要用的模型即可。每个服务商的并发请求数可以手动调整，默认 100。
 
-两个应用都是原生界面：Windows 版使用 WinUI 3 与 Fluent Design，macOS 版使用 SwiftUI 并遵循 Apple 人机界面指南。它们共享同一个处理引擎，文档库格式相同。
+两个应用都是原生界面：Windows 版使用 WinUI 3 与 Fluent Design，macOS 版使用 SwiftUI，界面按 macOS 26 的**液态玻璃（Liquid Glass）**规范构建——工具栏、边栏、浮层与底部操作栏都是折射背景的玻璃层，控件与容器的圆角同心，内容滚到玻璃下面时渐隐，不再使用旧版的半透明材质加描边与投影；在 macOS 14、15 上自动回退到旧版外观。它们共享同一个处理引擎，文档库格式相同。
 
 ## 系统要求
 
@@ -18,6 +18,8 @@ DocFlow 是 Windows 与 macOS 上的文档翻译应用。把 PDF、Word、PowerP
 | 磁盘 | 应用约 1.3 GB（含 Python 与 BabelDOC 离线资源），另需文档库空间 | 同左 |
 
 翻译需要联网访问所选服务；PDF 原生翻译的版面分析在本机 CPU 上进行，不需要 GPU。
+
+macOS 版在 macOS 26 Tahoe 及更高版本上显示液态玻璃界面；macOS 14、15 上功能完全相同，外观保持这些系统原有的样式。
 
 ## 安装
 
@@ -127,15 +129,18 @@ API Key 只保存在系统的凭据存储中，启动时由应用在内存中交
 
 ### macOS
 
-需要 Xcode 15.3 或更高版本（或对应的 Command Line Tools）和 Rust：
+需要 Xcode 26 或更高版本（或对应的 Command Line Tools）和 Rust：
 
 ```bash
 bash apps/macos/build.sh --pkg
 ```
 
+液态玻璃界面来自 macOS 26 SDK，因此请用 Xcode 26 构建。用 Xcode 15.3 到 16.x 也能构建（新 API 都在 `#if compiler(>=6.2)` 与 `#available(macOS 26.0, *)` 之内），构建出的应用界面回退到 macOS 26 之前的样式，脚本会在编译前给出提示。
+
 产物是 `apps/macos/dist/DocFlow.app`，`--pkg` 另外生成安装包 `DocFlow-macos-<arch>.pkg`（没有 Developer ID 时推荐用它分发）；`--dmg` 和 `--zip` 生成磁盘映像和 zip。默认为当前 Mac 的架构构建；Intel 版请在 Intel Mac 上构建（在 Apple 芯片上经 Rosetta 构建时，运行环境的自检可能因 AVX 指令崩溃）。
 
-- 运行环境构建会检查每个二进制文件要求的最低系统版本不高于 macOS 14：在更新的 macOS 上构建时，pip 可能选到只支持新系统的 wheel，那样的构建会在 macOS 14 上无法导入，因此检查不通过时构建失败。CI 在 macOS 14 上构建 arm64 版；Intel 版只能在 macOS 15 的 Intel 机器上构建，这项检查保证它同样能在 macOS 14 上运行。
+- 运行环境构建会检查每个二进制文件要求的最低系统版本不高于 macOS 14：在更新的 macOS 上构建时，pip 会选到只支持新系统的 wheel（例如 orjson 的 arm64 wheel 要求 macOS 15），那样的构建在 macOS 14 上无法导入，因此检查不通过时构建失败。因此 CI 分成两个作业：内置运行环境在 macOS 14（arm64）和 Intel 的 macOS 15 上构建，作为 artifact 传给应用作业；应用本身在 macOS 15 上用 Xcode 26 构建（液态玻璃需要 macOS 26 SDK），并打包上一步的运行环境。
+- 在 macOS 15 或更新的系统上运行 `build.sh` 时，这项检查会拦下内置运行环境：只给自己这台 Mac 构建时可以用 `DOCFLOW_MIN_MACOS=15.0` 放宽；要分发给 macOS 14 用户，就在 macOS 14 上运行 `runtime/build-macos.sh arm64`，把得到的 `runtime/build/macos-arm64/resources` 放到构建机的同一位置，`build.sh` 会直接使用它（`--skip-runtime` 则跳过运行环境，构建出的应用没有 PDF 原生翻译）。
 - 没有 Developer ID 时使用临时（ad-hoc）签名：内置 Python 的每个二进制文件、引擎和应用都会由内向外重新签名并封存，构建时逐一严格校验，并拒绝指向包外的符号链接。“已损坏”只会出现在签名无效的应用上，这些检查保证构建出的应用签名有效。安装包只包含与签名时完全一致的应用（打包后会再校验一次），装好的应用不带下载隔离标记。
 - 有 Apple Developer ID 时，可以签名并公证，用户打开时没有任何提示：
 
@@ -155,7 +160,7 @@ bash apps/macos/build.sh --pkg
 
 ```text
 apps/windows/   WinUI 3 应用（.NET 10、Windows App SDK、Fluent Design）
-apps/macos/     SwiftUI 应用（macOS 14+，Swift Package + 组装 .app 的脚本）
+apps/macos/     SwiftUI 应用（macOS 14+，液态玻璃界面，Swift Package + 组装 .app 的脚本）
 apps/shared/    应用图标的生成脚本
 engine/         docflow-engine：Rust 编写的处理引擎
   src/            文档库、调度、服务商与翻译池、MinerU、Typst 排版、BabelDOC 监管、JSON-RPC

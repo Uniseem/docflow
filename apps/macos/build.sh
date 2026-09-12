@@ -20,10 +20,13 @@
 # the bundle sealed either way; a Developer ID signature that is notarized and
 # stapled opens without any prompt.
 #
-# Requirements: Xcode (or the Command Line Tools) with the macOS 14 SDK or
-# newer, and Rust. Build the x86_64 version on an Intel Mac: under Rosetta the
-# runtime's tests can crash (AVX). The x86_64 installer refuses Apple silicon
-# Macs and the arm64 one Intel Macs, each naming the right download.
+# Requirements: Xcode (or the Command Line Tools) and Rust. The interface is
+# Liquid Glass, which the system only gives a build made with the macOS 26
+# SDK, so use Xcode 26 or newer; an older SDK still builds the app, and it
+# then looks the way it did before macOS 26. Build the x86_64 version on an
+# Intel Mac: under Rosetta the runtime's tests can crash (AVX). The x86_64
+# installer refuses Apple silicon Macs and the arm64 one Intel Macs, each
+# naming the right download.
 # Notarization needs a notarytool keychain profile, created once:
 #   xcrun notarytool store-credentials docflow --apple-id … --team-id … --password <app-specific password>
 #
@@ -55,7 +58,7 @@ while [ $# -gt 0 ]; do
     --sign) IDENTITY="$2"; shift 2 ;;
     --installer-sign) INSTALLER_IDENTITY="$2"; shift 2 ;;
     --notarize) NOTARY_PROFILE="$2"; shift 2 ;;
-    -h|--help) sed -n '2,32p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,36p' "$0"; exit 0 ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
 done
@@ -96,7 +99,12 @@ if [ "$SKIP_RUNTIME" != 1 ] && [ ! -f "$RUNTIME/pdf-assets/.ready" ]; then
   bash "$REPO/runtime/build-macos.sh" "$ARCH" "$RUNTIME"
 fi
 
-echo "==> SwiftUI app"
+SDK_VERSION="$(xcrun --sdk macosx --show-sdk-version 2>/dev/null || true)"
+SDK_MAJOR="$(printf '%s' "${SDK_VERSION%%.*}" | tr -cd '0-9')"
+echo "==> SwiftUI app (macOS SDK ${SDK_VERSION:-unknown})"
+if [ "${SDK_MAJOR:-0}" -lt 26 ]; then
+  echo "warning: Liquid Glass needs the macOS 26 SDK (Xcode 26 or newer); this build falls back to the look before macOS 26" >&2
+fi
 swift build -c release --arch "$ARCH" --package-path "$HERE"
 BIN="$(swift build -c release --arch "$ARCH" --package-path "$HERE" --show-bin-path)"
 

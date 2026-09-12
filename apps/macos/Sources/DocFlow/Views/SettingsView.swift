@@ -58,6 +58,7 @@ private struct EngineRequired<Content: View>: View {
             } actions: {
                 if model.engineState != .starting {
                     Button("重新启动处理引擎") { model.start() }
+                        .glassAction()
                 }
             }
             .frame(height: 260)
@@ -237,17 +238,18 @@ private struct ServicesSettingsView: View {
     var body: some View {
         EngineRequired(height: 580) {
             HStack(spacing: 0) {
-                VStack(spacing: 0) {
-                    List(selection: $selection) {
-                        Section("大模型服务商") {
-                            ForEach(model.settings?.providers ?? []) { provider in
-                                ProviderRow(provider: provider, fake: model.settings?.capabilities.fakeProviders == true)
-                                    .tag(provider.id)
-                            }
+                List(selection: $selection) {
+                    Section("大模型服务商") {
+                        ForEach(model.settings?.providers ?? []) { provider in
+                            ProviderRow(provider: provider, fake: model.settings?.capabilities.fakeProviders == true)
+                                .tag(provider.id)
                         }
                     }
-                    .listStyle(.sidebar)
-                    Divider()
+                }
+                .listStyle(.sidebar)
+                .softScrollEdges(.top)
+                // The + and − ride on glass at the bottom of the list.
+                .glassBar(edge: .bottom, alignment: .leading) {
                     HStack(spacing: 2) {
                         Menu {
                             presetMenu
@@ -330,6 +332,7 @@ private struct ServicesSettingsView: View {
                 } label: {
                     Text("添加服务商")
                 }
+                .prominentGlassAction()
                 .fixedSize()
             }
         } else {
@@ -863,20 +866,24 @@ private struct ModelPickerSheet: View {
                     .toggleStyle(.checkbox)
                 }
             }
-            Divider()
-            HStack {
-                Text("已选择 \(selected.count) 个模型")
-                    .foregroundStyle(.secondary)
-                Spacer()
-                Button("取消", role: .cancel) { dismiss() }
-                    .keyboardShortcut(.cancelAction)
-                Button("确定") {
-                    apply(selected)
-                    dismiss()
+            .softScrollEdges(.bottom)
+            .glassBar(edge: .bottom) {
+                HStack {
+                    Text("已选择 \(selected.count) 个模型")
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button("取消", role: .cancel) { dismiss() }
+                        .glassAction()
+                        .keyboardShortcut(.cancelAction)
+                    Button("确定") {
+                        apply(selected)
+                        dismiss()
+                    }
+                    .prominentGlassAction()
+                    .keyboardShortcut(.defaultAction)
                 }
-                .keyboardShortcut(.defaultAction)
+                .padding(16)
             }
-            .padding(16)
         }
         .frame(width: 480, height: 540)
     }
@@ -924,18 +931,23 @@ private struct CustomProviderSheet: View {
                 }
             }
             .formStyle(.grouped)
-            HStack {
-                Spacer()
-                Button("取消", role: .cancel) { dismiss() }
-                    .keyboardShortcut(.cancelAction)
-                Button("添加") {
-                    add(name.trimmed, type, address.trimmed)
-                    dismiss()
+            .softScrollEdges(.bottom)
+            .glassBar(edge: .bottom) {
+                HStack {
+                    Spacer()
+                    Button("取消", role: .cancel) { dismiss() }
+                        .glassAction()
+                        .keyboardShortcut(.cancelAction)
+                    Button("添加") {
+                        add(name.trimmed, type, address.trimmed)
+                        dismiss()
+                    }
+                    .prominentGlassAction()
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(!isValid)
                 }
-                .keyboardShortcut(.defaultAction)
-                .disabled(!isValid)
+                .padding(16)
             }
-            .padding(16)
         }
         .frame(width: 480)
     }

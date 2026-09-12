@@ -13,6 +13,9 @@ struct DocumentListView: View {
                     .tag(document.id)
             }
         }
+        // Rows dissolve into the toolbar's glass instead of being cut off
+        // by a hairline under it.
+        .softScrollEdges(.top)
         .contextMenu(forSelectionType: String.self) { ids in
             menuItems(for: ids)
         } primaryAction: { ids in
@@ -30,10 +33,7 @@ struct DocumentListView: View {
         }
         .overlay {
             if isDropTargeted {
-                RoundedRectangle(cornerRadius: 10)
-                    .strokeBorder(Color.accentColor, lineWidth: 3)
-                    .padding(4)
-                    .allowsHitTesting(false)
+                DropTargetOutline()
             }
         }
         .dropDestination(for: URL.self) { urls, _ in
@@ -52,6 +52,8 @@ struct DocumentListView: View {
                 } label: {
                     Label("新建翻译", systemImage: "plus")
                 }
+                // The window's main action, so it is the tinted glass one.
+                .prominentGlassAction()
                 .help("新建翻译（⌘N）")
                 .disabled(!model.isReady)
             }
@@ -78,6 +80,7 @@ struct DocumentListView: View {
                     .textSelection(.enabled)
             } actions: {
                 Button("重新启动") { model.start() }
+                    .glassAction()
             }
         case .ready:
             if let error = model.libraryError, model.documents.isEmpty {
@@ -141,10 +144,12 @@ private struct LibraryWelcomeView: View {
         } actions: {
             if ready {
                 Button("新建翻译…") { model.presentNewTranslation() }
+                    .prominentGlassAction()
             } else {
                 SettingsLink {
                     Text("添加大模型服务商…")
                 }
+                .prominentGlassAction()
             }
         }
     }
@@ -158,6 +163,7 @@ struct DocumentRow: View {
         HStack(alignment: .top, spacing: 10) {
             Image(systemName: Format.modeSymbol(document.processingMode))
                 .font(.title2)
+                .symbolRenderingMode(.hierarchical)
                 .foregroundStyle(.secondary)
                 .frame(width: 26)
                 .padding(.top, 2)

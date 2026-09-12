@@ -25,13 +25,17 @@ concurrency:
 #   Windows: WINDOWS_CERTIFICATE_PFX (base64), WINDOWS_CERTIFICATE_PASSWORD
 
 jobs:
-  macos:
-    name: macOS (${{ matrix.arch }})
-    # arm64 is built on the oldest supported macOS, so pip never picks wheels
-    # that need a newer system than the app's minimum (14.0); the runtime
-    # build also checks every binary's minimum macOS version. The Intel build
-    # needs a real Intel runner: under Rosetta some wheels' vector
-    # instructions (AVX) stop the runtime tests with SIGILL.
+  # The bundled Python runtime is built on the app's own minimum macOS, and
+  # separately from the app, because the two want different machines: pip
+  # picks the newest wheel tag the build Mac supports, and some wheels of the
+  # pinned versions (orjson's arm64 one, for example) need macOS 15, so a
+  # build on a newer system would ship binaries that cannot be imported on
+  # macOS 14 — the build checks every binary's minimum and fails if one is
+  # too new. The app, in the job below, needs a newer Xcode than the macOS 14
+  # image carries. The Intel runtime needs a real Intel runner: under Rosetta
+  # some wheels' vector instructions (AVX) stop its tests with SIGILL.
+  macos-runtime:
+    name: macOS runtime (${{ matrix.arch }})
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 120
     strategy:
@@ -40,6 +44,45 @@ jobs:
         include:
           - arch: arm64
             runner: macos-14
+          - arch: x86_64
+            runner: macos-15-intel
+    env:
+      MACOSX_DEPLOYMENT_TARGET: '14.0'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/cache@v4
+        with:
+          path: runtime/cache
+          key: runtime-macos-${{ matrix.arch }}-${{ hashFiles('runtime/build-macos.sh', 'engine/native-pdf/requirements.txt', 'engine/native-pdf/prepare_assets.py', 'engine/native-pdf/asset_bundle.py') }}
+      - name: Python + BabelDOC runtime
+        run: bash runtime/build-macos.sh ${{ matrix.arch }}
+      # A tarball, so the symlinks and permissions of the runtime survive the
+      # trip; it is already compressed, hence compression-level 0.
+      - name: Pack the runtime
+        run: tar -czf runtime-macos-${{ matrix.arch }}.tar.gz -C runtime/build/macos-${{ matrix.arch }} resources
+      - uses: actions/upload-artifact@v4
+        with:
+          name: runtime-macos-${{ matrix.arch }}
+          path: runtime-macos-${{ matrix.arch }}.tar.gz
+          compression-level: 0
+          retention-days: 1
+          if-no-files-found: error
+
+  macos:
+    name: macOS (${{ matrix.arch }})
+    needs: macos-runtime
+    # Built with the newest Xcode on the runner, whose macOS 26 SDK is what
+    # gives the app its Liquid Glass interface; the app still runs on macOS
+    # 14, where it falls back to the earlier look. The runtime it bundles
+    # comes from the job above.
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            runner: macos-15
             rust-target: aarch64-apple-darwin
           - arch: x86_64
             runner: macos-15-intel
@@ -66,10 +109,21 @@ jobs:
         with:
           workspaces: engine
           key: ${{ matrix.arch }}
-      - uses: actions/cache@v4
+      - uses: actions/download-artifact@v4
         with:
-          path: runtime/cache
-          key: runtime-macos-${{ matrix.arch }}-${{ hashFiles('runtime/build-macos.sh', 'engine/native-pdf/requirements.txt', 'engine/native-pdf/prepare_assets.py', 'engine/native-pdf/asset_bundle.py') }}
+          name: runtime-macos-${{ matrix.arch }}
+      # build.sh builds the runtime itself when it is missing, which on this
+      # runner would ship wheels that need a newer macOS than 14.0; the check
+      # stops that with a clear error instead.
+      - name: Unpack the runtime
+        run: |
+          mkdir -p runtime/build/macos-${{ matrix.arch }}
+          tar -xzf runtime-macos-${{ matrix.arch }}.tar.gz -C runtime/build/macos-${{ matrix.arch }}
+          rm -f runtime-macos-${{ matrix.arch }}.tar.gz
+          if [ ! -f runtime/build/macos-${{ matrix.arch }}/resources/pdf-assets/.ready ]; then
+            echo "::error::the runtime artifact does not contain resources/pdf-assets/.ready"
+            exit 1
+          fi
       - name: Engine tests
         if: matrix.arch == 'arm64'
         run: cargo test --locked --manifest-path engine/Cargo.toml
@@ -172,6 +226,7 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: dist
+          pattern: DocFlow-*
           merge-multiple: true
       - name: Publish
         env:
