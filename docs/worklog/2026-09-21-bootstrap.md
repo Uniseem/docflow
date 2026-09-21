@@ -29,3 +29,24 @@
 ### 下一步
 
 - 从 `docs/plan/09-milestones.md` 的 M0 开始执行。执行前先 `npx heroui-cli@latest agents-md --react --output .heroui-docs/AGENTS.md`（不要覆盖仓库根的 AGENTS.md），把 HeroUI 文档拉到本地查阅。
+
+## 会话 2（Claude，同日）
+
+### 目标
+
+维护者要求 PDF 处理逻辑参照 [PDFMathTranslate](https://github.com/PDFMathTranslate/PDFMathTranslate)。
+
+### 做了什么
+
+- 读了 pdf2zh 1.x 的 `converter.py`（`receive_layout` 的解析/翻译/排版三段）、`pdfinterp.py`（`ops_base` 重建、表单逆矩阵回写）、`high_level.py`（版面矩阵、字体插入），整理成 `docs/reference/pdfmathtranslate-notes.md`。
+- 写回方案从「白色覆盖 + 公式栅格化贴图」改为 pdf2zh 式「内容流改写 + 公式用原字体/原编码重绘」：新增 ADR-0008，废弃 ADR-0006，修订 ADR-0003；`docs/plan/03-pdf-pipeline.md` 整章重写（字形级解析用 pdf.js 算子流 + 自写文字状态机；公式判定照搬 `vflag` 规则并加两处放宽；写回只删被翻译段落的 show-text 算子，其余字节原样保留；§3.17 逐项对照表）。
+- 同步修改：02 章（去掉隐藏栅格窗口，目录与配置相应调整）、05 章（去掉 raster 阶段与 `rasterScale` 设置）、06 章（阶段说明、设置项）、08 章（新增 tj-arrays / cid-font / form-wrapped / shared-form / italic-sentence / invisible-text 六个 fixture）、09 章（M2/M3 任务重排）、AGENTS.md、plan/README。
+- 核对了 pdf.js 源码：`'`/`"`/`TJ` 都被归一化为 `showText`（数字混在字形数组里），`Tf` 参数是 `loadedName`，Glyph 有 `originalCharCode/unicode/width/isSpace`，填充色被换算成 RGB（数组或 `#rrggbb`）。
+
+### 没做成 / 坑
+
+- 分式横线（路径）随公式搬动没有纳入 4.0.0，写在 03 章已知限制 2。
+
+### 下一步
+
+- 同会话 1：从 M0 开始执行。M2-3 的字形状态机是全流水线的地基，先用 `getTextContent` 交叉验证坐标再往下做。

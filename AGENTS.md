@@ -39,7 +39,6 @@ src/main/       Electron 主进程：窗口、IPC、设置、文档库、任务�
 src/preload/    contextBridge，只暴露 src/shared/ipc.ts 里声明的通道
 src/renderer/   React 界面（HeroUI 3）
 src/shared/     主进程与渲染进程共用的类型、zod schema、常量、纯函数
-src/raster/     隐藏窗口里跑的 pdf.js 栅格化页面（把公式/图片区域渲染成 PNG）
 resources/      随应用打包的静态资源（字体、图标）
 tests/          单测 fixtures、mock 大模型服务、E2E
 docs/           规划、ADR、worklog、参考资料

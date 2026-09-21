@@ -5,7 +5,7 @@
 | 层 | 工具 | 范围 | 何时跑 |
 | --- | --- | --- | --- |
 | 单元 | vitest（node 环境） | `src/shared/**`、`src/main/**` 的纯函数与模块：解析、段落合并、公式识别、排版、翻译请求/响应/错误/池/批处理/占位符、设置与 manifest 的 zod、原子写、调度器（用假时钟） | `npm run check`，每次提交 |
-| 集成 | vitest + `tests/mock-provider` | 从 fixture PDF 到输出 PDF 的完整流水线（不启动 Electron：`net.fetch` 换成 Node fetch，栅格化换成「假贴图」——用 pdf-lib 画一个灰色占位矩形代替 PNG） | `npm run check` |
+| 集成 | vitest + `tests/mock-provider` | 从 fixture PDF 到输出 PDF 的完整流水线（不启动 Electron：`net.fetch` 换成 Node fetch；compose 不依赖任何 Electron API，可直接在 vitest 里跑） | `npm run check` |
 | E2E | Playwright `_electron` | 真实应用：拖入/选择文件 → 设置里配置 mock 服务商 → 翻译完成 → 预览、导出、取消、重试、删除、设置持久化 | CI `package` job；发布前 |
 | 手工 | 人 | 真实 arXiv 论文 5 篇 + 真实服务商 1 个（DeepSeek）| 里程碑 M5、M6 |
 
@@ -25,7 +25,13 @@
 | `encrypted.pdf` | 带用户口令 | `pdf_encrypted` |
 | `scanned.pdf` | 只有一张整页图片 | `scanned_pdf` |
 | `empty.pdf` | 0 页（pdf-lib 无法生成 0 页，用手工构造的最小 PDF 字节） | `pdf_empty` |
-| `colored-text.pdf` | 彩色段落 | 颜色提取 |
+| `colored-text.pdf` | 彩色段落 | 颜色提取与颜色保留 |
+| `tj-arrays.pdf` | 用 `TJ` 数组（字距调整）、`'`、`"` 算子绘制的段落（手写内容流） | 算子流状态机、词法分析器、删除集合 |
+| `cid-font.pdf` | 嵌入 TrueType 子集（pdf-lib 生成的 Type0/Identity-H，2 字节编码）的段落与公式 | 复合字体编码字节数、公式重绘 |
+| `form-wrapped.pdf` | 整页内容包在一个 Form XObject 里（手工构造） | 表单递归、页面级追加、字体资源搬运 |
+| `shared-form.pdf` | 每页都 `Do` 同一个含文字的表单（页眉 logo） | shared 表单跳过 |
+| `italic-sentence.pdf` | 斜体的整句 + 单个斜体变量 | `.*Ital` 放宽规则 |
+| `invisible-text.pdf` | 整页图片 + `3 Tr` 隐藏文字层 | `scanned_pdf`（可见字形为 0） |
 
 另放 2 篇真实的 CC-BY arXiv 论文（选择许可证允许再分发的，记录来源与许可在 `tests/fixtures/README.md`），只用于集成测试的「不崩溃、页数正确、译页含中文」断言，不做精确断言。
 
@@ -60,9 +66,14 @@
 - `translate/batch`：分批边界（段数、字符数、超长拆分与拼回）、`parseBatch` 各种格式。
 - `translate/protect + validate`：占位符替换与还原、损坏修复样例、数量不符、编号变化拒绝、PDF 序列校验（交换/新增/大小写）、isolated 模式禁标记。
 - `translate/translate-document`（对 mock 服务）：正常、DROP_ME 触发逐段、DAMAGE 触发修复、LOSE 触发 strict 再拆分再隔离、REFUSE 保留原文、mostly_untranslated、连续拒绝、缓存命中不请求、取消。
-- `pdf/analyze/*`：每个 fixture 的行数/段数/栏数/占位符数与角色（用快照 JSON，`tests/unit/__snapshots__/`），阈值边界。
-- `pdf/compose/layout`：换行（避头尾、拉丁词不拆）、缩放到能装下、justify 分配、占位符占位。
-- `pdf` 集成：每个 fixture 跑 inspect→analyze→（假翻译：原文前加 `译`）→compose→verify，断言页数、尺寸、译页含中文、无未捕获异常；`encrypted/scanned/empty` 断言错误码。
+- `pdf/analyze/glyphs`：每个 fixture 的字形 x/y/size/adv 与 pdf.js `getTextContent` 的位置一致（容差 0.05 pt）；`TJ` 数字间距、`'`/`"`、`Tz`/`Tc`/`Tw`/`Ts`、表单矩阵、`Tr 3`、复合字体编码字节数、颜色（数组与 `#rrggbb` 两种输入）。
+- `pdf/analyze/*`：每个 fixture 的行数/段数/栏数/公式片段数与角色（用快照 JSON，`tests/unit/__snapshots__/`），阈值边界；「同一算子的字形同行同段」不变量。
+- `pdf/compose/content-lexer`：fixture 内容流分词后原样拼回逐字节相等；字符串转义/嵌套括号/十六进制串/字典/内联图像/注释的边角样例。
+- `pdf/compose/content-walker`：每个 show-text 算子的起点与字形记录的首字形一致（容差 0.5 pt）；表单递归与 shared 跳过；删除集合数量与段落 `opSeqs` 一致；`op_mismatch` 超阈值时整页放弃。
+- `pdf/compose/fonts`：`loadedName → 资源名` 起点匹配、BaseFont 回退、`DFo<n>` 挂载；CJK 子集回退。
+- `pdf/compose/layout`：换行（避头尾、拉丁词不拆）、行高再字号缩放、justify 分配、`{vN}` 占位宽度。
+- `pdf/compose/emit`：译文 `Tj` 的十六进制编码、公式片段合并/拆分规则、1/2 字节编码、颜色 `rg`。
+- `pdf` 集成：每个 fixture 跑 inspect→analyze→（假翻译：原文前加 `译`）→compose→verify，断言页数、尺寸、译页含中文、改写页 `getOperatorList` 可执行、未翻译段落的原字节仍在输出流中、无未捕获异常；`encrypted/scanned/empty/invisible-text` 断言错误码。
 - `settings/atomic-write`：并发写、目标存在、崩溃模拟（写一半的 tmp 文件不影响读取）。
 - `library`：manifest 读写、索引重建、事件追加与截断、导出 ZIP 内容。
 - `jobs/scheduler`（假时钟 + 假流水线）：并发数、重试间隔、永久失败不重试、取消、重启恢复。

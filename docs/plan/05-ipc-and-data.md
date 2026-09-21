@@ -19,7 +19,6 @@
 │     └─ work/                     可再生中间产物；成功后删除
 │        ├─ inspection.json  analysis.json  translation.json
 │        ├─ translation-cache.json
-│        ├─ raster/<pid>#<n>.png
 │        └─ mono.pdf  dual.pdf     写回产物，verify 通过后 rename 到 output/
 └─ .lock                           单实例锁（主进程 `fs.open` 独占 + 写 pid；异常退出后启动时若 pid 不存在则清除）
 ```
@@ -47,7 +46,6 @@ export const Settings = z.object({
     z.object({ mode: z.literal('custom'), url: z.string().url().refine(u => /^(https?|socks5h?):$/.test(new URL(u).protocol)) }),
   ]),
   pdf: z.object({
-    rasterScale: z.number().int().min(2).max(8).default(4),
     minFontScale: z.number().min(0.4).max(1).default(0.6),
     bilingual: z.boolean().default(true),                              // 关掉则不生成 dual.pdf
   }),
@@ -84,7 +82,7 @@ export const DocumentManifest = z.object({
   failure: z.object({ code: z.string(), message: z.string(), permanent: z.boolean() }).nullable(),
   attempts: z.number().int(),                    // 自动重试计数
   nextAttemptAt: z.string().datetime().nullable(),
-  stats: z.object({ paragraphs: z.number(), translatable: z.number(), translated: z.number(), kept: z.number(), placeholders: z.number(), usage: z.object({ input: z.number(), output: z.number() }) }).nullable(),
+  stats: z.object({ paragraphs: z.number(), translatable: z.number(), translated: z.number(), kept: z.number(), formulaRuns: z.number(), opsRemoved: z.number(), usage: z.object({ input: z.number(), output: z.number() }) }).nullable(),
   outputs: z.object({ mono: z.object({ bytes: z.number() }).nullable(), dual: z.object({ bytes: z.number() }).nullable() }),
   createdAt: z.string().datetime(), updatedAt: z.string().datetime(),
   startedAt: z.string().datetime().nullable(), completedAt: z.string().datetime().nullable(),
@@ -127,7 +125,7 @@ export const ProcessingEvent = z.object({
 | inspect | `检查 PDF：N 页`／失败信息 |
 | analyze | `分析版面：识别到 N 个段落，其中 M 个待翻译，公式 K 处`；warning：`第 P 页没有识别到可翻译段落` |
 | translate | `开始翻译：<translator>，共 N 段`；进度 `已翻译 X / N 段`；warning：重试与保留原文（04 章）；`翻译完成：N 段，保留原文 K 段，用量 输入 A / 输出 B tokens` |
-| compose | `渲染公式贴图 N 处`；`排版译文并写入 N 段`；warning：`第 P 页第 Q 段溢出 / 排版失败，已保留原文` |
+| compose | `改写内容流：写入 N 段译文，重绘公式 K 处，删除文字指令 M 条`；warning：`第 P 页第 Q 段译文超出原段落范围`、`第 P 页第 Q 段排版失败，已保留原文`、`第 P 页有 N 条文字指令无法对应到段落，已跳过该页`、`第 P 页第 Q 段的公式字体无法映射，已保留原文` |
 | verify | `校验通过：中文 PDF N 页，双语 PDF 2N 页` |
 | archive | `已保存到文档库` |
 | 任意 | error：`处理失败：<message>`；`已取消处理`；`等待自动重试（第 n 次）` |
@@ -195,8 +193,7 @@ received(0–2)  → 复制源文件（已在 create 时完成，此处只写事
 inspect(3–9)   → worker.inspect → work/inspection.json；标题：!titleCustom && inspection.title 存在时更新标题
 analyze(10–29) → worker.analyze → work/analysis.json；stats 写 manifest；translatable=0 → no_paragraphs
 translate(30–79) → translateDocument(...) → work/translation.json；kept/usage 写 manifest
-raster(80–82)  → 需要贴图的占位符 → work/raster/*.png
-compose(83–89) → worker.compose → work/mono.pdf, work/dual.pdf（bilingual=false 时不生成）
+compose(80–89) → worker.compose → work/mono.pdf, work/dual.pdf（bilingual=false 时不生成）；warnings 写事件
 verify(90–93)  → worker.verify
 archive(94–100)→ rename 到 output/、outputs 写 manifest、删除 work/、status completed、completedAt；通知
 ```

@@ -6,7 +6,7 @@
 ┌──────────────────────────── Electron 应用 ────────────────────────────┐
 │                                                                        │
 │  主进程 (Node 24)  src/main/                                           │
-│  ├─ app/        生命周期、单实例锁、窗口、菜单、协议、托盘(无)            │
+│  ├─ app/        生命周期、单实例锁、窗口、菜单、docflow:// 协议           │
 │  ├─ ipc/        ipcMain.handle 注册表（每个通道一个函数，zod 校验入参）   │
 │  ├─ settings/   settings.json、host.json、secrets.bin(safeStorage)      │
 │  ├─ library/    文档目录、manifest、events.jsonl、内存索引、导出        │
@@ -14,15 +14,11 @@
 │  ├─ pipeline/   一个文档的处理流程：inspect→analyze→translate→compose… │
 │  ├─ translate/  服务商、请求、错误分类、密钥轮换、并发池、批处理、缓存   │
 │  ├─ pdf/        与 worker 的桥：启动 worker、超时、取消、消息协议        │
-│  ├─ raster/     管理隐藏栅格化窗口：加载 PDF、按矩形出 PNG               │
 │  └─ log/        electron-log 配置                                       │
 │        │ worker_threads (纯 CPU，无 Electron API)                        │
 │        ▼                                                                │
-│  src/main/workers/analyze.ts   pdf.js 解析 + 版面分析  → AnalysisResult │
-│  src/main/workers/compose.ts   pdf-lib 覆盖/写回/双语  → 输出文件       │
-│                                                                        │
-│  隐藏窗口 raster  src/renderer/raster.html + src/raster/               │
-│     pdf.js (web build) 渲染页面到 canvas，按矩形裁 PNG，走 IPC 回主进程  │
+│  src/main/workers/analyze.ts   pdf.js 算子流 → 字形 → 行/栏/段落/公式    │
+│  src/main/workers/compose.ts   内容流改写 + 译文排版 + 公式重绘 + 双语   │
 │                                                                        │
 │  主窗口 renderer  src/renderer/  React 19 + HeroUI 3                   │
 │     sandbox、contextIsolation；只通过 window.docflow (preload) 通信      │
@@ -33,8 +29,9 @@
 要点：
 
 - **翻译请求在主进程**（需要 `net.fetch`，worker 里没有）；**CPU 密集的解析与写回在 worker**（可 `terminate()` 实现硬超时）。
-- 一个文档任务 = 主进程里的一个 async 函数，按阶段调用 worker / 翻译池 / 栅格窗口，写事件到 `events.jsonl` 并通过 `webContents.send` 推给渲染进程。
+- 一个文档任务 = 主进程里的一个 async 函数，按阶段调用 worker / 翻译池，写事件到 `events.jsonl` 并通过 `webContents.send` 推给渲染进程。
 - 渲染进程没有 Node、没有网络；预览 PDF 通过自定义协议 `docflow://` 读文档库里的文件（主进程校验路径不越界）。
+- 没有隐藏窗口、没有第二个渲染进程：PDF 相关的一切都在主进程与 worker 里完成（ADR-0008）。
 
 ## 2.2 目录结构
 
@@ -47,24 +44,29 @@ docflow/
 ├─ eslint.config.js  .prettierrc.json  .prettierignore
 ├─ vitest.config.ts  playwright.config.ts
 ├─ build/                         # electron-builder 用的图标与安装器资源
-│  ├─ icon.icns  icon.ico  icon.png (1024)  installer.nsh(可选)
+│  ├─ icon.icns  icon.ico  icon.png (1024)
 ├─ resources/                     # extraResources，运行时通过 process.resourcesPath 访问
 │  └─ fonts/NotoSansSC-Regular.otf  NotoSansSC-Bold.otf  LICENSE-OFL.txt  README.md
 ├─ scripts/
 │  ├─ verify-fonts.mjs            # 核对字体 SHA-256
-│  ├─ make-icons.mjs              # 由 build/icon.png 生成 icns/ico（用 png2icons 或 electron-icon-builder）
-│  └─ make-fixtures.mjs           # 生成 tests/fixtures/*.pdf（用 pdf-lib）
+│  ├─ make-icons.mjs              # 由 build/icon.png 生成 icns/ico（png2icons）
+│  ├─ make-fixtures.mjs           # 生成 tests/fixtures/*.pdf（用 pdf-lib）
+│  ├─ analyze-pdf.mjs             # 调试：输出 analysis.json 与画框的调试 PDF（03 章 §3.15）
+│  ├─ compose-pdf.mjs             # 调试：假翻译跑完整写回
+│  └─ third-party-notices.mjs     # 生成 THIRD_PARTY_NOTICES.md
 ├─ src/
 │  ├─ shared/                     # 主/渲染共用；不得 import electron 或 node
 │  │  ├─ ipc.ts                   # 通道名常量 + 每个通道的请求/响应 zod schema + 类型
 │  │  ├─ types.ts                 # Document、ProcessingEvent、Settings、Provider… 的 zod schema 与类型
+│  │  ├─ pdf-types.ts             # Glyph、Line、Paragraph、AnalysisResult… （03 章 §3.2）
+│  │  ├─ pdf-constants.ts         # 03 章 §3.16 的阈值表
 │  │  ├─ presets.ts               # 服务商预设表
-│  │  ├─ constants.ts             # 限制值（并发上限、字符上限…）
+│  │  ├─ constants.ts             # 其他限制值（并发上限、字符上限…）
 │  │  ├─ text.ts                  # 纯函数：文件名清理、相对时间、字节格式化
 │  │  └─ errors.ts                # UserError / PermanentError 等错误类与错误码
 │  ├─ main/
 │  │  ├─ index.ts                 # 入口：单实例、协议注册、启动顺序（见 2.5）
-│  │  ├─ app/window.ts  app/menu.ts  app/protocol.ts  app/dialogs.ts
+│  │  ├─ app/window.ts  app/menu.ts  app/protocol.ts  app/dialogs.ts  app/notifications.ts
 │  │  ├─ ipc/register.ts          # 把 handlers 表注册到 ipcMain，统一 zod 校验与错误转换
 │  │  ├─ ipc/handlers/*.ts        # app、settings、providers、documents、shell 各一个文件
 │  │  ├─ settings/settings.ts  settings/secrets.ts  settings/host.ts  settings/atomic-write.ts
@@ -73,27 +75,26 @@ docflow/
 │  │  ├─ pipeline/run.ts          # 阶段编排
 │  │  ├─ pipeline/stages/inspect.ts  analyze.ts  translate.ts  compose.ts  verify.ts  archive.ts
 │  │  ├─ pdf/worker-host.ts       # spawn worker、超时、取消、typed messages
-│  │  ├─ pdf/analyze/*.ts         # 纯函数：text-items、lines、columns、paragraphs、formula、normalize
-│  │  ├─ pdf/compose/*.ts         # 纯函数：layout（换行/缩放）、cover、draw、dual、fonts
-│  │  ├─ pdf/inspect.ts  pdf/verify.ts
+│  │  ├─ pdf/inspect.ts  pdf/verify.ts  pdf/forms.ts（表单引用统计）
+│  │  ├─ pdf/analyze/glyphs.ts  lines.ts  columns.ts  paragraphs.ts  formula.ts  normalize.ts   # 纯函数
+│  │  ├─ pdf/compose/content-lexer.ts  content-walker.ts  fonts.ts  layout.ts  emit.ts  rewrite.ts  dual.ts
 │  │  ├─ workers/analyze.ts  workers/compose.ts   # worker 入口（薄封装，调用 pdf/ 下纯函数）
-│  │  ├─ raster/raster-window.ts  # 隐藏窗口生命周期 + 请求队列
 │  │  ├─ translate/providers.ts  request.ts  response.ts  errors.ts  keys.ts  pool.ts
 │  │  ├─ translate/batch.ts  protect.ts  validate.ts  translate-document.ts  cache.ts  fake.ts
-│  │  ├─ translate/http.ts        # fetch 注入：生产用 net.fetch，测试用 undici/node fetch
+│  │  ├─ translate/http.ts        # fetch 注入：生产用 net.fetch，测试用 Node fetch
 │  │  └─ log/logger.ts
 │  ├─ preload/index.ts            # contextBridge.exposeInMainWorld('docflow', api)
-│  ├─ raster/main.ts              # 栅格化页面脚本（pdf.js web build）
+│  ├─ preload/api.d.ts            # window.docflow 的类型声明（供渲染进程 tsconfig）
 │  └─ renderer/
-│     ├─ index.html  raster.html
+│     ├─ index.html
 │     ├─ main.tsx  App.tsx  globals.css
 │     ├─ api/                     # window.docflow 的类型化封装 + 事件订阅 hooks
 │     ├─ store/                   # zustand：documents、settings、ui
 │     ├─ views/Library/  NewTranslation/  Document/  Settings/
-│     ├─ components/              # 通用：StatusChip、DropZone、Toasts、ConfirmDialog、PdfFrame…
+│     ├─ components/              # 通用：StatusChip、DropZone、ConfirmDialog、PdfFrame…
 │     └─ lib/                     # 纯函数：格式化、文案表
 ├─ tests/
-│  ├─ fixtures/                   # 由 scripts/make-fixtures.mjs 生成的 PDF + 少量手工样例
+│  ├─ fixtures/                   # 由 scripts/make-fixtures.mjs 生成的 PDF + 少量真实样例
 │  ├─ mock-provider/server.ts     # 假大模型服务（OpenAI/Anthropic/Gemini 三种接口 + 故障注入）
 │  ├─ unit/                       # 跨模块的单测（模块内单测放源码旁 *.test.ts）
 │  └─ e2e/*.spec.ts               # Playwright _electron
@@ -106,7 +107,7 @@ docflow/
 
 | 包 | 版本 | 用途 | 若升级 major |
 | --- | --- | --- | --- |
-| `electron` | `^44.4.3`（Node 24.21 / Chromium 152） | 运行时 | 允许到 45/46；检查 `protocol.handle`、`safeStorage`、`utilityProcess` API 无变化 |
+| `electron` | `^44.4.3`（Node 24.21 / Chromium 152） | 运行时 | 允许到 45/46；检查 `protocol.handle`、`safeStorage` API 无变化 |
 | `electron-vite` | `^5.0.0` | 构建 main/preload/renderer | 检查 peer 的 vite 范围，随之调整 vite |
 | `vite` | `^7.3.6`（electron-vite 5 的 peer 只到 7） | 打包 | 不要升到 8，除非 electron-vite 支持 |
 | `@vitejs/plugin-react` | `^6.1.1` | React Fast Refresh | — |
@@ -116,19 +117,20 @@ docflow/
 | `tailwindcss` / `@tailwindcss/vite` | `^4.3.3` | 样式 | — |
 | `zustand` | `^5.0.15` | 渲染进程状态 | — |
 | `zod` | `^4.6.5` | 所有跨进程/跨文件数据校验 | — |
-| `pdfjs-dist` | `^6.3.289`（`legacy/build/pdf.mjs` 供 Node；web build 供栅格窗口） | 解析、渲染 | 检查 `getTextContent` 返回结构 |
-| `@cantoo/pdf-lib` | `^2.11.1`（pdf-lib 的维护分支，API 同 pdf-lib 1.17） | 写回 | — |
+| `pdfjs-dist` | `^6.3.289`（`legacy/build/pdf.mjs` 供 Node） | 解析（算子流、文本层检测、校验） | 检查 `getOperatorList`/`OPS`/glyph 对象字段 |
+| `@cantoo/pdf-lib` | `^2.11.1`（pdf-lib 的维护分支，API 同 pdf-lib 1.17） | 写回（低层对象 API + 字体嵌入 + copyPages） | — |
 | `@cantoo/fontkit` | `^2.0.12` | 字体嵌入与子集化 | — |
 | `electron-log` | `^5.4.4` | 日志 | — |
+| `fflate` | `^0.8.2` | ZIP 导出、内容流解压/压缩兜底 | — |
 | `lucide-react` | `^1.47.0` | 图标 | — |
 | `clsx` | `^2.1.1` | className 拼接 | — |
 | `vitest` | `^5.0.1` | 单测 | — |
 | `@playwright/test` | `^1.63.0` | E2E（`_electron`） | — |
 | `electron-builder` | `^26.15.3` | 打包 | — |
+| `png2icons` | `^2.0.1` | 生成图标 | — |
 | `eslint` `^10.11.0`、`typescript-eslint` `^8.70.0`、`eslint-plugin-react-hooks` `^7.1.1`、`eslint-plugin-react-refresh` `^0.5.7`、`eslint-config-prettier` `^10.1.8`、`globals` `^17.12.0`、`prettier` `^3.9.8` | lint/格式 | |
 | `tsx` `^4.23.15` | 直接运行 `tests/mock-provider/server.ts` 与脚本 | |
 | `@types/node` `^24`、`@types/react` `^19.3`、`@types/react-dom` `^19.3` | 类型 | |
-| `archiver`（ZIP 导出）→ **改用** `fflate` `^0.8` | 纯 JS，`@cantoo/pdf-lib` 已依赖 | |
 
 `@heroui/react` 的 peer（`react-aria`、`react-aria-components`、`@react-aria/ssr`、`@react-aria/utils`、`@internationalized/date`）由 npm 自动安装；若 `npm ls` 报 peer 缺失，显式 `npm i` 它们。
 
@@ -149,6 +151,7 @@ docflow/
   "scripts": {
     "dev": "electron-vite dev",
     "build": "electron-vite build",
+    "prebuild": "node scripts/third-party-notices.mjs",
     "preview": "electron-vite preview",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
     "lint": "eslint . && prettier --check .",
@@ -162,7 +165,9 @@ docflow/
     "dist:dir": "electron-vite build && electron-builder --dir --publish never",
     "mock:provider": "tsx tests/mock-provider/server.ts",
     "fixtures": "node scripts/make-fixtures.mjs",
-    "icons": "node scripts/make-icons.mjs"
+    "icons": "node scripts/make-icons.mjs",
+    "analyze": "node scripts/analyze-pdf.mjs",
+    "compose": "node scripts/compose-pdf.mjs"
   },
   "dependencies": {
     "@cantoo/fontkit": "^2.0.12",
@@ -206,7 +211,7 @@ docflow/
 }
 ```
 
-原则：**主进程运行时需要的包放 `dependencies`**（electron-vite 的 `externalizeDepsPlugin` 把它们保持为外部模块，electron-builder 打包 `node_modules` 里的它们）；渲染进程用的包被 Vite 打进 bundle，放 `devDependencies`，避免打包体积膨胀。`pdfjs-dist` 两边都用：主进程外部引用，渲染进程 bundle。
+原则：**主进程运行时需要的包放 `dependencies`**（electron-vite 的 `externalizeDepsPlugin` 把它们保持为外部模块，electron-builder 打包 `node_modules` 里的它们）；渲染进程用的包被 Vite 打进 bundle，放 `devDependencies`，避免打包体积膨胀。
 
 `.npmrc`：
 
@@ -222,19 +227,18 @@ audit=false
 2. `protocol.registerSchemesAsPrivileged([{ scheme: 'docflow', privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } }])`（必须在 `app.ready` 之前）。
 3. 初始化日志（2.7）。
 4. `await app.whenReady()`。
-5. 读 `host.json` → 决定文档库目录（5.2）→ `settings.load()`、`secrets.load()`、`library.open()`（扫描 manifest 建索引）。
+5. 读 `host.json` → 决定文档库目录（05 章 5.1）→ `settings.load()`、`secrets.load()`、`library.open()`（扫描 manifest 建索引）。
 6. `protocol.handle('docflow', handler)`（2.6）。
 7. `session.defaultSession.setProxy(...)` 按设置。
 8. 创建主窗口（`app/window.ts`），macOS 上 `titleBarStyle: 'hiddenInset'`、`trafficLightPosition: {x: 16, y: 16}`；Windows 默认标题栏。最小尺寸 960×600，默认 1240×800，记住上次尺寸与位置（存 `host.json`）。
 9. 注册 IPC（`ipc/register.ts`）。
 10. `scheduler.start()`：把上次未完成（`processing`/`retrying`）的文档改回 `queued` 并开始跑。
 11. macOS：`app.on('open-file')` 与 Dock 拖入 → 新建翻译；`window-all-closed` 时不退出（macOS）/ 退出（Windows）。
-12. `before-quit`：`scheduler.stop()`（给正在写文件的任务最多 5 s 收尾，然后 terminate worker）、关闭栅格窗口、flush 日志。
+12. `before-quit`：`scheduler.stop()`（给正在写文件的任务最多 5 s 收尾，然后 terminate worker）、flush 日志。
 
 ## 2.6 安全设置
 
 - 主窗口 `webPreferences`：`{ preload, sandbox: true, contextIsolation: true, nodeIntegration: false, webSecurity: true, plugins: true, spellcheck: false }`。`plugins: true` 是为了 iframe 里用 Chromium 内置 PDF 查看器。
-- 栅格窗口：`{ show: false, webPreferences: { preload: rasterPreload, sandbox: true, contextIsolation: true, offscreen: false } }`，尺寸 800×600 无所谓（渲染到 canvas）。
 - `index.html` 的 CSP（meta 标签，开发与生产一致）：
 
   ```
@@ -249,7 +253,7 @@ audit=false
   ```
 
   开发模式 Vite 需要 `connect-src ws://localhost:*`，通过 electron-vite 的 `process.env.ELECTRON_RENDERER_URL` 判断后注入。
-- `docflow://` 协议处理器（`app/protocol.ts`）：只接受 `docflow://library/<相对路径>`，把相对路径 `path.resolve(libraryDir, rel)` 后检查仍在 `libraryDir` 内且不含符号链接逃逸（`fs.realpath` 比较），否则 404；只允许 `.pdf`、`.png`；用 `net.fetch(pathToFileURL(file))` 返回，附 `Content-Type` 与 `Cache-Control: no-store`。
+- `docflow://` 协议处理器（`app/protocol.ts`）：只接受 `docflow://library/<相对路径>`，把相对路径 `path.resolve(libraryDir, rel)` 后检查仍在 `libraryDir` 内且不含符号链接逃逸（`fs.realpath` 比较），否则 404；只允许 `.pdf`；用 `net.fetch(pathToFileURL(file))` 返回，附 `Content-Type: application/pdf` 与 `Cache-Control: no-store`。
 - 所有 `shell.openExternal` 只放行 `https:` 与 `mailto:`。
 - `will-navigate` / `setWindowOpenHandler` 一律拒绝并交给 `shell.openExternal`（https）。
 - 渲染进程收到的任何字符串只当数据；文档标题、文件名在界面上用 React 正常渲染（自动转义），不用 `dangerouslySetInnerHTML`。
@@ -259,18 +263,18 @@ audit=false
 - `electron-log` 5，文件 `<library>/logs/main.log`，`maxSize` 8 MiB，滚动保留 `main.old.log`。
 - 级别：开发 `debug`，生产 `info`；环境变量 `DOCFLOW_LOG_LEVEL` 覆盖。
 - 格式：`[2026-09-21 16:00:00.123] [info] [pipeline] {docId} inspect ok pages=12`——统一 `scope` 用模块名。
-- **永远不记录 API Key**；请求体日志截断到 400 字并做 `redact()`（4.4）。
-- 处理记录（给用户看的事件）另有 `events.jsonl`（5.4），与日志不是一回事。
+- **永远不记录 API Key**；请求体日志截断到 400 字并做 `redact()`（04 章 4.5）。
+- 处理记录（给用户看的事件）另有 `events.jsonl`（05 章 5.5），与日志不是一回事。
 
 ## 2.8 环境变量
 
 | 变量 | 作用 |
 | --- | --- |
 | `DOCFLOW_DATA_DIR` | 覆盖文档库目录（优先于 host.json）；E2E 用 |
-| `DOCFLOW_FAKE_PROVIDERS=1` | 翻译不发网络请求，返回确定性的假译文（4.13） |
+| `DOCFLOW_FAKE_PROVIDERS=1` | 翻译不发网络请求，返回确定性的假译文（04 章 4.13） |
 | `DOCFLOW_MOCK_PROVIDER_URL` | 存在时把所有预设的 base_url 指向它（E2E 用 mock 服务） |
 | `DOCFLOW_LOG_LEVEL` | `debug/info/warn/error` |
-| `DOCFLOW_RASTER_SCALE` | 公式贴图缩放倍数，默认 4 |
+| `DOCFLOW_E2E_SAVE_PATH` | 存在时保存对话框直接返回该路径（E2E 用） |
 
 ## 2.9 各配置文件全文
 
@@ -301,10 +305,7 @@ export default defineConfig({
     plugins: [externalizeDepsPlugin()],
     build: {
       rollupOptions: {
-        input: {
-          index: resolve(__dirname, 'src/preload/index.ts'),
-          raster: resolve(__dirname, 'src/preload/raster.ts'),
-        },
+        input: { index: resolve(__dirname, 'src/preload/index.ts') },
         // 沙箱 preload 必须是 CommonJS
         output: { format: 'cjs', entryFileNames: '[name].cjs' },
       },
@@ -313,14 +314,7 @@ export default defineConfig({
   },
   renderer: {
     plugins: [react(), tailwindcss()],
-    build: {
-      rollupOptions: {
-        input: {
-          index: resolve(__dirname, 'src/renderer/index.html'),
-          raster: resolve(__dirname, 'src/renderer/raster.html'),
-        },
-      },
-    },
+    build: { rollupOptions: { input: { index: resolve(__dirname, 'src/renderer/index.html') } } },
     resolve: {
       alias: {
         '@shared': resolve(__dirname, 'src/shared'),
@@ -333,7 +327,7 @@ export default defineConfig({
 
 说明：
 
-- `"type": "module"` + 主进程 ESM 输出：`pdfjs-dist` 是 ESM-only，这样主进程可以直接 `import * as pdfjs from 'pdfjs-dist/legacy/build/pdf.mjs'`。ESM 主进程里没有 `__dirname`，路径用 `fileURLToPath(new URL('../preload/index.cjs', import.meta.url))`。
+- `"type": "module"` + 主进程 ESM 输出：`pdfjs-dist` 是 ESM-only，这样主进程与 worker 可以直接 `import * as pdfjs from 'pdfjs-dist/legacy/build/pdf.mjs'`。ESM 主进程里没有 `__dirname`，路径用 `fileURLToPath(new URL('../preload/index.cjs', import.meta.url))`。
 - worker 作为主进程的额外入口打包（`out/main/workers/analyze.mjs`），用 `new Worker(new URL('./workers/analyze.mjs', import.meta.url))` 启动；开发模式下 electron-vite 也会输出到 `out/`，路径一致。**若 electron-vite 5 对多入口 + ESM 的组合有问题**（表现为 dev 时找不到 worker 文件），备选：用 electron-vite 文档的 `?nodeWorker` 导入方式，或把 worker 改为 `utilityProcess.fork`；把结论写进 worklog。
 - 沙箱 preload 必须是 CJS（Electron 限制），所以 preload 单独指定 `format: 'cjs'`、后缀 `.cjs`。
 
@@ -365,9 +359,9 @@ export default defineConfig({
 ```
 
 `tsconfig.node.json`：`extends` 基础，`compilerOptions.types: ["node"]`，`lib: ["ES2023"]`，`include: ["src/main", "src/preload", "src/shared", "electron.vite.config.ts", "scripts", "tests/mock-provider", "tests/unit", "tests/e2e"]`。
-`tsconfig.web.json`：`extends` 基础，`jsx: "react-jsx"`，`lib: ["ES2023", "DOM", "DOM.Iterable"]`，`types: []`，`include: ["src/renderer", "src/raster", "src/shared", "src/preload/api.d.ts"]`。
+`tsconfig.web.json`：`extends` 基础，`jsx: "react-jsx"`，`lib: ["ES2023", "DOM", "DOM.Iterable"]`，`types: []`，`include: ["src/renderer", "src/shared", "src/preload/api.d.ts"]`。
 
-`src/preload/api.d.ts` 声明 `interface Window { docflow: DocflowApi }`，`DocflowApi` 类型从 `src/shared/ipc.ts` 推导（5.6）。
+`src/preload/api.d.ts` 声明 `interface Window { docflow: DocflowApi }`，`DocflowApi` 类型从 `src/shared/ipc.ts` 推导（05 章 5.6）。
 
 ### `eslint.config.js`
 
@@ -396,7 +390,7 @@ export default tseslint.config(
     },
   },
   {
-    files: ['src/renderer/**/*.{ts,tsx}', 'src/raster/**/*.ts'],
+    files: ['src/renderer/**/*.{ts,tsx}'],
     languageOptions: { globals: globals.browser },
     plugins: { 'react-hooks': reactHooks, 'react-refresh': reactRefresh },
     rules: { ...reactHooks.configs.recommended.rules, 'react-refresh/only-export-components': 'warn' },
@@ -514,8 +508,6 @@ body {
   </body>
 </html>
 ```
-
-`raster.html` 同结构，脚本 `../raster/main.ts`，CSP 里不需要 `frame-src`。
 
 ## 2.10 版本策略
 

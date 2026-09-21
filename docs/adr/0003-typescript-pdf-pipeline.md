@@ -17,8 +17,8 @@
 
 自己实现流水线，全部 TypeScript，运行在 Electron 主进程的 `worker_threads` 里：
 
-- **解析**：`pdfjs-dist` 6（Node legacy build）`getTextContent()` 取每个文本片段的位置、字号、字体名，自己做行合并、段落合并、栏检测、公式片段识别（按字体名与字符集）。
-- **写回**：`@cantoo/pdf-lib` 2（pdf-lib 的维护分支）+ `@cantoo/fontkit`：在原页上用白色矩形覆盖被翻译段落，再用嵌入的 Noto Sans SC 子集写入译文，字号自适应缩小到能装下为止；行内公式按 ADR-0006 贴图。
+- **解析**：`pdfjs-dist` 6（Node legacy build）`getOperatorList()` 的算子流，自己解释文字状态得到逐字形的位置、字号、字体、编码、颜色，再做行合并、段落合并、栏检测、公式片段识别（规则取自 PDFMathTranslate）。
+- **写回**（细节见 ADR-0008）：`@cantoo/pdf-lib` 2（pdf-lib 的维护分支）+ `@cantoo/fontkit`：改写页面内容流，删除被翻译段落的文字绘制指令（其余字节原样保留），追加用嵌入 Noto Sans SC 子集排好的译文；行内公式用原字体资源与原编码在新位置重绘。
 - **双语版**：pdf-lib `copyPages` 交替复制原页与译页。
 - **校验**：输出重新用 pdf.js 打开，核对页数、页面尺寸、译页含有中文。
 - **稳健性**：每个阶段有独立超时（worker 可被 `terminate()`），每个段落的写回单独 try/catch（失败保留原文并记 warning），日志保留完整错误堆栈。

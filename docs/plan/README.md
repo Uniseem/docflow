@@ -18,7 +18,7 @@
 
 ## 一句话架构
 
-Electron 44 单应用：主进程（Node 24）负责文档库、任务调度、大模型请求（`net.fetch`）；PDF 解析与写回在 `worker_threads` 里用 pdf.js + pdf-lib 完成；行内公式通过隐藏窗口里的 pdf.js 栅格化后贴回；渲染进程是 React 19 + HeroUI 3 的单页界面，通过 contextBridge 暴露的类型化 IPC 与主进程通信；数据全部是文件（JSON / JSONL / PDF）。
+Electron 44 单应用：主进程（Node 24）负责文档库、任务调度、大模型请求（`net.fetch`）；PDF 解析与写回在 `worker_threads` 里用 pdf.js + pdf-lib 完成，处理逻辑参照 [PDFMathTranslate](https://github.com/PDFMathTranslate/PDFMathTranslate)：解释内容流得到逐字形信息，删除被翻译段落的文字指令，追加译文，公式用原字体在新位置重绘；渲染进程是 React 19 + HeroUI 3 的单页界面，通过 contextBridge 暴露的类型化 IPC 与主进程通信；数据全部是文件（JSON / JSONL / PDF）。
 
 ## 执行顺序（详见 09 章）
 
@@ -26,7 +26,7 @@ Electron 44 单应用：主进程（Node 24）负责文档库、任务调度、�
 M0 工程骨架        package.json、electron-vite、HeroUI、lint/test、CI 变绿、空窗口能跑
 M1 共享层与翻译    shared 类型 + zod、settings/secrets、providers、translation pool、mock 服务、单测
 M2 PDF 解析        inspect + analyze（pdf.js）、fixture 生成器、单测
-M3 PDF 写回        compose（pdf-lib）+ raster 窗口 + dual + verify、单测
+M3 PDF 写回        内容流词法分析/遍历 + 译文排版 + 公式重绘 + dual + verify、单测
 M4 流水线与文档库  library、scheduler、pipeline 串起来、IPC、事件；命令行冒烟
 M5 界面            文档库、新建翻译、文档详情、设置、主题；E2E
 M6 打包与发布      electron-builder、图标、README、release 流程、打 v4.0.0-beta.1 标签验证

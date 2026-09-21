@@ -9,5 +9,6 @@
 | [0003](0003-typescript-pdf-pipeline.md) | 用 TypeScript（pdf.js + pdf-lib）实现 PDF 原生翻译，替代 BabelDOC/Python | 已采纳 |
 | [0004](0004-file-based-library.md) | 文档库用文件存储，不用数据库 | 已采纳 |
 | [0005](0005-net-fetch-for-http.md) | 所有 HTTP 走 Electron `net.fetch`，代理交给 Chromium | 已采纳 |
-| [0006](0006-raster-inline-objects.md) | 行内公式等不可翻译对象用栅格化贴图保留位置 | 已采纳 |
+| [0006](0006-raster-inline-objects.md) | 行内公式等不可翻译对象用栅格化贴图保留位置 | 已废弃（被 0008 取代） |
 | [0007](0007-unsigned-distribution-and-ci.md) | 不签名分发；macOS 用 pkg + dmg，Windows 用 NSIS；CI 只依赖 Node | 已采纳 |
+| [0008](0008-content-stream-rewrite.md) | 写回采用内容流改写（PDFMathTranslate 方式），公式用原字体重绘 | 已采纳 |

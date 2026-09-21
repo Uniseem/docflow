@@ -31,24 +31,27 @@
 
 - [ ] M2-1 `scripts/make-fixtures.mjs` 生成 08.2 的全部 fixture 并提交；`tests/fixtures/README.md`。
 - [ ] M2-2 `pdf/inspect.ts` + 错误码 + 单测（encrypted/scanned/empty/normal）。
-- [ ] M2-3 `pdf/analyze/text-items.ts`（含颜色与图片区域提取）+ 单测。
-- [ ] M2-4 `pdf/analyze/lines.ts`、`columns.ts` + 快照单测。
-- [ ] M2-5 `pdf/analyze/formula.ts` + 单测（inline-formula、display-math）。
+- [ ] M2-3 `pdf/analyze/glyphs.ts`：pdf.js 算子流文字状态机（§3.4，含表单、颜色、图片矩形、编码字节数）+ 单测（用 fixture 核对每个字形的 x/y/size/adv 与 `getTextContent` 的结果一致，容差 0.05 pt）。
+- [ ] M2-4 `pdf/analyze/lines.ts`（算子不可拆、竖直重叠规则）、`columns.ts` + 快照单测。
+- [ ] M2-5 `pdf/analyze/formula.ts`（pdf2zh 规则 + 放宽）+ 单测（inline-formula、display-math、italic-sentence）。
 - [ ] M2-6 `pdf/analyze/paragraphs.ts`（角色、对齐、可翻译判定）、`normalize.ts` + 快照单测。
-- [ ] M2-7 `workers/analyze.ts` + `pdf/worker-host.ts`（协议、超时、取消、崩溃）+ 单测（用一个故意 `while(true)` 的假 worker 验证超时 terminate）。
-- [ ] M2-8 `scripts/analyze-pdf.mjs` 调试工具：对任意 PDF 输出 `analysis.json` 与一张把段落框、占位符框画在页面上的调试 PDF（用 pdf-lib 画矩形），方便肉眼检查。
+- [ ] M2-7 表单引用统计（pdf-lib 扫描 `/XObject`，shared 判定）+ 单测（form-wrapped、shared-form fixture）。
+- [ ] M2-8 `workers/analyze.ts` + `pdf/worker-host.ts`（协议、超时、取消、崩溃）+ 单测（用一个故意 `while(true)` 的假 worker 验证超时 terminate）。
+- [ ] M2-9 `scripts/analyze-pdf.mjs` 调试工具（§3.15）。
 
-验收：所有 fixture 的快照经人工核对合理（worklog 里贴关键数字：段数、可翻译数、占位符数）；两篇真实论文 `analyze` ≤ 5 s；`npm run check` 全绿。
+验收：所有 fixture 的快照经人工核对合理（worklog 里贴关键数字：段数、可翻译数、公式片段数）；两篇真实论文 `analyze` ≤ 5 s；`npm run check` 全绿。
 
 ## M3 PDF 写回
 
-- [ ] M3-1 `pdf/compose/fonts.ts`（嵌入、子集回退）、`layout.ts`（分词、换行、缩放、对齐）+ 单测。
-- [ ] M3-2 `pdf/compose/cover.ts`、`draw.ts`、`dual.ts`；`workers/compose.ts` + 集成测试（假翻译）。
-- [ ] M3-3 `src/raster/main.ts` + `raster.html` + `preload/raster.ts` + `main/raster/raster-window.ts`（含超时、崩溃重建）；单测用 vitest 无法覆盖，写一个 `scripts/raster-demo.mjs`（启动 Electron 无头跑一次，输出 PNG 到 tmp）。
-- [ ] M3-4 `pdf/verify.ts` + 单测。
-- [ ] M3-5 集成：fixture → 假翻译 → 贴图（集成测试用灰色矩形替代）→ mono/dual → verify，全部通过；肉眼检查 `two-column`、`inline-formula` 的输出 PDF（worklog 附截图路径）。
+- [ ] M3-1 `pdf/compose/content-lexer.ts`（§3.12.1，含内联图像、字符串转义、字典/数组）+ 单测（把 fixture 的内容流词法分析后原样拼回必须逐字节相等；构造的边角样例）。
+- [ ] M3-2 `pdf/compose/content-walker.ts`（§3.12.2 定位状态机、表单递归）+ 单测（每个 show-text 算子的起点与 M2-3 字形记录的首字形坐标一致，容差 0.5 pt）。
+- [ ] M3-3 `pdf/compose/fonts.ts`（CJK 嵌入与子集回退；`loadedName → 资源名` 映射：起点匹配 + BaseFont 回退；原字体以 `DFo<n>` 挂到页面字典）+ 单测。
+- [ ] M3-4 `pdf/compose/layout.ts`（分词、换行、避头尾、行高/字号缩放、对齐）+ 单测。
+- [ ] M3-5 `pdf/compose/emit.ts`（译文 `Tj`、公式片段重绘与合并、颜色、编码字节数）、`rewrite.ts`（删除集合、一致性校验、整页放弃、流写回）、`dual.ts`；`workers/compose.ts` + 集成测试（假翻译）。
+- [ ] M3-6 `pdf/verify.ts`（含改写页 `getOperatorList` 可执行）+ 单测。
+- [ ] M3-7 集成：每个 fixture → 假翻译 → compose → verify 全部通过；肉眼检查 `two-column`、`inline-formula`、`form-wrapped` 的输出（worklog 附截图路径）；用 `scripts/compose-pdf.mjs` 跑两篇真实论文，记录 `op_mismatch`/`font_unmapped` 数量（目标：0）。
 
-验收：08.4 的 pdf 集成用例全绿；30 页 fixture compose+dual+verify ≤ 15 s。
+验收：08.4 的 pdf 集成用例全绿；30 页 fixture compose+dual+verify ≤ 15 s；真实论文无 `page_skipped`。
 
 ## M4 流水线、文档库、IPC
 
