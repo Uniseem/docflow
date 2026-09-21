@@ -1,0 +1,16 @@
+# 更新日志
+
+格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
+
+## [Unreleased]
+
+### 变更
+
+- 项目重建：主分支清空，旧代码移至 `old` 分支；新建标准仓库结构与 4.0 规划（Electron + React + HeroUI 3）。
+
+## [3.1.0] - 2026-09-12
+
+旧版本线（Rust 引擎 + BabelDOC）。见 `old` 分支与 GitHub Releases。
+
+[Unreleased]: https://github.com/Uniseem/docflow/compare/v3.1.0...HEAD
+[3.1.0]: https://github.com/Uniseem/docflow/releases/tag/v3.1.0

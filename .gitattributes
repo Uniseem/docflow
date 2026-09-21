@@ -1,0 +1,16 @@
+# 统一 LF；Windows 检出也保持 LF，避免 lint/prettier 抱怨
+* text=auto eol=lf
+*.sh text eol=lf
+*.ps1 text eol=crlf
+*.cmd text eol=crlf
+
+# 二进制
+*.otf binary
+*.ttf binary
+*.woff2 binary
+*.pdf binary
+*.png binary
+*.jpg binary
+*.ico binary
+*.icns binary
+*.zip binary

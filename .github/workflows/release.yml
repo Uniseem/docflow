@@ -1,0 +1,92 @@
+# 发布：推送 v* 标签时在 Windows 与 macOS 上打安装包，并发布为 GitHub Release。
+# 不做代码签名（没有证书）。签名与公证留待将来：见 docs/plan/07-build-ci-release.md。
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: 安装包（${{ matrix.name }}）
+    if: ${{ hashFiles('package.json') != '' }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows x64
+            os: windows-latest
+            args: --win --x64
+          - name: macOS arm64 + x64
+            os: macos-15
+            args: --mac --arm64 --x64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - name: 缓存 Electron 二进制
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/electron
+            ~/.cache/electron-builder
+            ~/AppData/Local/electron/Cache
+            ~/AppData/Local/electron-builder/Cache
+          key: electron-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+      - run: npm ci
+      - name: 标签必须等于 package.json 的版本
+        shell: bash
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          if [ "${GITHUB_REF_NAME}" != "v${version}" ]; then
+            echo "标签 ${GITHUB_REF_NAME} 与 package.json 版本 ${version} 不一致" >&2
+            exit 1
+          fi
+      - run: npm run check
+      - run: npm run build
+      - run: npx electron-builder ${{ matrix.args }} --publish never
+      - uses: actions/upload-artifact@v4
+        with:
+          name: installers-${{ runner.os }}
+          path: |
+            release/DocFlow-*.exe
+            release/DocFlow-*.dmg
+            release/DocFlow-*.pkg
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: installers-*
+          merge-multiple: true
+          path: dist
+      - name: 发布
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          extra=()
+          case "${version}" in *-*) extra+=(--prerelease) ;; esac   # v4.0.0-beta.1 → 预发布
+          cd dist
+          sha256sum DocFlow-* > SHA256SUMS.txt
+          sed "s/__VERSION__/${version}/g" ../.github/release-notes.md > notes.md
+          gh release create "${GITHUB_REF_NAME}" --verify-tag --title "DocFlow ${version}" --notes-file notes.md "${extra[@]}" DocFlow-* SHA256SUMS.txt

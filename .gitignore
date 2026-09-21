@@ -1,0 +1,31 @@
+# 依赖与构建产物
+node_modules/
+out/
+dist/
+release/
+coverage/
+.vite/
+*.tsbuildinfo
+
+# 测试产物
+playwright-report/
+test-results/
+tests/e2e/.data/
+
+# 本地数据与临时文件
+data/
+tmp/
+*.log
+.env
+.env.*
+
+# HeroUI 的本地文档缓存（npx heroui-cli agents-md 生成）
+.heroui-docs/
+
+# 编辑器与系统
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
