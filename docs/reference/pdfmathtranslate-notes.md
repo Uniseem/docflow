@@ -4,12 +4,12 @@
 
 ## 文件分工
 
-| 文件 | 作用 |
-| --- | --- |
-| `pdf2zh/high_level.py` | 主流程 `translate_patch` / `translate_stream`：逐页渲染位图 → DocLayout-YOLO → 版面矩阵 → 解释内容流 → 收集补丁 → 写回 PyMuPDF → 字体子集化 → mono/dual |
-| `pdf2zh/pdfinterp.py` | `PDFPageInterpreterEx`：pdfminer 解释器的子类，执行时把非文字算子重新序列化成 `ops_base` 字符串；处理表单 XObject 递归与逆矩阵回写 |
-| `pdf2zh/converter.py` | `TranslateConverter.receive_layout`：A 解析段落与公式、B 并发翻译、C 生成新文字指令 `ops_new` |
-| `pdf2zh/doclayout.py` | ONNX 版面模型封装 |
+| 文件                   | 作用                                                                                                                                                                                                                                                           |
+| ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `pdf2zh/high_level.py` | 主流程 `translate_patch` / `translate_stream`：逐页渲染位图 → DocLayout-YOLO → 版面矩阵 → 解释内容流 → 收集补丁 → 写回 PyMuPDF → 字体子集化 → mono/dual                                                                                                        |
+| `pdf2zh/pdfinterp.py`  | `PDFPageInterpreterEx`：pdfminer 解释器的子类，执行时把非文字算子重新序列化成 `ops_base` 字符串；处理表单 XObject 递归与逆矩阵回写                                                                                                                             |
+| `pdf2zh/converter.py`  | `TranslateConverter.receive_layout`：A 解析段落与公式、B 并发翻译、C 生成新文字指令 `ops_new`                                                                                                                                                                  |
+| `pdf2zh/doclayout.py`  | ONNX 版面模型封装                                                                                                                                                                                                                                              |
 | `pdf2zh/translator.py` | 各翻译服务；默认提示词 `You are a professional, authentic machine translation engine. Only Output the translated text, do not include any other text. Translate the following markdown source text to {lang_out}. Keep the formula notation {v*} unchanged. …` |
 
 ## 版面矩阵（high_level.py `translate_patch`）

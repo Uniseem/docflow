@@ -10,29 +10,41 @@
 export const ProviderType = z.enum(['openai', 'azure', 'anthropic', 'gemini'])
 // 标签：openai → 'OpenAI 兼容'，azure → 'Azure OpenAI'，anthropic → 'Anthropic'，gemini → 'Gemini'
 
-export const ModelConfig = z.object({ id: z.string().min(1).max(256).regex(/^[^\r\n]+$/), name: z.string().max(200).optional() })
+export const ModelConfig = z.object({
+  id: z
+    .string()
+    .min(1)
+    .max(256)
+    .regex(/^[^\r\n]+$/),
+  name: z.string().max(200).optional(),
+})
 
-export const ProviderConfig = z.object({
-  id: z.string().regex(/^[a-z0-9-_]{1,64}$/),
-  name: z.string().min(1).max(64),
-  type: ProviderType,
-  baseUrl: z.string().url().refine(u => /^https?:$/.test(new URL(u).protocol)),
-  enabled: z.boolean().default(true),
-  models: z.array(ModelConfig).max(500),            // id 唯一
-  concurrency: z.number().int().min(1).max(2000).default(100),
-  preset: z.string().optional(),                     // 来源预设 id
-  extraBody: z.record(z.string(), z.unknown()).optional(), // 不得含 model/messages/stream/contents/system/systemInstruction
-}).strict()
+export const ProviderConfig = z
+  .object({
+    id: z.string().regex(/^[a-z0-9-_]{1,64}$/),
+    name: z.string().min(1).max(64),
+    type: ProviderType,
+    baseUrl: z
+      .string()
+      .url()
+      .refine((u) => /^https?:$/.test(new URL(u).protocol)),
+    enabled: z.boolean().default(true),
+    models: z.array(ModelConfig).max(500), // id 唯一
+    concurrency: z.number().int().min(1).max(2000).default(100),
+    preset: z.string().optional(), // 来源预设 id
+    extraBody: z.record(z.string(), z.unknown()).optional(), // 不得含 model/messages/stream/contents/system/systemInstruction
+  })
+  .strict()
 
 export const TranslatorChoice = z.object({ providerId: z.string(), model: z.string() })
 export const translatorLabel = (p: ProviderConfig, modelId: string) =>
-  `${p.name} · ${p.models.find(m => m.id === modelId)?.name ?? modelId}`
+  `${p.name} · ${p.models.find((m) => m.id === modelId)?.name ?? modelId}`
 
 export const LlmRuntime = z.object({
   chunkChars: z.number().int().min(100).max(32_000).default(4000),
   maxSegmentsPerRequest: z.number().int().min(1).max(64).default(8),
   maxRequestChars: z.number().int().min(500).max(100_000).default(8000),
-  maxOutputTokens: z.number().int().min(0).max(1_000_000).default(0),   // 0 = 服务商默认
+  maxOutputTokens: z.number().int().min(0).max(1_000_000).default(0), // 0 = 服务商默认
 })
 export const TranslationRuntime = z.object({
   llm: LlmRuntime,
@@ -43,28 +55,28 @@ export const TranslationRuntime = z.object({
 
 ## 4.2 预设（`src/shared/presets.ts`）
 
-| id | 名称 | type | baseUrl | keyUrl | keyOptional |
-| --- | --- | --- | --- | --- | --- |
-| deepseek | DeepSeek | openai | `https://api.deepseek.com/v1` | https://platform.deepseek.com/api_keys | |
-| openai | OpenAI | openai | `https://api.openai.com/v1` | https://platform.openai.com/api-keys | |
-| anthropic | Anthropic（Claude） | anthropic | `https://api.anthropic.com` | https://console.anthropic.com/settings/keys | |
-| gemini | Google Gemini | gemini | `https://generativelanguage.googleapis.com` | https://aistudio.google.com/apikey | |
-| openrouter | OpenRouter | openai | `https://openrouter.ai/api/v1` | https://openrouter.ai/keys | |
-| siliconflow | 硅基流动 | openai | `https://api.siliconflow.cn/v1` | https://cloud.siliconflow.cn/account/ak | |
-| dashscope | 阿里云百炼 | openai | `https://dashscope.aliyuncs.com/compatible-mode/v1` | https://bailian.console.aliyun.com/?apiKey=1 | |
-| volcengine | 火山引擎（豆包） | openai | `https://ark.cn-beijing.volces.com/api/v3` | https://console.volcengine.com/ark | |
-| moonshot | 月之暗面（Kimi） | openai | `https://api.moonshot.cn/v1` | https://platform.moonshot.cn/console/api-keys | |
-| zhipu | 智谱 AI | openai | `https://open.bigmodel.cn/api/paas/v4` | https://open.bigmodel.cn/usercenter/apikeys | |
-| hunyuan | 腾讯混元 | openai | `https://api.hunyuan.cloud.tencent.com/v1` | https://console.cloud.tencent.com/hunyuan/api-key | |
-| stepfun | 阶跃星辰 | openai | `https://api.stepfun.com/v1` | https://platform.stepfun.com/interface-key | |
-| lingyi | 零一万物 | openai | `https://api.lingyiwanwu.com/v1` | https://platform.lingyiwanwu.com/apikeys | |
-| xai | xAI（Grok） | openai | `https://api.x.ai/v1` | https://console.x.ai | |
-| groq | Groq | openai | `https://api.groq.com/openai/v1` | https://console.groq.com/keys | |
-| mistral | Mistral AI | openai | `https://api.mistral.ai/v1` | https://console.mistral.ai/api-keys | |
-| azure | Azure OpenAI | azure | `https://资源名称.openai.azure.com/openai/v1` | https://portal.azure.com | |
-| ollama | Ollama（本机） | openai | `http://localhost:11434/v1` | — | ✓ |
-| lmstudio | LM Studio（本机） | openai | `http://localhost:1234/v1` | — | ✓ |
-| custom | 自定义（OpenAI 兼容） | openai | `` | — | |
+| id          | 名称                  | type      | baseUrl                                             | keyUrl                                            | keyOptional |
+| ----------- | --------------------- | --------- | --------------------------------------------------- | ------------------------------------------------- | ----------- |
+| deepseek    | DeepSeek              | openai    | `https://api.deepseek.com/v1`                       | https://platform.deepseek.com/api_keys            |             |
+| openai      | OpenAI                | openai    | `https://api.openai.com/v1`                         | https://platform.openai.com/api-keys              |             |
+| anthropic   | Anthropic（Claude）   | anthropic | `https://api.anthropic.com`                         | https://console.anthropic.com/settings/keys       |             |
+| gemini      | Google Gemini         | gemini    | `https://generativelanguage.googleapis.com`         | https://aistudio.google.com/apikey                |             |
+| openrouter  | OpenRouter            | openai    | `https://openrouter.ai/api/v1`                      | https://openrouter.ai/keys                        |             |
+| siliconflow | 硅基流动              | openai    | `https://api.siliconflow.cn/v1`                     | https://cloud.siliconflow.cn/account/ak           |             |
+| dashscope   | 阿里云百炼            | openai    | `https://dashscope.aliyuncs.com/compatible-mode/v1` | https://bailian.console.aliyun.com/?apiKey=1      |             |
+| volcengine  | 火山引擎（豆包）      | openai    | `https://ark.cn-beijing.volces.com/api/v3`          | https://console.volcengine.com/ark                |             |
+| moonshot    | 月之暗面（Kimi）      | openai    | `https://api.moonshot.cn/v1`                        | https://platform.moonshot.cn/console/api-keys     |             |
+| zhipu       | 智谱 AI               | openai    | `https://open.bigmodel.cn/api/paas/v4`              | https://open.bigmodel.cn/usercenter/apikeys       |             |
+| hunyuan     | 腾讯混元              | openai    | `https://api.hunyuan.cloud.tencent.com/v1`          | https://console.cloud.tencent.com/hunyuan/api-key |             |
+| stepfun     | 阶跃星辰              | openai    | `https://api.stepfun.com/v1`                        | https://platform.stepfun.com/interface-key        |             |
+| lingyi      | 零一万物              | openai    | `https://api.lingyiwanwu.com/v1`                    | https://platform.lingyiwanwu.com/apikeys          |             |
+| xai         | xAI（Grok）           | openai    | `https://api.x.ai/v1`                               | https://console.x.ai                              |             |
+| groq        | Groq                  | openai    | `https://api.groq.com/openai/v1`                    | https://console.groq.com/keys                     |             |
+| mistral     | Mistral AI            | openai    | `https://api.mistral.ai/v1`                         | https://console.mistral.ai/api-keys               |             |
+| azure       | Azure OpenAI          | azure     | `https://资源名称.openai.azure.com/openai/v1`       | https://portal.azure.com                          |             |
+| ollama      | Ollama（本机）        | openai    | `http://localhost:11434/v1`                         | —                                                 | ✓           |
+| lmstudio    | LM Studio（本机）     | openai    | `http://localhost:1234/v1`                          | —                                                 | ✓           |
+| custom      | 自定义（OpenAI 兼容） | openai    | ``                                                  | —                                                 |             |
 
 界面分组：国内服务 = deepseek, siliconflow, dashscope, volcengine, moonshot, zhipu, hunyuan, stepfun, lingyi；国际服务 = openai, anthropic, gemini, openrouter, xai, groq, mistral, azure；本机模型 = ollama, lmstudio；最后「自定义服务商…」。
 
@@ -114,8 +126,21 @@ type ChatReply = { text: string; finish: Finish; usage?: { input: number; output
 ## 4.5 错误分类（`errors.ts`）
 
 ```ts
-type ErrorKind = 'transient' | 'rateLimited' | 'oversized' | 'output' | 'refused' | 'rejected' | 'credential' | 'fatal'
-class ProviderError extends Error { kind: ErrorKind; status?: number; retryAfterMs?: number; snippet: string }
+type ErrorKind =
+  | 'transient'
+  | 'rateLimited'
+  | 'oversized'
+  | 'output'
+  | 'refused'
+  | 'rejected'
+  | 'credential'
+  | 'fatal'
+class ProviderError extends Error {
+  kind: ErrorKind
+  status?: number
+  retryAfterMs?: number
+  snippet: string
+}
 retryable = kind === 'transient' || kind === 'rateLimited'
 ```
 
@@ -247,20 +272,55 @@ PDF 模式下每个片段文本里的 `{vN}` 在送模型前替换为 `DOCFLOWKE
 // providers.ts
 export function chatUrl(p: ProviderConfig, model: string): string
 export function modelsUrl(p: ProviderConfig): string
-export function buildRequest(p: ProviderConfig, model: string, system: string, user: string, maxTokens?: number): { url: string; init: RequestInit }
-export async function listModels(p: ProviderConfig, key: string | undefined, fetchFn: FetchFn): Promise<ModelInfo[]>
-export async function checkModel(p: ProviderConfig, key: string | undefined, model: string, fetchFn: FetchFn): Promise<CheckResult>
+export function buildRequest(
+  p: ProviderConfig,
+  model: string,
+  system: string,
+  user: string,
+  maxTokens?: number,
+): { url: string; init: RequestInit }
+export async function listModels(
+  p: ProviderConfig,
+  key: string | undefined,
+  fetchFn: FetchFn,
+): Promise<ModelInfo[]>
+export async function checkModel(
+  p: ProviderConfig,
+  key: string | undefined,
+  model: string,
+  fetchFn: FetchFn,
+): Promise<CheckResult>
 
 // pool.ts
-export class ProviderPool { constructor(p: ProviderConfig, keys: KeyRing, fetchFn: FetchFn); execute(req: ChatRequest, signal: AbortSignal): Promise<ChatReply>; setConfigured(n: number): void; stats(): PoolStats }
-export class TranslationPools { get(p: ProviderConfig): ProviderPool; configure(providers: ProviderConfig[]): void; resetKeys(providerId: string): void }
+export class ProviderPool {
+  constructor(p: ProviderConfig, keys: KeyRing, fetchFn: FetchFn)
+  execute(req: ChatRequest, signal: AbortSignal): Promise<ChatReply>
+  setConfigured(n: number): void
+  stats(): PoolStats
+}
+export class TranslationPools {
+  get(p: ProviderConfig): ProviderPool
+  configure(providers: ProviderConfig[]): void
+  resetKeys(providerId: string): void
+}
 
 // translate-document.ts
 export async function translateDocument(input: {
-  segments: Segment[]; provider: ProviderConfig; model: string; runtime: TranslationRuntime;
-  pools: TranslationPools; cache: TranslationCache; signal: AbortSignal;
-  onProgress(done: number, total: number): void; onEvent(e: EventInput): void;
-}): Promise<{ results: TranslatedParagraph[]; keptChars: number; totalChars: number; usage: { input: number; output: number } }>
+  segments: Segment[]
+  provider: ProviderConfig
+  model: string
+  runtime: TranslationRuntime
+  pools: TranslationPools
+  cache: TranslationCache
+  signal: AbortSignal
+  onProgress(done: number, total: number): void
+  onEvent(e: EventInput): void
+}): Promise<{
+  results: TranslatedParagraph[]
+  keptChars: number
+  totalChars: number
+  usage: { input: number; output: number }
+}>
 ```
 
 单测覆盖（08 章）：URL 构造 × 4 类型、请求体与 extraBody 合并、响应解析（含 `<think>`、refusal、truncated）、错误分类表、Retry-After、KeyRing 轮换与下架、池自适应 100→50→62→…→100、分批边界、占位符保护/损坏修复/编号变化拒绝、阶梯（用 mock 服务的故障注入）、缓存指纹。

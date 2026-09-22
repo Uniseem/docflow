@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### 新增
+
+- 工程骨架：Electron 44 + React 19 + HeroUI 3 空窗口可启动，含 lint/单测/图标与 `dist:dir` 打包。
+
 ### 变更
 
 - 项目重建：主分支清空，旧代码移至 `old` 分支；新建标准仓库结构与 4.0 规划（Electron + React + HeroUI 3）。

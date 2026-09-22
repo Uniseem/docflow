@@ -1,3 +1,6 @@
+# 构建产物
+THIRD_PARTY_NOTICES.md
+
 # 依赖与构建产物
 node_modules/
 out/

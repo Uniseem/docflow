@@ -4,13 +4,13 @@
 
 ## M0 工程骨架
 
-- [ ] M0-1 `npm init` 后按 02 章写入 `package.json`（版本 `4.0.0`），`npm install`，提交 `package-lock.json`。
-- [ ] M0-2 建 02 章列出的全部配置文件：`electron.vite.config.ts`、`tsconfig*.json`、`eslint.config.js`、`.prettierrc.json`、`.prettierignore`、`vitest.config.ts`、`playwright.config.ts`、`.npmrc`。
-- [ ] M0-3 `src/main/index.ts` 最小主进程（单实例、协议注册占位、创建窗口）；`src/preload/index.ts` 暴露空的 `window.docflow`；`src/renderer/` 最小 React 应用：`globals.css`、`index.html`、`App.tsx` 里放一个 HeroUI `Button`，标题栏拖动区域，深色模式切换按钮。
-- [ ] M0-4 `scripts/verify-fonts.mjs`（核对 `resources/fonts/README.md` 的 SHA-256）。
-- [ ] M0-5 `npx heroui-cli@latest agents-md --react --output .heroui-docs/AGENTS.md` 拉取文档（确认 `.heroui-docs/` 被忽略）。
-- [ ] M0-6 `npm run dev` 能开窗口并显示按钮；`npm run check` 全绿（此时测试可以只有一个占位用例）。
-- [ ] M0-7 `build/icon.png`（从 `old` 分支取）+ `scripts/make-icons.mjs` 生成 icns/ico；`electron-builder.yml`（07 章）；`npm run dist:dir` 能产出可启动的应用。
+- [x] M0-1 `npm init` 后按 02 章写入 `package.json`（版本 `4.0.0`），`npm install`，提交 `package-lock.json`。
+- [x] M0-2 建 02 章列出的全部配置文件：`electron.vite.config.ts`、`tsconfig*.json`、`eslint.config.js`、`.prettierrc.json`、`.prettierignore`、`vitest.config.ts`、`playwright.config.ts`、`.npmrc`。
+- [x] M0-3 `src/main/index.ts` 最小主进程（单实例、协议注册占位、创建窗口）；`src/preload/index.ts` 暴露空的 `window.docflow`；`src/renderer/` 最小 React 应用：`globals.css`、`index.html`、`App.tsx` 里放一个 HeroUI `Button`，标题栏拖动区域，深色模式切换按钮。
+- [x] M0-4 `scripts/verify-fonts.mjs`（核对 `resources/fonts/README.md` 的 SHA-256）。
+- [x] M0-5 `npx heroui-cli@latest agents-md --react --output .heroui-docs/AGENTS.md` 拉取文档（确认 `.heroui-docs/` 被忽略）。
+- [x] M0-6 `npm run dev` 能开窗口并显示按钮；`npm run check` 全绿（此时测试可以只有一个占位用例）。
+- [x] M0-7 `build/icon.png`（从 `old` 分支取）+ `scripts/make-icons.mjs` 生成 icns/ico；`electron-builder.yml`（07 章）；`npm run dist:dir` 能产出可启动的应用。
 - [ ] M0-8 推送后 CI 的 `check` 与 `package` 两个 job 变绿（E2E 先放一个只验证窗口标题为 `DocFlow` 的用例）。
 
 验收：`npm run check`、`npm run dist:dir`、CI 全绿；worklog 记录 electron-vite 多入口/ESM 的实际表现。

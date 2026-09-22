@@ -11,12 +11,12 @@ DocFlow 是一个 **PDF 论文翻译桌面应用**（Windows + macOS）：用户
 
 ## 唯一事实来源
 
-| 想知道 | 看这里 |
-| --- | --- |
-| 要做成什么、按什么顺序做、怎样算做完 | [docs/plan/README.md](docs/plan/README.md)（总览与执行顺序）及 `docs/plan/0x-*.md` |
-| 为什么这样设计 | [docs/adr/](docs/adr/) |
-| 之前的会话做了什么、卡在哪 | [docs/worklog/](docs/worklog/) |
-| 旧版本细节（接口、事件、文案、错误信息） | [docs/reference/legacy-notes.md](docs/reference/legacy-notes.md) |
+| 想知道                                   | 看这里                                                                             |
+| ---------------------------------------- | ---------------------------------------------------------------------------------- |
+| 要做成什么、按什么顺序做、怎样算做完     | [docs/plan/README.md](docs/plan/README.md)（总览与执行顺序）及 `docs/plan/0x-*.md` |
+| 为什么这样设计                           | [docs/adr/](docs/adr/)                                                             |
+| 之前的会话做了什么、卡在哪               | [docs/worklog/](docs/worklog/)                                                     |
+| 旧版本细节（接口、事件、文案、错误信息） | [docs/reference/legacy-notes.md](docs/reference/legacy-notes.md)                   |
 
 规划文件里已经把能定的都定了（版本号、目录、接口、文案、算法参数）。**执行时不要另起炉灶**；发现规划有错或不可行时，改规划文件并写一条 ADR 或 worklog 说明原因，再继续。
 

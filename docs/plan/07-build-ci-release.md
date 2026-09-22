@@ -6,7 +6,7 @@
 appId: com.uniseem.docflow
 productName: DocFlow
 copyright: Copyright © 2026 DocFlow contributors
-artifactName: ${productName}-${version}-${os}-${arch}.${ext}   # DocFlow-4.0.0-win-x64-setup.exe 由 nsis.artifactName 覆盖
+artifactName: ${productName}-${version}-${os}-${arch}.${ext} # DocFlow-4.0.0-win-x64-setup.exe 由 nsis.artifactName 覆盖
 directories:
   output: release
   buildResources: build
@@ -28,7 +28,7 @@ extraResources:
     to: LICENSE
 asar: true
 compression: normal
-npmRebuild: false          # 没有原生模块
+npmRebuild: false # 没有原生模块
 mac:
   category: public.app-category.productivity
   target:
@@ -37,7 +37,7 @@ mac:
     - target: zip
   artifactName: ${productName}-${version}-macos-${arch}.${ext}
   minimumSystemVersion: '14.0'
-  hardenedRuntime: false   # 未签名；签名时改 true 并配 entitlements
+  hardenedRuntime: false # 未签名；签名时改 true 并配 entitlements
   gatekeeperAssess: false
   extendInfo:
     CFBundleDocumentTypes:
@@ -61,7 +61,7 @@ win:
   fileAssociations:
     - ext: pdf
       name: PDF
-      role: Viewer   # 只注册「打开方式」，不抢默认
+      role: Viewer # 只注册「打开方式」，不抢默认
 nsis:
   oneClick: false
   perMachine: false

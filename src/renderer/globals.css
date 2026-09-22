@@ -1,0 +1,34 @@
+@import 'tailwindcss';
+@import '@heroui/styles';
+
+:root {
+  /* 品牌色：沉稳的蓝，深浅模式各自可读 */
+  --accent: oklch(0.55 0.16 255);
+}
+.dark {
+  --accent: oklch(0.72 0.14 255);
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  overflow: hidden;
+}
+body {
+  @apply bg-background text-foreground;
+  -webkit-user-select: none;
+  user-select: none;
+}
+/* 可选中的区域（日志、路径、错误信息）显式打开 */
+.selectable {
+  -webkit-user-select: text;
+  user-select: text;
+}
+/* macOS 无边框标题栏可拖动区域 */
+.titlebar-drag {
+  -webkit-app-region: drag;
+}
+.titlebar-no-drag {
+  -webkit-app-region: no-drag;
+}

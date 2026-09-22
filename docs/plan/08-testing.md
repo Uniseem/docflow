@@ -2,36 +2,36 @@
 
 ## 8.1 层次
 
-| 层 | 工具 | 范围 | 何时跑 |
-| --- | --- | --- | --- |
-| 单元 | vitest（node 环境） | `src/shared/**`、`src/main/**` 的纯函数与模块：解析、段落合并、公式识别、排版、翻译请求/响应/错误/池/批处理/占位符、设置与 manifest 的 zod、原子写、调度器（用假时钟） | `npm run check`，每次提交 |
-| 集成 | vitest + `tests/mock-provider` | 从 fixture PDF 到输出 PDF 的完整流水线（不启动 Electron：`net.fetch` 换成 Node fetch；compose 不依赖任何 Electron API，可直接在 vitest 里跑） | `npm run check` |
-| E2E | Playwright `_electron` | 真实应用：拖入/选择文件 → 设置里配置 mock 服务商 → 翻译完成 → 预览、导出、取消、重试、删除、设置持久化 | CI `package` job；发布前 |
-| 手工 | 人 | 真实 arXiv 论文 5 篇 + 真实服务商 1 个（DeepSeek）| 里程碑 M5、M6 |
+| 层   | 工具                           | 范围                                                                                                                                                                   | 何时跑                    |
+| ---- | ------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------- |
+| 单元 | vitest（node 环境）            | `src/shared/**`、`src/main/**` 的纯函数与模块：解析、段落合并、公式识别、排版、翻译请求/响应/错误/池/批处理/占位符、设置与 manifest 的 zod、原子写、调度器（用假时钟） | `npm run check`，每次提交 |
+| 集成 | vitest + `tests/mock-provider` | 从 fixture PDF 到输出 PDF 的完整流水线（不启动 Electron：`net.fetch` 换成 Node fetch；compose 不依赖任何 Electron API，可直接在 vitest 里跑）                          | `npm run check`           |
+| E2E  | Playwright `_electron`         | 真实应用：拖入/选择文件 → 设置里配置 mock 服务商 → 翻译完成 → 预览、导出、取消、重试、删除、设置持久化                                                                 | CI `package` job；发布前  |
+| 手工 | 人                             | 真实 arXiv 论文 5 篇 + 真实服务商 1 个（DeepSeek）                                                                                                                     | 里程碑 M5、M6             |
 
 ## 8.2 fixture 生成（`scripts/make-fixtures.mjs`，用 `@cantoo/pdf-lib` + 标准字体）
 
 生成到 `tests/fixtures/`，全部提交（每个 < 200 KB）：
 
-| 文件 | 内容 | 用来测什么 |
-| --- | --- | --- |
-| `single-column.pdf` | 3 页，Times-Roman 10 pt，每页 4 段英文（lorem + 真实句子），页眉页码 | 行/段合并、页眉页脚跳过、断点 |
-| `two-column.pdf` | 4 页两栏，通栏标题与摘要，`1 Introduction` 等编号标题，参考文献 | 栏检测、阅读顺序、标题识别 |
-| `inline-formula.pdf` | 段落里用 `Symbol` 与 `Times-Italic` 单字母模拟行内公式（`α`, `x`, `≤`, 上下标用缩小字号并偏移基线） | 公式项判定、占位符合并、上下标 |
-| `display-math.pdf` | 独立公式行 + `(3)` 编号 | display math 不翻译 |
-| `figure-caption.pdf` | 嵌入一张 PNG，图内有短文字，下方 `Figure 1: …` | `inside_image`、`short_isolated`、caption 翻译 |
-| `hyphenation.pdf` | 行尾连字符断词、连字 `ﬁ` | 文本规整 |
-| `long.pdf` | 60 页单栏 | 性能、进度、事件上限 |
-| `encrypted.pdf` | 带用户口令 | `pdf_encrypted` |
-| `scanned.pdf` | 只有一张整页图片 | `scanned_pdf` |
-| `empty.pdf` | 0 页（pdf-lib 无法生成 0 页，用手工构造的最小 PDF 字节） | `pdf_empty` |
-| `colored-text.pdf` | 彩色段落 | 颜色提取与颜色保留 |
-| `tj-arrays.pdf` | 用 `TJ` 数组（字距调整）、`'`、`"` 算子绘制的段落（手写内容流） | 算子流状态机、词法分析器、删除集合 |
-| `cid-font.pdf` | 嵌入 TrueType 子集（pdf-lib 生成的 Type0/Identity-H，2 字节编码）的段落与公式 | 复合字体编码字节数、公式重绘 |
-| `form-wrapped.pdf` | 整页内容包在一个 Form XObject 里（手工构造） | 表单递归、页面级追加、字体资源搬运 |
-| `shared-form.pdf` | 每页都 `Do` 同一个含文字的表单（页眉 logo） | shared 表单跳过 |
-| `italic-sentence.pdf` | 斜体的整句 + 单个斜体变量 | `.*Ital` 放宽规则 |
-| `invisible-text.pdf` | 整页图片 + `3 Tr` 隐藏文字层 | `scanned_pdf`（可见字形为 0） |
+| 文件                  | 内容                                                                                                | 用来测什么                                     |
+| --------------------- | --------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
+| `single-column.pdf`   | 3 页，Times-Roman 10 pt，每页 4 段英文（lorem + 真实句子），页眉页码                                | 行/段合并、页眉页脚跳过、断点                  |
+| `two-column.pdf`      | 4 页两栏，通栏标题与摘要，`1 Introduction` 等编号标题，参考文献                                     | 栏检测、阅读顺序、标题识别                     |
+| `inline-formula.pdf`  | 段落里用 `Symbol` 与 `Times-Italic` 单字母模拟行内公式（`α`, `x`, `≤`, 上下标用缩小字号并偏移基线） | 公式项判定、占位符合并、上下标                 |
+| `display-math.pdf`    | 独立公式行 + `(3)` 编号                                                                             | display math 不翻译                            |
+| `figure-caption.pdf`  | 嵌入一张 PNG，图内有短文字，下方 `Figure 1: …`                                                      | `inside_image`、`short_isolated`、caption 翻译 |
+| `hyphenation.pdf`     | 行尾连字符断词、连字 `ﬁ`                                                                            | 文本规整                                       |
+| `long.pdf`            | 60 页单栏                                                                                           | 性能、进度、事件上限                           |
+| `encrypted.pdf`       | 带用户口令                                                                                          | `pdf_encrypted`                                |
+| `scanned.pdf`         | 只有一张整页图片                                                                                    | `scanned_pdf`                                  |
+| `empty.pdf`           | 0 页（pdf-lib 无法生成 0 页，用手工构造的最小 PDF 字节）                                            | `pdf_empty`                                    |
+| `colored-text.pdf`    | 彩色段落                                                                                            | 颜色提取与颜色保留                             |
+| `tj-arrays.pdf`       | 用 `TJ` 数组（字距调整）、`'`、`"` 算子绘制的段落（手写内容流）                                     | 算子流状态机、词法分析器、删除集合             |
+| `cid-font.pdf`        | 嵌入 TrueType 子集（pdf-lib 生成的 Type0/Identity-H，2 字节编码）的段落与公式                       | 复合字体编码字节数、公式重绘                   |
+| `form-wrapped.pdf`    | 整页内容包在一个 Form XObject 里（手工构造）                                                        | 表单递归、页面级追加、字体资源搬运             |
+| `shared-form.pdf`     | 每页都 `Do` 同一个含文字的表单（页眉 logo）                                                         | shared 表单跳过                                |
+| `italic-sentence.pdf` | 斜体的整句 + 单个斜体变量                                                                           | `.*Ital` 放宽规则                              |
+| `invisible-text.pdf`  | 整页图片 + `3 Tr` 隐藏文字层                                                                        | `scanned_pdf`（可见字形为 0）                  |
 
 另放 2 篇真实的 CC-BY arXiv 论文（选择许可证允许再分发的，记录来源与许可在 `tests/fixtures/README.md`），只用于集成测试的「不崩溃、页数正确、译页含中文」断言，不做精确断言。
 

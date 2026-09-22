@@ -1,0 +1,10 @@
+[
+  "react",
+  "react-dom",
+  "@heroui/react",
+  "@heroui/styles",
+  "tailwindcss",
+  "zustand",
+  "lucide-react",
+  "clsx"
+]

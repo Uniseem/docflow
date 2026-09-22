@@ -34,24 +34,32 @@
 ## 5.3 `settings.json`
 
 ```ts
-export const Settings = z.object({
-  version: z.literal(1),
-  providers: z.array(ProviderConfig).max(64),
-  defaultTranslator: TranslatorChoice.nullable(),
-  workerConcurrency: z.number().int().min(1).max(4).default(2),      // 同时处理的文档数
-  translation: TranslationRuntime,                                     // 04 章
-  proxy: z.discriminatedUnion('mode', [
-    z.object({ mode: z.literal('system') }),
-    z.object({ mode: z.literal('direct') }),
-    z.object({ mode: z.literal('custom'), url: z.string().url().refine(u => /^(https?|socks5h?):$/.test(new URL(u).protocol)) }),
-  ]),
-  pdf: z.object({
-    minFontScale: z.number().min(0.4).max(1).default(0.6),
-    bilingual: z.boolean().default(true),                              // 关掉则不生成 dual.pdf
-  }),
-  notifications: z.boolean().default(true),
-  checkUpdates: z.boolean().default(true),
-}).strict()
+export const Settings = z
+  .object({
+    version: z.literal(1),
+    providers: z.array(ProviderConfig).max(64),
+    defaultTranslator: TranslatorChoice.nullable(),
+    workerConcurrency: z.number().int().min(1).max(4).default(2), // 同时处理的文档数
+    translation: TranslationRuntime, // 04 章
+    proxy: z.discriminatedUnion('mode', [
+      z.object({ mode: z.literal('system') }),
+      z.object({ mode: z.literal('direct') }),
+      z.object({
+        mode: z.literal('custom'),
+        url: z
+          .string()
+          .url()
+          .refine((u) => /^(https?|socks5h?):$/.test(new URL(u).protocol)),
+      }),
+    ]),
+    pdf: z.object({
+      minFontScale: z.number().min(0.4).max(1).default(0.6),
+      bilingual: z.boolean().default(true), // 关掉则不生成 dual.pdf
+    }),
+    notifications: z.boolean().default(true),
+    checkUpdates: z.boolean().default(true),
+  })
+  .strict()
 ```
 
 - 读取：文件不存在 → 默认值；解析失败 → 备份为 `settings.json.broken-<时间>` 并用默认值，事件日志 warning。
@@ -62,31 +70,64 @@ export const Settings = z.object({
 ## 5.4 `manifest.json`（文档记录）
 
 ```ts
-export const DocumentStatus = z.enum(['queued', 'processing', 'retrying', 'completed', 'failed', 'cancelled'])
-export const Stage = z.enum(['received', 'inspect', 'analyze', 'translate', 'compose', 'verify', 'archive', 'done'])
+export const DocumentStatus = z.enum([
+  'queued',
+  'processing',
+  'retrying',
+  'completed',
+  'failed',
+  'cancelled',
+])
+export const Stage = z.enum([
+  'received',
+  'inspect',
+  'analyze',
+  'translate',
+  'compose',
+  'verify',
+  'archive',
+  'done',
+])
 
-export const DocumentManifest = z.object({
-  version: z.literal(1),
-  id: z.string(),
-  title: z.string().min(1).max(300),
-  titleCustom: z.boolean(),                      // 用户改过标题就不再被元数据标题覆盖
-  originalFilename: z.string(),
-  sourceSize: z.number().int(),
-  sourceSha256: z.string().length(64),
-  pages: z.number().int().nullable(),
-  translator: z.object({ providerId: z.string(), model: z.string(), label: z.string() }),
-  settingsSnapshot: TranslationRuntime,          // 入队时快照；自动重试沿用，手动重试重新快照
-  status: DocumentStatus,
-  stage: Stage,
-  progress: z.number().min(0).max(100),
-  failure: z.object({ code: z.string(), message: z.string(), permanent: z.boolean() }).nullable(),
-  attempts: z.number().int(),                    // 自动重试计数
-  nextAttemptAt: z.string().datetime().nullable(),
-  stats: z.object({ paragraphs: z.number(), translatable: z.number(), translated: z.number(), kept: z.number(), formulaRuns: z.number(), opsRemoved: z.number(), usage: z.object({ input: z.number(), output: z.number() }) }).nullable(),
-  outputs: z.object({ mono: z.object({ bytes: z.number() }).nullable(), dual: z.object({ bytes: z.number() }).nullable() }),
-  createdAt: z.string().datetime(), updatedAt: z.string().datetime(),
-  startedAt: z.string().datetime().nullable(), completedAt: z.string().datetime().nullable(),
-}).strict()
+export const DocumentManifest = z
+  .object({
+    version: z.literal(1),
+    id: z.string(),
+    title: z.string().min(1).max(300),
+    titleCustom: z.boolean(), // 用户改过标题就不再被元数据标题覆盖
+    originalFilename: z.string(),
+    sourceSize: z.number().int(),
+    sourceSha256: z.string().length(64),
+    pages: z.number().int().nullable(),
+    translator: z.object({ providerId: z.string(), model: z.string(), label: z.string() }),
+    settingsSnapshot: TranslationRuntime, // 入队时快照；自动重试沿用，手动重试重新快照
+    status: DocumentStatus,
+    stage: Stage,
+    progress: z.number().min(0).max(100),
+    failure: z.object({ code: z.string(), message: z.string(), permanent: z.boolean() }).nullable(),
+    attempts: z.number().int(), // 自动重试计数
+    nextAttemptAt: z.string().datetime().nullable(),
+    stats: z
+      .object({
+        paragraphs: z.number(),
+        translatable: z.number(),
+        translated: z.number(),
+        kept: z.number(),
+        formulaRuns: z.number(),
+        opsRemoved: z.number(),
+        usage: z.object({ input: z.number(), output: z.number() }),
+      })
+      .nullable(),
+    outputs: z.object({
+      mono: z.object({ bytes: z.number() }).nullable(),
+      dual: z.object({ bytes: z.number() }).nullable(),
+    }),
+    createdAt: z.string().datetime(),
+    updatedAt: z.string().datetime(),
+    startedAt: z.string().datetime().nullable(),
+    completedAt: z.string().datetime().nullable(),
+  })
+  .strict()
 ```
 
 渲染进程看到的是 `DocumentSummary`（manifest 去掉 `settingsSnapshot`，加 `files: { source, mono, dual }`（`docflow://` URL，仅存在时给）、`suggestedNames: { mono, dual, bundle, source }`、`running: boolean`）。
@@ -101,14 +142,15 @@ export const DocumentManifest = z.object({
 
 ```ts
 export const ProcessingEvent = z.object({
-  seq: z.number().int(),                 // 文档内递增
-  at: z.string().datetime(),             // UTC，毫秒
+  seq: z.number().int(), // 文档内递增
+  at: z.string().datetime(), // UTC，毫秒
   stage: Stage,
   level: z.enum(['info', 'success', 'warning', 'error']),
   progress: z.number().min(0).max(100).optional(),
-  message: z.string(),                   // 给用户看的中文
-  detail: z.string().optional(),         // 次要信息（错误的技术原因、计数）
-  current: z.number().optional(), total: z.number().optional(),
+  message: z.string(), // 给用户看的中文
+  detail: z.string().optional(), // 次要信息（错误的技术原因、计数）
+  current: z.number().optional(),
+  total: z.number().optional(),
 })
 ```
 
@@ -119,16 +161,16 @@ export const ProcessingEvent = z.object({
 
 事件文案（stage → message，`detail` 视情况）：
 
-| stage | message |
-| --- | --- |
-| received | `已复制源文件并加入处理队列`（detail：大小、SHA-256 前 16 位） |
-| inspect | `检查 PDF：N 页`／失败信息 |
-| analyze | `分析版面：识别到 N 个段落，其中 M 个待翻译，公式 K 处`；warning：`第 P 页没有识别到可翻译段落` |
-| translate | `开始翻译：<translator>，共 N 段`；进度 `已翻译 X / N 段`；warning：重试与保留原文（04 章）；`翻译完成：N 段，保留原文 K 段，用量 输入 A / 输出 B tokens` |
-| compose | `改写内容流：写入 N 段译文，重绘公式 K 处，删除文字指令 M 条`；warning：`第 P 页第 Q 段译文超出原段落范围`、`第 P 页第 Q 段排版失败，已保留原文`、`第 P 页有 N 条文字指令无法对应到段落，已跳过该页`、`第 P 页第 Q 段的公式字体无法映射，已保留原文` |
-| verify | `校验通过：中文 PDF N 页，双语 PDF 2N 页` |
-| archive | `已保存到文档库` |
-| 任意 | error：`处理失败：<message>`；`已取消处理`；`等待自动重试（第 n 次）` |
+| stage     | message                                                                                                                                                                                                                                              |
+| --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| received  | `已复制源文件并加入处理队列`（detail：大小、SHA-256 前 16 位）                                                                                                                                                                                       |
+| inspect   | `检查 PDF：N 页`／失败信息                                                                                                                                                                                                                           |
+| analyze   | `分析版面：识别到 N 个段落，其中 M 个待翻译，公式 K 处`；warning：`第 P 页没有识别到可翻译段落`                                                                                                                                                      |
+| translate | `开始翻译：<translator>，共 N 段`；进度 `已翻译 X / N 段`；warning：重试与保留原文（04 章）；`翻译完成：N 段，保留原文 K 段，用量 输入 A / 输出 B tokens`                                                                                            |
+| compose   | `改写内容流：写入 N 段译文，重绘公式 K 处，删除文字指令 M 条`；warning：`第 P 页第 Q 段译文超出原段落范围`、`第 P 页第 Q 段排版失败，已保留原文`、`第 P 页有 N 条文字指令无法对应到段落，已跳过该页`、`第 P 页第 Q 段的公式字体无法映射，已保留原文` |
+| verify    | `校验通过：中文 PDF N 页，双语 PDF 2N 页`                                                                                                                                                                                                            |
+| archive   | `已保存到文档库`                                                                                                                                                                                                                                     |
+| 任意      | error：`处理失败：<message>`；`已取消处理`；`等待自动重试（第 n 次）`                                                                                                                                                                                |
 
 ## 5.6 IPC 契约（`src/shared/ipc.ts`）
 
@@ -136,45 +178,45 @@ export const ProcessingEvent = z.object({
 
 调用型通道（renderer → main）：
 
-| 通道 | 请求 | 响应 |
-| --- | --- | --- |
-| `app:info` | — | `{ version, platform: 'darwin'|'win32', libraryDir, logsDir, arch }` |
-| `app:setTheme` | `{ theme }` | `{}`（同步 `nativeTheme.themeSource` 并写 host.json） |
-| `app:checkUpdates` | — | `{ latest: string, url: string, newer: boolean } | { error }`（GitHub API `repos/Uniseem/docflow/releases/latest`，10 s 超时） |
-| `settings:get` | — | `SettingsView`（= Settings 去掉 secrets + `providers[].keyConfigured/keyMasked/keyOptional/keyUrl` + `presets` + `limits` + `capabilities: { llmReady, fakeProviders }`） |
-| `settings:update` | `Partial<Settings>`（zod `.partial()` 深合并） | `SettingsView` |
-| `secrets:set` | `{ providerId, value: string | null }` | `SettingsView` |
-| `providers:save` | `{ provider: ProviderConfig }` | `SettingsView` |
-| `providers:delete` | `{ id }` | `SettingsView` |
-| `providers:listModels` | `{ providerId?, type, baseUrl, key?: string }`（key 为 undefined 时用已保存的） | `{ models: ModelInfo[] }` |
-| `providers:check` | 同上 + `model` | `{ ok, latencyMs, reply } | { ok:false, message }` |
-| `documents:create` | `{ paths: string[], title?: string, translator: TranslatorChoice }` | `{ created: DocumentSummary[], failed: { path, message }[] }` |
-| `documents:list` | `{ filter: 'all'|'active'|'completed'|'failed', query?: string }` | `{ items: DocumentSummary[], counts: { all, active, completed, failed } }` |
-| `documents:get` | `{ id }` | `DocumentSummary` |
-| `documents:events` | `{ id, afterSeq?: number, limit?: number }` | `{ items: ProcessingEvent[], lastSeq }` |
-| `documents:rename` | `{ id, title }` | `DocumentSummary` |
-| `documents:retry` | `{ id }` | `DocumentSummary` |
-| `documents:cancel` | `{ id }` | `DocumentSummary` |
-| `documents:delete` | `{ ids: string[] }` | `{ deleted: string[] }` |
-| `documents:export` | `{ id, kind: 'mono'|'dual'|'source'|'bundle' }` | `{ cancelled: true } | { path }`（主进程弹保存对话框，默认名 `suggestedNames[kind]`；bundle 用 fflate 打 ZIP：`source/`、`output/`、`manifest.json`、`events.jsonl`、`README.txt`） |
-| `documents:reveal` | `{ id, kind?: 'mono'|'dual'|'source'|'folder' }` | `{}`（`shell.showItemInFolder`） |
-| `documents:openExternal` | `{ id, kind: 'mono'|'dual'|'source' }` | `{}`（`shell.openPath`） |
-| `dialog:pickPdfs` | — | `{ paths: string[] }`（过滤 `.pdf`，多选） |
-| `dialog:pickFolder` | `{ title, message }` | `{ path } | { cancelled: true }` |
-| `library:change` | `{ path }` | `{ libraryDir }` |
-| `shell:openExternal` | `{ url }` | `{}`（仅 https/mailto） |
-| `shell:openLogs` | — | `{}` |
+| 通道                     | 请求                                                                            | 响应                                                                                                                                                                      |
+| ------------------------ | ------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `app:info`               | —                                                                               | `{ version, platform: 'darwin'                                                                                                                                            | 'win32', libraryDir, logsDir, arch }`                                       |
+| `app:setTheme`           | `{ theme }`                                                                     | `{}`（同步 `nativeTheme.themeSource` 并写 host.json）                                                                                                                     |
+| `app:checkUpdates`       | —                                                                               | `{ latest: string, url: string, newer: boolean }                                                                                                                          | { error }`（GitHub API `repos/Uniseem/docflow/releases/latest`，10 s 超时） |
+| `settings:get`           | —                                                                               | `SettingsView`（= Settings 去掉 secrets + `providers[].keyConfigured/keyMasked/keyOptional/keyUrl` + `presets` + `limits` + `capabilities: { llmReady, fakeProviders }`） |
+| `settings:update`        | `Partial<Settings>`（zod `.partial()` 深合并）                                  | `SettingsView`                                                                                                                                                            |
+| `secrets:set`            | `{ providerId, value: string                                                    | null }`                                                                                                                                                                   | `SettingsView`                                                              |
+| `providers:save`         | `{ provider: ProviderConfig }`                                                  | `SettingsView`                                                                                                                                                            |
+| `providers:delete`       | `{ id }`                                                                        | `SettingsView`                                                                                                                                                            |
+| `providers:listModels`   | `{ providerId?, type, baseUrl, key?: string }`（key 为 undefined 时用已保存的） | `{ models: ModelInfo[] }`                                                                                                                                                 |
+| `providers:check`        | 同上 + `model`                                                                  | `{ ok, latencyMs, reply }                                                                                                                                                 | { ok:false, message }`                                                      |
+| `documents:create`       | `{ paths: string[], title?: string, translator: TranslatorChoice }`             | `{ created: DocumentSummary[], failed: { path, message }[] }`                                                                                                             |
+| `documents:list`         | `{ filter: 'all'                                                                | 'active'                                                                                                                                                                  | 'completed'                                                                 | 'failed', query?: string }` | `{ items: DocumentSummary[], counts: { all, active, completed, failed } }` |
+| `documents:get`          | `{ id }`                                                                        | `DocumentSummary`                                                                                                                                                         |
+| `documents:events`       | `{ id, afterSeq?: number, limit?: number }`                                     | `{ items: ProcessingEvent[], lastSeq }`                                                                                                                                   |
+| `documents:rename`       | `{ id, title }`                                                                 | `DocumentSummary`                                                                                                                                                         |
+| `documents:retry`        | `{ id }`                                                                        | `DocumentSummary`                                                                                                                                                         |
+| `documents:cancel`       | `{ id }`                                                                        | `DocumentSummary`                                                                                                                                                         |
+| `documents:delete`       | `{ ids: string[] }`                                                             | `{ deleted: string[] }`                                                                                                                                                   |
+| `documents:export`       | `{ id, kind: 'mono'                                                             | 'dual'                                                                                                                                                                    | 'source'                                                                    | 'bundle' }`                 | `{ cancelled: true }                                                       | { path }`（主进程弹保存对话框，默认名 `suggestedNames[kind]`；bundle 用 fflate 打 ZIP：`source/`、`output/`、`manifest.json`、`events.jsonl`、`README.txt`） |
+| `documents:reveal`       | `{ id, kind?: 'mono'                                                            | 'dual'                                                                                                                                                                    | 'source'                                                                    | 'folder' }`                 | `{}`（`shell.showItemInFolder`）                                           |
+| `documents:openExternal` | `{ id, kind: 'mono'                                                             | 'dual'                                                                                                                                                                    | 'source' }`                                                                 | `{}`（`shell.openPath`）    |
+| `dialog:pickPdfs`        | —                                                                               | `{ paths: string[] }`（过滤 `.pdf`，多选）                                                                                                                                |
+| `dialog:pickFolder`      | `{ title, message }`                                                            | `{ path }                                                                                                                                                                 | { cancelled: true }`                                                        |
+| `library:change`         | `{ path }`                                                                      | `{ libraryDir }`                                                                                                                                                          |
+| `shell:openExternal`     | `{ url }`                                                                       | `{}`（仅 https/mailto）                                                                                                                                                   |
+| `shell:openLogs`         | —                                                                               | `{}`                                                                                                                                                                      |
 
 推送型通道（main → renderer，`webContents.send`，preload 暴露 `on(channel, cb) → unsubscribe`）：
 
-| 通道 | 载荷 |
-| --- | --- |
-| `document:changed` | `DocumentSummary`（状态、进度、阶段任一变化；节流 200 ms/文档） |
-| `document:removed` | `{ id }` |
-| `document:event` | `ProcessingEvent & { documentId }` |
-| `settings:changed` | `SettingsView` |
-| `library:changed` | `{ libraryDir }` |
-| `app:openFiles` | `{ paths: string[] }`（macOS open-file / 第二实例命令行 / Dock 拖入） |
+| 通道               | 载荷                                                                  |
+| ------------------ | --------------------------------------------------------------------- |
+| `document:changed` | `DocumentSummary`（状态、进度、阶段任一变化；节流 200 ms/文档）       |
+| `document:removed` | `{ id }`                                                              |
+| `document:event`   | `ProcessingEvent & { documentId }`                                    |
+| `settings:changed` | `SettingsView`                                                        |
+| `library:changed`  | `{ libraryDir }`                                                      |
+| `app:openFiles`    | `{ paths: string[] }`（macOS open-file / 第二实例命令行 / Dock 拖入） |
 
 preload 里所有 `on` 回调都用 `ipcRenderer.on` 包装并 `structuredClone` 载荷；不暴露 `ipcRenderer` 本身。`window.docflow` 类型 `DocflowApi` 由 `channels` 表推导：`invoke<K extends keyof Channels>(k: K, req: z.input<Channels[K]['request']>): Promise<z.output<Channels[K]['response']>>`。
 
@@ -198,7 +240,7 @@ verify(90–93)  → worker.verify
 archive(94–100)→ rename 到 output/、outputs 写 manifest、删除 work/、status completed、completedAt；通知
 ```
 
-  每个阶段开始时若 `work/<stage>.json` 已存在且其 `sourceSha256`/`fingerprint` 匹配则跳过（断点续传：inspect/analyze 产物按 `sourceSha256`，translation 按 04 章指纹并且 `results.length === translatable`）。
+每个阶段开始时若 `work/<stage>.json` 已存在且其 `sourceSha256`/`fingerprint` 匹配则跳过（断点续传：inspect/analyze 产物按 `sourceSha256`，translation 按 04 章指纹并且 `results.length === translatable`）。
 
 ## 5.8 通知
 

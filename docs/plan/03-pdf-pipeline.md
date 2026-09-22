@@ -24,13 +24,21 @@ source.pdf
 
 ```ts
 export const Rect = z.tuple([z.number(), z.number(), z.number(), z.number()]) // [x0, y0, x1, y1]
-export const Matrix = z.tuple([z.number(), z.number(), z.number(), z.number(), z.number(), z.number()])
+export const Matrix = z.tuple([
+  z.number(),
+  z.number(),
+  z.number(),
+  z.number(),
+  z.number(),
+  z.number(),
+])
 
 export const PdfInspection = z.object({
   pages: z.number().int().positive(),
-  pageSizes: z.array(z.tuple([z.number(), z.number()])),  // MediaBox 宽高（未按 /Rotate 交换）
+  pageSizes: z.array(z.tuple([z.number(), z.number()])), // MediaBox 宽高（未按 /Rotate 交换）
   rotations: z.array(z.number()),
-  textChars: z.number(), visibleTextChars: z.number(),    // 抽样页字符数；visible 排除 Tr 3/7
+  textChars: z.number(),
+  visibleTextChars: z.number(), // 抽样页字符数；visible 排除 Tr 3/7
   hasTextLayer: z.boolean(),
   title: z.string().optional(),
 })
@@ -38,61 +46,67 @@ export const PdfInspection = z.object({
 // 一个字形 = 内容流里画出来的一个字符
 export const Glyph = z.object({
   page: z.number().int(),
-  opSeq: z.number().int(),        // 该页第几个 show-text 算子（执行顺序，含内联的 Form XObject），同一算子的字形永远同行同段
-  formPath: z.string(),           // '' = 页面本身；'3' = 页面第 3 次 Do 进入的表单；'3/1' = 其中第 1 次 Do 的嵌套表单
-  code: z.number().int(),         // 内容流里的字符编码（pdf.js glyph.originalCharCode）
-  unicode: z.string(),            // 可能为空串（无 ToUnicode）
-  fontKey: z.string(),            // pdf.js 的 loadedName（g_d0_f1），§3.12 映射回资源名
-  fontFamily: z.string(),         // 去掉子集前缀的 BaseFont，如 CMMI10、NimbusRomNo9L-Regu
-  composite: z.boolean(), codeBytes: z.number().int(),  // 编码字节数 1–4（§3.4）
-  bold: z.boolean(), italic: z.boolean(), type3: z.boolean(),
-  trm: Matrix,                    // 文字渲染矩阵：[size·Th, 0, 0, size, 0, rise] × Tm × CTM
-  x: z.number(), y: z.number(),   // 字形原点（基线左端）用户空间坐标 = trm[4], trm[5]
-  size: z.number(),               // 视觉字号 = hypot(trm[2], trm[3])
-  adv: z.number(),                // 用户空间的水平前进量（含 Tc/Tw/Tz）
-  width: z.number(),              // 字形宽度（不含间距）用户空间
-  ascent: z.number(), descent: z.number(), // 相对字号比例
-  rotated: z.boolean(),           // trm 不是纯缩放
+  opSeq: z.number().int(), // 该页第几个 show-text 算子（执行顺序，含内联的 Form XObject），同一算子的字形永远同行同段
+  formPath: z.string(), // '' = 页面本身；'3' = 页面第 3 次 Do 进入的表单；'3/1' = 其中第 1 次 Do 的嵌套表单
+  code: z.number().int(), // 内容流里的字符编码（pdf.js glyph.originalCharCode）
+  unicode: z.string(), // 可能为空串（无 ToUnicode）
+  fontKey: z.string(), // pdf.js 的 loadedName（g_d0_f1），§3.12 映射回资源名
+  fontFamily: z.string(), // 去掉子集前缀的 BaseFont，如 CMMI10、NimbusRomNo9L-Regu
+  composite: z.boolean(),
+  codeBytes: z.number().int(), // 编码字节数 1–4（§3.4）
+  bold: z.boolean(),
+  italic: z.boolean(),
+  type3: z.boolean(),
+  trm: Matrix, // 文字渲染矩阵：[size·Th, 0, 0, size, 0, rise] × Tm × CTM
+  x: z.number(),
+  y: z.number(), // 字形原点（基线左端）用户空间坐标 = trm[4], trm[5]
+  size: z.number(), // 视觉字号 = hypot(trm[2], trm[3])
+  adv: z.number(), // 用户空间的水平前进量（含 Tc/Tw/Tz）
+  width: z.number(), // 字形宽度（不含间距）用户空间
+  ascent: z.number(),
+  descent: z.number(), // 相对字号比例
+  rotated: z.boolean(), // trm 不是纯缩放
   vertical: z.boolean(),
-  renderMode: z.number().int(),   // Tr
+  renderMode: z.number().int(), // Tr
   color: z.tuple([z.number(), z.number(), z.number()]), // 填充色 0–1
   isSpace: z.boolean(),
 })
 
 export const FormulaRun = z.object({
-  id: z.number().int(),           // 段落内从 1 起，对应 {vN}
-  glyphs: z.array(Glyph),         // 按 x 排序
+  id: z.number().int(), // 段落内从 1 起，对应 {vN}
+  glyphs: z.array(Glyph), // 按 x 排序
   bbox: Rect,
-  baselineOffset: z.number(),     // 首字形基线 − 所在行基线（上下标为正/负）
-  width: z.number(),              // max(x + width) − first.x
-  text: z.string(),               // unicode 拼接，只用于日志
+  baselineOffset: z.number(), // 首字形基线 − 所在行基线（上下标为正/负）
+  width: z.number(), // max(x + width) − first.x
+  text: z.string(), // unicode 拼接，只用于日志
 })
 
 export const Line = z.object({
   page: z.number().int(),
   bbox: Rect,
-  baseline: z.number(),           // 行主文字（非公式、非上下标）基线的中位数
-  size: z.number(),               // 行主字号
+  baseline: z.number(), // 行主文字（非公式、非上下标）基线的中位数
+  size: z.number(), // 行主字号
   glyphs: z.array(Glyph),
-  runs: z.array(FormulaRun),      // 该行的公式片段（编号在段落级重排）
-  text: z.string(),               // 已含 {vN} 的行文本
+  runs: z.array(FormulaRun), // 该行的公式片段（编号在段落级重排）
+  text: z.string(), // 已含 {vN} 的行文本
   opSeqs: z.array(z.number()),
-  column: z.number().int(),       // §3.6
-  formulaLine: z.boolean(),       // 整行是公式（display math）
+  column: z.number().int(), // §3.6
+  formulaLine: z.boolean(), // 整行是公式（display math）
 })
 
 export const Paragraph = z.object({
-  id: z.string(),                 // `${page}-${index}`
+  id: z.string(), // `${page}-${index}`
   page: z.number().int(),
   bbox: Rect,
   lines: z.array(z.object({ bbox: Rect, baseline: z.number(), opSeqs: z.array(z.number()) })),
-  size: z.number(), lineHeight: z.number(),
+  size: z.number(),
+  lineHeight: z.number(),
   bold: z.boolean(),
   align: z.enum(['left', 'justify', 'center', 'right']),
   color: z.tuple([z.number(), z.number(), z.number()]),
   role: z.enum(['body', 'heading', 'caption', 'listItem', 'footnote', 'headerFooter', 'other']),
-  text: z.string(),               // 待翻译文本，含 {vN}
-  runs: z.array(FormulaRun),      // 段落级编号 1..N
+  text: z.string(), // 待翻译文本，含 {vN}
+  runs: z.array(FormulaRun), // 段落级编号 1..N
   formPath: z.string(),
   translatable: z.boolean(),
   skipReason: z.string().optional(),
@@ -103,27 +117,62 @@ export const AnalysisResult = z.object({
   pages: z.number().int(),
   pageSizes: z.array(z.tuple([z.number(), z.number()])),
   paragraphs: z.array(Paragraph),
-  fontMap: z.record(z.string(), z.object({ family: z.string(), composite: z.boolean(), codeBytes: z.number(), type3: z.boolean() })), // fontKey → 信息
-  forms: z.array(z.object({ page: z.number(), formPath: z.string(), shared: z.boolean(), glyphs: z.number() })),
-  stats: z.object({ glyphs: z.number(), lines: z.number(), paragraphs: z.number(), translatable: z.number(), runs: z.number() }),
+  fontMap: z.record(
+    z.string(),
+    z.object({
+      family: z.string(),
+      composite: z.boolean(),
+      codeBytes: z.number(),
+      type3: z.boolean(),
+    }),
+  ), // fontKey → 信息
+  forms: z.array(
+    z.object({ page: z.number(), formPath: z.string(), shared: z.boolean(), glyphs: z.number() }),
+  ),
+  stats: z.object({
+    glyphs: z.number(),
+    lines: z.number(),
+    paragraphs: z.number(),
+    translatable: z.number(),
+    runs: z.number(),
+  }),
 })
 
 export const TranslatedParagraph = z.object({ id: z.string(), text: z.string(), kept: z.boolean() })
 
 export const ComposeRequest = z.object({
-  sourcePath: z.string(), monoPath: z.string(), dualPath: z.string().nullable(),
+  sourcePath: z.string(),
+  monoPath: z.string(),
+  dualPath: z.string().nullable(),
   analysis: AnalysisResult,
   translations: z.array(TranslatedParagraph),
   fonts: z.object({ regular: z.string(), bold: z.string() }),
-  options: z.object({ minFontScale: z.number(), lineHeightFactor: z.number(), minLineHeightFactor: z.number() }),
+  options: z.object({
+    minFontScale: z.number(),
+    lineHeightFactor: z.number(),
+    minLineHeightFactor: z.number(),
+  }),
 })
 export const ComposeResult = z.object({
-  monoBytes: z.number(), dualBytes: z.number().nullable(),
-  paragraphsWritten: z.number(), paragraphsKept: z.number(), opsRemoved: z.number(), runsRedrawn: z.number(),
-  warnings: z.array(z.object({ paragraphId: z.string().optional(), page: z.number().optional(), code: z.string(), message: z.string() })),
+  monoBytes: z.number(),
+  dualBytes: z.number().nullable(),
+  paragraphsWritten: z.number(),
+  paragraphsKept: z.number(),
+  opsRemoved: z.number(),
+  runsRedrawn: z.number(),
+  warnings: z.array(
+    z.object({
+      paragraphId: z.string().optional(),
+      page: z.number().optional(),
+      code: z.string(),
+      message: z.string(),
+    }),
+  ),
 })
 export const VerifyResult = z.object({
-  monoPages: z.number(), dualPages: z.number().nullable(), sizeMismatches: z.number(),
+  monoPages: z.number(),
+  dualPages: z.number().nullable(),
+  sizeMismatches: z.number(),
   translatedPagesWithoutCjk: z.array(z.number()),
 })
 ```
@@ -147,21 +196,21 @@ export const VerifyResult = z.object({
 
 状态机（参照 pdf.js `src/display/canvas.js` 的 `showText`，与 PDF 32000 §9.4）：
 
-| 算子 | 处理 |
-| --- | --- |
-| `save` / `restore` | CTM 与图形状态入栈/出栈 |
-| `transform [a,b,c,d,e,f]` | `CTM = M × CTM` |
-| `paintFormXObjectBegin [matrix, bbox]` | 入栈；`CTM = matrix × CTM`；`formPath` 追加本层 `Do` 计数；`formDepth++` |
-| `paintFormXObjectEnd` | 出栈 |
-| `beginText` | `Tm = Tlm = I` |
-| `setFont [loadedName, size]` | 当前字体、字号；从 `commonObjs.get` 取 `font.fontMatrix`（默认 `[0.001,0,0,0.001,0,0]`）、`font.vertical`、`font.composite`、`font.name`、`font.ascent`/`descent`、`font.isType3Font`、`font.cMap`（复合字体，用它的 `codespaceRanges` 判断编码字节数：code 落在第 k 组范围里 → k 字节；判断不了 → 2） |
-| `setCharSpacing` / `setWordSpacing` / `setHScale (百分数/100)` / `setLeading` / `setTextRise` / `setTextRenderingMode` | 更新文字状态 |
-| `moveText [tx, ty]` | `Tlm = translate(tx, ty) × Tlm; Tm = Tlm` |
-| `setTextMatrix` | `Tm = Tlm = M` |
-| `nextLine` | `moveText(0, −leading)` |
-| `setFillRGBColor` 等填充色 | 当前填充色（归一到 0–1） |
-| `paintImageXObject` / `paintImageXObjectRepeat` / `paintInlineImageXObject` | 记录图片矩形：单位正方形经 CTM 变换后的包围盒 → `imageRects[page]` |
-| `showText [glyphs]` | 见下 |
+| 算子                                                                                                                   | 处理                                                                                                                                                                                                                                                                                                   |
+| ---------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `save` / `restore`                                                                                                     | CTM 与图形状态入栈/出栈                                                                                                                                                                                                                                                                                |
+| `transform [a,b,c,d,e,f]`                                                                                              | `CTM = M × CTM`                                                                                                                                                                                                                                                                                        |
+| `paintFormXObjectBegin [matrix, bbox]`                                                                                 | 入栈；`CTM = matrix × CTM`；`formPath` 追加本层 `Do` 计数；`formDepth++`                                                                                                                                                                                                                               |
+| `paintFormXObjectEnd`                                                                                                  | 出栈                                                                                                                                                                                                                                                                                                   |
+| `beginText`                                                                                                            | `Tm = Tlm = I`                                                                                                                                                                                                                                                                                         |
+| `setFont [loadedName, size]`                                                                                           | 当前字体、字号；从 `commonObjs.get` 取 `font.fontMatrix`（默认 `[0.001,0,0,0.001,0,0]`）、`font.vertical`、`font.composite`、`font.name`、`font.ascent`/`descent`、`font.isType3Font`、`font.cMap`（复合字体，用它的 `codespaceRanges` 判断编码字节数：code 落在第 k 组范围里 → k 字节；判断不了 → 2） |
+| `setCharSpacing` / `setWordSpacing` / `setHScale (百分数/100)` / `setLeading` / `setTextRise` / `setTextRenderingMode` | 更新文字状态                                                                                                                                                                                                                                                                                           |
+| `moveText [tx, ty]`                                                                                                    | `Tlm = translate(tx, ty) × Tlm; Tm = Tlm`                                                                                                                                                                                                                                                              |
+| `setTextMatrix`                                                                                                        | `Tm = Tlm = M`                                                                                                                                                                                                                                                                                         |
+| `nextLine`                                                                                                             | `moveText(0, −leading)`                                                                                                                                                                                                                                                                                |
+| `setFillRGBColor` 等填充色                                                                                             | 当前填充色（归一到 0–1）                                                                                                                                                                                                                                                                               |
+| `paintImageXObject` / `paintImageXObjectRepeat` / `paintInlineImageXObject`                                            | 记录图片矩形：单位正方形经 CTM 变换后的包围盒 → `imageRects[page]`                                                                                                                                                                                                                                     |
+| `showText [glyphs]`                                                                                                    | 见下                                                                                                                                                                                                                                                                                                   |
 
 `showText` 的每个元素：数字 → `x −= n × size / 1000`（水平文字）；字形对象 `{ originalCharCode, unicode, width, isSpace, vmetric }` →
 
@@ -191,7 +240,7 @@ x += w0 × size + spacing                             // 文字空间累加，�
 1. **算子不可拆**：若该字形的 `opSeq` 已属于某行 → 直接加入该行。
 2. 否则找一条行满足：字形竖直范围 `[y + descent·size, y + ascent·size]` 与行竖直范围重叠 ≥ 50% 的字形高度，且 `rotated` 一致，且水平位置在 `[line.x1 − 0.5·size, line.x1 + LINE_GAP_MAX (2.5)·size]` 内（追加）或 `[line.x0 − 2.5·size, line.x0 + 0.5·size]` 内（前插）。找到 → 加入；否则新建行。
 3. 行内字形最后按 `x` 排序。行 `baseline` = 行内「主文字」（§3.8 判定后非公式、非上下标）基线的中位数，若没有主文字则全部字形基线中位数；`size` = 主文字字号的众数（按宽度加权）；`bbox` = 字形包围盒并集。
-4. 行文本拼接（§3.8 完成公式片段划分后）：相邻字形 `gap = next.x − (prev.x + prev.width)`；`gap > LINE_SPACE_GAP (0.15)·size` 或 `prev.isSpace` → 一个空格；否则直接拼接。公式片段写成 ` {vN} `。连续空白折叠。
+4. 行文本拼接（§3.8 完成公式片段划分后）：相邻字形 `gap = next.x − (prev.x + prev.width)`；`gap > LINE_SPACE_GAP (0.15)·size` 或 `prev.isSpace` → 一个空格；否则直接拼接。公式片段写成 `{vN}`。连续空白折叠。
 
 ## 3.6 栏与阅读顺序
 
@@ -241,20 +290,20 @@ x += w0 × size + spacing                             // 文字空间累加，�
 
 段落 `translatable = true` 需全部满足，否则 `false` 并给 `skipReason`：
 
-| 条件 | skipReason |
-| --- | --- |
-| 不是 `formulaLine` 段 | `display_math` |
-| `role !== 'headerFooter'` | `header_footer` |
-| 去掉 `{vN}` 与空白后 ≥ `MIN_PARAGRAPH_CHARS (2)` 字且含 ≥ 2 个拉丁字母 | `no_letters` |
-| 不匹配纯 URL / DOI / 邮箱 / 纯数字符号 | `non_text` |
-| 与任何 `imageRect` 的重叠面积 ≤ `IMAGE_OVERLAP_SKIP (30%)` 段落面积 | `inside_image` |
+| 条件                                                                                                                                                   | skipReason                                       |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------ |
+| 不是 `formulaLine` 段                                                                                                                                  | `display_math`                                   |
+| `role !== 'headerFooter'`                                                                                                                              | `header_footer`                                  |
+| 去掉 `{vN}` 与空白后 ≥ `MIN_PARAGRAPH_CHARS (2)` 字且含 ≥ 2 个拉丁字母                                                                                 | `no_letters`                                     |
+| 不匹配纯 URL / DOI / 邮箱 / 纯数字符号                                                                                                                 | `non_text`                                       |
+| 与任何 `imageRect` 的重叠面积 ≤ `IMAGE_OVERLAP_SKIP (30%)` 段落面积                                                                                    | `inside_image`                                   |
 | 短段落（< `SHORT_PARAGRAPH_CHARS (40)` 字）须满足 `role ∈ {heading, caption, listItem}`，或宽 ≥ 0.5 × 栏宽，或上下 2 × lineHeight 内有可翻译的 body 段 | `short_isolated`（图表轴标签、图例、表格单元格） |
-| 无 `rotated` 行 | `rotated` |
-| 所在页 `rotate === 0` | `rotated_page` |
-| 不来自 shared 表单；表单深度 ≤ `MAX_FORM_DEPTH (4)` | `shared_form` / `form_too_deep` |
-| 所有字形 `renderMode ∈ {0, 2}`（填充） | `invisible_text` |
-| 所有公式片段的字体都能在 compose 阶段映射（§3.12.4；若映射失败则在 compose 里回退为 `kept`，事件 warning） | — |
-| `role !== 'other'` 或字数 ≥ 40 | `unknown_role` |
+| 无 `rotated` 行                                                                                                                                        | `rotated`                                        |
+| 所在页 `rotate === 0`                                                                                                                                  | `rotated_page`                                   |
+| 不来自 shared 表单；表单深度 ≤ `MAX_FORM_DEPTH (4)`                                                                                                    | `shared_form` / `form_too_deep`                  |
+| 所有字形 `renderMode ∈ {0, 2}`（填充）                                                                                                                 | `invisible_text`                                 |
+| 所有公式片段的字体都能在 compose 阶段映射（§3.12.4；若映射失败则在 compose 里回退为 `kept`，事件 warning）                                             | —                                                |
+| `role !== 'other'` 或字数 ≥ 40                                                                                                                         | `unknown_role`                                   |
 
 不可翻译段落的文字指令**原封不动**留在内容流里（这就是 pdf2zh 里「保留区域字符原位重绘」的等价做法，但我们连重绘都省了）。
 
@@ -354,7 +403,14 @@ ET
 type WorkerRequest =
   | { id: number; kind: 'inspect'; path: string }
   | { id: number; kind: 'analyze'; path: string; inspection: PdfInspection }
-  | { id: number; kind: 'verify'; monoPath: string; dualPath: string | null; pages: number; writtenPages: number[] }
+  | {
+      id: number
+      kind: 'verify'
+      monoPath: string
+      dualPath: string | null
+      pages: number
+      writtenPages: number[]
+    }
   | { id: number; kind: 'compose'; request: ComposeRequest }
 type WorkerResponse =
   | { id: number; ok: true; result: unknown }
@@ -366,20 +422,20 @@ type WorkerResponse =
 
 错误码表（`src/shared/errors.ts`）：
 
-| code | 类型 | 用户提示 |
-| --- | --- | --- |
-| `pdf_encrypted` | 永久 | 这个 PDF 已加密，请先用其他工具去除密码再翻译。 |
-| `pdf_invalid` | 永久 | 文件不是有效的 PDF。 |
-| `pdf_empty` | 永久 | PDF 没有页面。 |
-| `pdf_too_long` | 永久 | PDF 超过 600 页，请拆分后再翻译。 |
-| `page_geometry` | 永久 | PDF 页面尺寸异常，无法处理。 |
-| `scanned_pdf` | 永久 | 这个 PDF 没有可见的文本层（可能是扫描件），DocFlow 不支持 OCR。 |
-| `no_paragraphs` | 永久 | 没有识别到可翻译的段落。 |
-| `font_embed_failed` | 永久 | 内置中文字体无法使用，请重新安装 DocFlow。 |
-| `inspect_timeout` / `analyze_timeout` / `compose_timeout` / `verify_timeout` | 可重试 | 处理超时，稍后自动重试。 |
-| `verify_failed` | 可重试 | 生成的 PDF 未通过校验，稍后自动重试。 |
-| `worker_crashed` | 可重试 | 处理进程意外退出，稍后自动重试。 |
-| `mostly_untranslated` | 永久 | 有 N 个字符（约占全文 X%）无法翻译，已停止处理。请换一个翻译服务或模型后重新处理。 |
+| code                                                                         | 类型   | 用户提示                                                                           |
+| ---------------------------------------------------------------------------- | ------ | ---------------------------------------------------------------------------------- |
+| `pdf_encrypted`                                                              | 永久   | 这个 PDF 已加密，请先用其他工具去除密码再翻译。                                    |
+| `pdf_invalid`                                                                | 永久   | 文件不是有效的 PDF。                                                               |
+| `pdf_empty`                                                                  | 永久   | PDF 没有页面。                                                                     |
+| `pdf_too_long`                                                               | 永久   | PDF 超过 600 页，请拆分后再翻译。                                                  |
+| `page_geometry`                                                              | 永久   | PDF 页面尺寸异常，无法处理。                                                       |
+| `scanned_pdf`                                                                | 永久   | 这个 PDF 没有可见的文本层（可能是扫描件），DocFlow 不支持 OCR。                    |
+| `no_paragraphs`                                                              | 永久   | 没有识别到可翻译的段落。                                                           |
+| `font_embed_failed`                                                          | 永久   | 内置中文字体无法使用，请重新安装 DocFlow。                                         |
+| `inspect_timeout` / `analyze_timeout` / `compose_timeout` / `verify_timeout` | 可重试 | 处理超时，稍后自动重试。                                                           |
+| `verify_failed`                                                              | 可重试 | 生成的 PDF 未通过校验，稍后自动重试。                                              |
+| `worker_crashed`                                                             | 可重试 | 处理进程意外退出，稍后自动重试。                                                   |
+| `mostly_untranslated`                                                        | 永久   | 有 N 个字符（约占全文 X%）无法翻译，已停止处理。请换一个翻译服务或模型后重新处理。 |
 
 compose 的 warning code（进处理记录，不中断）：`op_mismatch`、`page_skipped`、`font_unmapped`、`overflow`、`layout_failed`、`encode_failed`。
 
@@ -393,19 +449,49 @@ compose 的 warning code（进处理记录，不中断）：`op_mismatch`、`pag
 
 ```ts
 export const PDF = {
-  MAX_PAGES: 600, MIN_TEXT_CHARS_SAMPLE: 200, SAMPLE_PAGES: 8,
-  OPEN_LINES: 8, LINE_GAP_MAX: 2.5, LINE_SPACE_GAP: 0.15, LINE_OVERLAP_MIN: 0.5,
-  COLUMN_BIN: 10, COLUMN_MIN_SEPARATION: 0.35, COLUMN_MIN_COVERAGE: 0.3, SPAN_MIN_WIDTH: 0.6,
-  PARA_GAP_FACTOR: 1.75, PARA_FONT_TOLERANCE: 0.15, PARA_X_OVERLAP: 0.5, PARA_INDENT: 1.0,
-  HEADING_FONT_RATIO: 1.15, FOOTNOTE_FONT_RATIO: 0.85, HEADER_FOOTER_BAND: 0.06,
-  FORMULA_FONT_RE: /^(CM[^R]|MS.M|XY|MT|BL|RM|EU|LA|RS|LINE|LCIRCLE|TeX-|rsfs|txsy|wasy|stmary|.*Mono|.*Code|.*Ital|.*Sym|.*Math)/,
-  SUBSCRIPT_SIZE_RATIO: 0.79, FORMULA_MERGE_GAP: 1.0, DISPLAY_MATH_WIDTH_RATIO: 0.7, ITALIC_TEXT_MIN_WORDS: 3,
-  MIN_PARAGRAPH_CHARS: 2, SHORT_PARAGRAPH_CHARS: 40, IMAGE_OVERLAP_SKIP: 0.3, MAX_FORM_DEPTH: 4,
-  REMOVE_PADDING: 1.0, OP_MATCH_TOLERANCE: 0.5, PAGE_SKIP_MISMATCH_RATIO: 0.1,
-  LINE_HEIGHT_FACTOR: 1.3, MIN_LINE_HEIGHT_FACTOR: 1.05, MIN_FONT_SCALE: 0.6, LINE_HEIGHT_STEP: 0.05, FONT_SIZE_STEP: 0.5,
+  MAX_PAGES: 600,
+  MIN_TEXT_CHARS_SAMPLE: 200,
+  SAMPLE_PAGES: 8,
+  OPEN_LINES: 8,
+  LINE_GAP_MAX: 2.5,
+  LINE_SPACE_GAP: 0.15,
+  LINE_OVERLAP_MIN: 0.5,
+  COLUMN_BIN: 10,
+  COLUMN_MIN_SEPARATION: 0.35,
+  COLUMN_MIN_COVERAGE: 0.3,
+  SPAN_MIN_WIDTH: 0.6,
+  PARA_GAP_FACTOR: 1.75,
+  PARA_FONT_TOLERANCE: 0.15,
+  PARA_X_OVERLAP: 0.5,
+  PARA_INDENT: 1.0,
+  HEADING_FONT_RATIO: 1.15,
+  FOOTNOTE_FONT_RATIO: 0.85,
+  HEADER_FOOTER_BAND: 0.06,
+  FORMULA_FONT_RE:
+    /^(CM[^R]|MS.M|XY|MT|BL|RM|EU|LA|RS|LINE|LCIRCLE|TeX-|rsfs|txsy|wasy|stmary|.*Mono|.*Code|.*Ital|.*Sym|.*Math)/,
+  SUBSCRIPT_SIZE_RATIO: 0.79,
+  FORMULA_MERGE_GAP: 1.0,
+  DISPLAY_MATH_WIDTH_RATIO: 0.7,
+  ITALIC_TEXT_MIN_WORDS: 3,
+  MIN_PARAGRAPH_CHARS: 2,
+  SHORT_PARAGRAPH_CHARS: 40,
+  IMAGE_OVERLAP_SKIP: 0.3,
+  MAX_FORM_DEPTH: 4,
+  REMOVE_PADDING: 1.0,
+  OP_MATCH_TOLERANCE: 0.5,
+  PAGE_SKIP_MISMATCH_RATIO: 0.1,
+  LINE_HEIGHT_FACTOR: 1.3,
+  MIN_LINE_HEIGHT_FACTOR: 1.05,
+  MIN_FONT_SCALE: 0.6,
+  LINE_HEIGHT_STEP: 0.05,
+  FONT_SIZE_STEP: 0.5,
   MAX_PAGES_SINGLE_PASS: 200,
-  TIMEOUT_INSPECT_MS: 60_000, TIMEOUT_ANALYZE_BASE_MS: 120_000, TIMEOUT_ANALYZE_PER_PAGE_MS: 3_000,
-  TIMEOUT_COMPOSE_BASE_MS: 120_000, TIMEOUT_COMPOSE_PER_PAGE_MS: 2_000, TIMEOUT_VERIFY_MS: 120_000,
+  TIMEOUT_INSPECT_MS: 60_000,
+  TIMEOUT_ANALYZE_BASE_MS: 120_000,
+  TIMEOUT_ANALYZE_PER_PAGE_MS: 3_000,
+  TIMEOUT_COMPOSE_BASE_MS: 120_000,
+  TIMEOUT_COMPOSE_PER_PAGE_MS: 2_000,
+  TIMEOUT_VERIFY_MS: 120_000,
 } as const
 ```
 
@@ -420,16 +506,16 @@ export const PDF = {
 
 ## 3.17 与 PDFMathTranslate 的对照
 
-| 环节 | pdf2zh 1.x | DocFlow 4.0 | 原因 |
-| --- | --- | --- | --- |
-| 解析 | pdfminer 逐字符（`LTChar`，附 `cid` 与字体对象） | pdf.js 算子流 + 自写文字状态机（§3.4） | 纯 JS；pdf.js 的字体解码远好于自写 |
-| 段落归属 | DocLayout-YOLO 框 + 内容顺序 | 行/栏/段几何规则（§3.5–3.7） | 无模型、无原生依赖 |
-| 保留区域 | 模型的 figure/table/formula/abandon 框；其中字符以 `{v}` 原位重绘 | 图片矩形 + 短文本/页眉页脚等规则；不删除其指令 | 等价效果，更省事 |
-| 公式判定 | `vflag`：字体正则 + Unicode 类别 + 希腊字母；上下标 0.79；竖排；括号配对 | 同一套规则（§3.8）+ 斜体长句放宽 | 已验证有效 |
-| 公式重绘 | 用原字体资源名 + `cid` 逐字符 `Tj`，附带 `vfix` 纵向修正与分式横线 | 同（§3.12.6），横线暂不搬 | — |
-| 删除原文 | `PDFPageInterpreterEx.execute` 丢弃所有 `T*`、`'`、`"`、内联图像、marked content 算子，重建 `ops_base` | 词法分析后只删被翻译段落的 show-text 算子，其余字节原样保留（§3.12.3） | 不动的内容零风险；不用重新序列化 |
-| 表单 XObject | 递归翻译，流内用逆矩阵回写 | 单页独占的表单递归删除指令，新指令统一在页面级追加；共享表单跳过 | 简化坐标处理 |
-| 译文字体 | Latin 用 Times（`tiro`），其他用 Noto | 全部 Noto Sans SC（含 Latin） | 少一个字体 |
-| 换行 | 只在原文有换行（`brk`）时换行；行高 1.4 逐步降到 1.0 | 总是按框宽换行 + 避头尾；行高降到 1.05 后再缩字号到 0.6 | 更少溢出 |
-| 文字颜色 | 丢失（全部默认色） | 保留段落色与公式字形色 | 视觉一致 |
-| 输出 | mono + dual（PyMuPDF `insert_page`） | mono + dual（pdf-lib `copyPages`） | — |
+| 环节         | pdf2zh 1.x                                                                                             | DocFlow 4.0                                                            | 原因                               |
+| ------------ | ------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------- | ---------------------------------- |
+| 解析         | pdfminer 逐字符（`LTChar`，附 `cid` 与字体对象）                                                       | pdf.js 算子流 + 自写文字状态机（§3.4）                                 | 纯 JS；pdf.js 的字体解码远好于自写 |
+| 段落归属     | DocLayout-YOLO 框 + 内容顺序                                                                           | 行/栏/段几何规则（§3.5–3.7）                                           | 无模型、无原生依赖                 |
+| 保留区域     | 模型的 figure/table/formula/abandon 框；其中字符以 `{v}` 原位重绘                                      | 图片矩形 + 短文本/页眉页脚等规则；不删除其指令                         | 等价效果，更省事                   |
+| 公式判定     | `vflag`：字体正则 + Unicode 类别 + 希腊字母；上下标 0.79；竖排；括号配对                               | 同一套规则（§3.8）+ 斜体长句放宽                                       | 已验证有效                         |
+| 公式重绘     | 用原字体资源名 + `cid` 逐字符 `Tj`，附带 `vfix` 纵向修正与分式横线                                     | 同（§3.12.6），横线暂不搬                                              | —                                  |
+| 删除原文     | `PDFPageInterpreterEx.execute` 丢弃所有 `T*`、`'`、`"`、内联图像、marked content 算子，重建 `ops_base` | 词法分析后只删被翻译段落的 show-text 算子，其余字节原样保留（§3.12.3） | 不动的内容零风险；不用重新序列化   |
+| 表单 XObject | 递归翻译，流内用逆矩阵回写                                                                             | 单页独占的表单递归删除指令，新指令统一在页面级追加；共享表单跳过       | 简化坐标处理                       |
+| 译文字体     | Latin 用 Times（`tiro`），其他用 Noto                                                                  | 全部 Noto Sans SC（含 Latin）                                          | 少一个字体                         |
+| 换行         | 只在原文有换行（`brk`）时换行；行高 1.4 逐步降到 1.0                                                   | 总是按框宽换行 + 避头尾；行高降到 1.05 后再缩字号到 0.6                | 更少溢出                           |
+| 文字颜色     | 丢失（全部默认色）                                                                                     | 保留段落色与公式字形色                                                 | 视觉一致                           |
+| 输出         | mono + dual（PyMuPDF `insert_page`）                                                                   | mono + dual（pdf-lib `copyPages`）                                     | —                                  |
