@@ -11,7 +11,7 @@
 - [x] M0-5 `npx heroui-cli@latest agents-md --react --output .heroui-docs/AGENTS.md` 拉取文档（确认 `.heroui-docs/` 被忽略）。
 - [x] M0-6 `npm run dev` 能开窗口并显示按钮；`npm run check` 全绿（此时测试可以只有一个占位用例）。
 - [x] M0-7 `build/icon.png`（从 `old` 分支取）+ `scripts/make-icons.mjs` 生成 icns/ico；`electron-builder.yml`（07 章）；`npm run dist:dir` 能产出可启动的应用。
-- [ ] M0-8 推送后 CI 的 `check` 与 `package` 两个 job 变绿（E2E 先放一个只验证窗口标题为 `DocFlow` 的用例）。
+- [x] M0-8 推送后 CI 的 `check` 与 `package` 两个 job 变绿（E2E 先放一个只验证窗口标题为 `DocFlow` 的用例）。
 
 验收：`npm run check`、`npm run dist:dir`、CI 全绿；worklog 记录 electron-vite 多入口/ESM 的实际表现。
 
@@ -20,7 +20,7 @@
 - [x] M1-1 `src/shared/types.ts`、`presets.ts`、`constants.ts`、`errors.ts`、`text.ts`（04/05 章 schema 全部落地）+ 单测。
 - [x] M1-2 `settings/atomic-write.ts`、`settings/settings.ts`、`settings/host.ts`、`settings/secrets.ts`（safeStorage；单测用注入的假加密器）+ 单测。
 - [x] M1-3 `translate/http.ts`（fetch 注入）、`providers.ts`、`request.ts`、`response.ts`、`errors.ts` + 单测。
-- [ ] M1-4 `translate/keys.ts`、`pool.ts` + 单测（假时钟）。
+- [x] M1-4 `translate/keys.ts`、`pool.ts` + 单测（假时钟）。
 - [ ] M1-5 `tests/mock-provider/server.ts`（08.3 全部行为）+ `npm run mock:provider`。
 - [ ] M1-6 `translate/batch.ts`、`protect.ts`、`validate.ts`、`cache.ts`、`translate-document.ts`、`fake.ts` + 单测（对 mock 服务跑完 08.4 列出的场景）。
 - [ ] M1-7 `log/logger.ts`。

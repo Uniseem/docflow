@@ -11,6 +11,7 @@ export const REPAIR_PARALLELISM = 16
 export const REJECTED_STREAK_LIMIT = 6
 export const SUBMIT_ATTEMPTS = 8
 export const RETRY_NOTICES = 12
+export const RATE_LIMIT_COOLDOWN_MS = 10_000
 export const REQUEST_TIMEOUT_MS = 900_000
 export const LIST_MODELS_TIMEOUT_MS = 45_000
 export const CHECK_MODEL_TIMEOUT_MS = 90_000
