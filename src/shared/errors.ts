@@ -18,6 +18,7 @@ export const ERROR_CODES = {
   cancelled: 'cancelled',
   keychain_unavailable: 'keychain_unavailable',
   models_unsupported: 'models_unsupported',
+  not_found: 'not_found',
   internal: 'internal',
 } as const
 
@@ -36,6 +37,7 @@ const PERMANENT = new Set<string>([
   ERROR_CODES.mostly_untranslated,
   ERROR_CODES.keychain_unavailable,
   ERROR_CODES.models_unsupported,
+  ERROR_CODES.not_found,
 ])
 
 const INTERNAL_MESSAGE = '发生内部错误，详情见日志'
@@ -60,6 +62,7 @@ export const ERROR_MESSAGES: Record<string, string> = {
   cancelled: '已取消处理',
   keychain_unavailable: '这台电脑的系统钥匙串不可用，无法安全保存 API Key。',
   models_unsupported: '服务商不支持获取模型列表，请手动添加模型 ID。',
+  not_found: '找不到这个文档。',
   internal: INTERNAL_MESSAGE,
 }
 

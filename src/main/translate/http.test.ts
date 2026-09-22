@@ -3,12 +3,13 @@ import { fakeFetch } from './fake'
 import { createFetch } from './http'
 
 describe('createFetch / fakeFetch', () => {
-  test('prefers an injected fetch, then fake env, then global fetch', () => {
+  test('uses fake fetch when DOCFLOW_FAKE_PROVIDERS=1, otherwise injected or global fetch', () => {
+    const previous = process.env.DOCFLOW_FAKE_PROVIDERS
+    delete process.env.DOCFLOW_FAKE_PROVIDERS
     const custom = () => Promise.resolve(new Response('ok'))
     expect(createFetch(custom)).toBe(custom)
-    const previous = process.env.DOCFLOW_FAKE_PROVIDERS
     process.env.DOCFLOW_FAKE_PROVIDERS = '1'
-    expect(createFetch()).toBe(fakeFetch)
+    expect(createFetch(custom)).toBe(fakeFetch)
     delete process.env.DOCFLOW_FAKE_PROVIDERS
     expect(createFetch()).toBe(fetch)
     if (previous) process.env.DOCFLOW_FAKE_PROVIDERS = previous

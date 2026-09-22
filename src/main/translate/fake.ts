@@ -1,4 +1,17 @@
+import type { ProviderConfig } from '../../shared/types'
 import type { FetchFn } from './http'
+
+export function fakeProvider(): ProviderConfig {
+  return {
+    id: 'fake',
+    name: '假服务商',
+    type: 'openai',
+    baseUrl: 'http://127.0.0.1:9',
+    enabled: true,
+    models: [{ id: 'fake-model', name: '假模型' }],
+    concurrency: 100,
+  }
+}
 
 export const FAKE_MARK = '〔测试译文〕'
 const SEGMENT_RE = /<segment\s+id\s*=\s*["']?([^"'>\s]+)["']?\s*>([\s\S]*?)<\/segment\s*>/gi

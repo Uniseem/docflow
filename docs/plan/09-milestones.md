@@ -55,12 +55,12 @@
 
 ## M4 流水线、文档库、IPC
 
-- [ ] M4-1 `library/manifest.ts`、`events.ts`、`index.ts`、`library.ts`、`export.ts`（fflate ZIP）+ 单测。
-- [ ] M4-2 `jobs/scheduler.ts`、`jobs/job.ts`（并发、重试、取消、恢复）+ 单测（假流水线、假时钟）。
-- [ ] M4-3 `pipeline/run.ts` 与各 stage 文件，断点续传，事件文案（05.5）。
-- [ ] M4-4 `src/shared/ipc.ts` 通道表 + `ipc/register.ts` + `ipc/handlers/*` + `preload/index.ts`（含 `pathsForFiles`）+ `api.d.ts`。
-- [ ] M4-5 `app/protocol.ts`（`docflow://`，路径校验单测）、`app/dialogs.ts`、`app/menu.ts`（macOS 菜单：DocFlow/文件/编辑/窗口/帮助，中文）、通知与徽标（05.8）。
-- [ ] M4-6 命令行冒烟：`DOCFLOW_FAKE_PROVIDERS=1 npm run dev` 后在 devtools 里 `window.docflow.invoke('documents:create', …)` 把 fixture 跑到完成，`output/` 出现两份 PDF。
+- [x] M4-1 `library/manifest.ts`、`events.ts`、`index.ts`、`library.ts`、`export.ts`（fflate ZIP）+ 单测。
+- [x] M4-2 `jobs/scheduler.ts`、`jobs/job.ts`（并发、重试、取消、恢复）+ 单测（假流水线、假时钟）。
+- [x] M4-3 `pipeline/run.ts` 与各 stage 文件，断点续传，事件文案（05.5）。
+- [x] M4-4 `src/shared/ipc.ts` 通道表 + `ipc/register.ts` + `ipc/handlers/*` + `preload/index.ts`（含 `pathsForFiles`）+ `api.d.ts`。
+- [x] M4-5 `app/protocol.ts`（`docflow://`，路径校验单测）、`app/dialogs.ts`、`app/menu.ts`（macOS 菜单：DocFlow/文件/编辑/窗口/帮助，中文）、通知与徽标（05.8）。
+- [x] M4-6 命令行冒烟：`DOCFLOW_FAKE_PROVIDERS=1 npm run dev` 后在 devtools 里 `window.docflow.invoke('documents:create', …)` 把 fixture 跑到完成，`output/` 出现两份 PDF。
 
 验收：冒烟通过；`documents:*` 每个通道有至少一个单测（handler 层，注入假 library/scheduler）；`npm run check` 全绿。
 

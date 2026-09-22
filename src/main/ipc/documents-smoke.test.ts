@@ -1,0 +1,115 @@
+import { access } from 'node:fs/promises'
+import { mkdtemp } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { describe, expect, test } from 'vitest'
+import { DocumentLibrary } from '../library/library'
+import { Scheduler } from '../jobs/scheduler'
+import { SettingsStore } from '../settings/settings'
+import { memoryCryptor, SecretsStore } from '../settings/secrets'
+import { TranslationPools } from '../translate/pool'
+import { fakeFetch, fakeProvider } from '../translate/fake'
+import { analyzePdf } from '../pdf/analyze'
+import { composePdf, defaultComposeOptions } from '../pdf/compose'
+import { inspectPdf } from '../pdf/inspect'
+import { verifyPdf } from '../pdf/verify'
+import { bundledFonts, runPipeline, type PipelineHooks } from '../pipeline/run'
+import { handleDocumentsCreate, type HandlerContext } from './handlers'
+import type { DialogHost } from '../app/dialogs'
+
+const fonts = bundledFonts()
+
+function inProcessHooks(): PipelineHooks {
+  return {
+    inspect: (path) => inspectPdf(path),
+    analyze: (path) => analyzePdf(path),
+    translate: ({ analysis }) => {
+      const translations = analysis.paragraphs.map((para) => ({
+        id: para.id,
+        text: para.translatable ? `译${para.text}` : para.text,
+        kept: !para.translatable,
+      }))
+      return Promise.resolve({
+        translations,
+        usage: { input: 1, output: 1 },
+        kept: translations.filter((t) => t.kept).length,
+        translated: translations.filter((t) => !t.kept).length,
+      })
+    },
+    compose: (input) =>
+      composePdf({
+        sourcePath: input.sourcePath,
+        monoPath: input.monoPath,
+        dualPath: input.dualPath,
+        analysis: input.analysis,
+        translations: input.translations,
+        fonts: input.fonts,
+        options: { ...defaultComposeOptions(), minFontScale: input.minFontScale },
+      }),
+    verify: (input) =>
+      verifyPdf({
+        monoPath: input.monoPath,
+        dualPath: input.dualPath,
+        pages: input.pages,
+        writtenPages: input.writtenPages,
+      }),
+    fonts,
+    bilingual: () => true,
+    minFontScale: () => 0.6,
+  }
+}
+
+describe('documents:create smoke', () => {
+  test('create enqueues a fixture and writes mono/dual PDFs', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'df-smoke-'))
+    const lib = new DocumentLibrary()
+    await lib.open(dir)
+    const settings = new SettingsStore(dir)
+    await settings.load()
+    await settings.replaceProviders([fakeProvider()])
+    const secrets = new SecretsStore(dir, memoryCryptor())
+    await secrets.load()
+    const hooks = inProcessHooks()
+    const scheduler = new Scheduler(lib, (id, signal) => runPipeline(lib, id, signal, hooks), {
+      concurrency: () => 1,
+    })
+    const dialog: DialogHost = {
+      showOpenDialog: () => Promise.resolve({ canceled: true, filePaths: [] }),
+      showSaveDialog: () => Promise.resolve({ canceled: true }),
+    }
+    const ctx: HandlerContext = {
+      library: lib,
+      scheduler,
+      settings,
+      secrets,
+      pools: new TranslationPools(fakeFetch, () => 'k'),
+      dialog,
+      fetch: fakeFetch,
+      env: { DOCFLOW_FAKE_PROVIDERS: '1' },
+      version: '4.0.0',
+      platform: 'darwin',
+      arch: 'arm64',
+      logsDir: join(dir, 'logs'),
+      getLibraryDir: () => dir,
+      setTheme: () => Promise.resolve(),
+      checkUpdates: () =>
+        Promise.resolve({ latest: '4.0.0', url: 'https://example', newer: false }),
+      changeLibrary: (path) => Promise.resolve(path),
+      reveal: () => undefined,
+      openPath: () => Promise.resolve(),
+      openExternal: () => Promise.resolve(),
+      sendRemoved: () => undefined,
+    }
+    const created = await handleDocumentsCreate(ctx, {
+      paths: [join(process.cwd(), 'tests/fixtures/colored-text.pdf')],
+      translator: { providerId: 'fake', model: 'fake-model' },
+      title: 'Color',
+    })
+    expect(created.failed).toHaveLength(0)
+    const id = created.created[0]!.id
+    await expect.poll(() => lib.require(id).status, { timeout: 60_000 }).toBe('completed')
+    await access(join(dir, 'documents', id, 'output', 'mono.pdf'))
+    await access(join(dir, 'documents', id, 'output', 'dual.pdf'))
+    await scheduler.stop(0)
+  }, 60_000)
+})

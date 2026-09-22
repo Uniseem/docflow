@@ -1,4 +1,4 @@
-export type DocflowApi = Record<string, never>
+import type { DocflowApi } from '../shared/ipc'
 
 declare global {
   interface Window {
@@ -6,4 +6,4 @@ declare global {
   }
 }
 
-export {}
+export type { DocflowApi }

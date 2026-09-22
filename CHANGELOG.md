@@ -14,6 +14,7 @@
 - PDF 测试 fixture：08.2 合成样例与两篇 CC-BY arXiv 论文。
 - PDF 解析：inspect、字形/行/栏/公式/段落、表单引用、analyze worker 与调试脚本。
 - PDF 写回：内容流词法分析与遍历、CJK 字体嵌入、译文排版、公式重绘、双语 PDF 与校验。
+- 文档库、任务调度、PDF 流水线与 IPC：`documents:create` 可跑通 inspect→翻译→写回，产出中文 PDF 与双语 PDF。
 
 ### 变更
 
