@@ -17,7 +17,7 @@
 
 ## M1 共享层与翻译子系统
 
-- [ ] M1-1 `src/shared/types.ts`、`presets.ts`、`constants.ts`、`errors.ts`、`text.ts`（04/05 章 schema 全部落地）+ 单测。
+- [x] M1-1 `src/shared/types.ts`、`presets.ts`、`constants.ts`、`errors.ts`、`text.ts`（04/05 章 schema 全部落地）+ 单测。
 - [ ] M1-2 `settings/atomic-write.ts`、`settings/settings.ts`、`settings/host.ts`、`settings/secrets.ts`（safeStorage；单测用注入的假加密器）+ 单测。
 - [ ] M1-3 `translate/http.ts`（fetch 注入）、`providers.ts`、`request.ts`、`response.ts`、`errors.ts` + 单测。
 - [ ] M1-4 `translate/keys.ts`、`pool.ts` + 单测（假时钟）。
