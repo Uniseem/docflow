@@ -21,7 +21,7 @@
 - [x] M1-2 `settings/atomic-write.ts`、`settings/settings.ts`、`settings/host.ts`、`settings/secrets.ts`（safeStorage；单测用注入的假加密器）+ 单测。
 - [x] M1-3 `translate/http.ts`（fetch 注入）、`providers.ts`、`request.ts`、`response.ts`、`errors.ts` + 单测。
 - [x] M1-4 `translate/keys.ts`、`pool.ts` + 单测（假时钟）。
-- [ ] M1-5 `tests/mock-provider/server.ts`（08.3 全部行为）+ `npm run mock:provider`。
+- [x] M1-5 `tests/mock-provider/server.ts`（08.3 全部行为）+ `npm run mock:provider`。
 - [ ] M1-6 `translate/batch.ts`、`protect.ts`、`validate.ts`、`cache.ts`、`translate-document.ts`、`fake.ts` + 单测（对 mock 服务跑完 08.4 列出的场景）。
 - [ ] M1-7 `log/logger.ts`。
 

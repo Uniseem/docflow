@@ -4,7 +4,7 @@ import { resolve } from 'node:path'
 export default defineConfig({
   resolve: { alias: { '@shared': resolve(__dirname, 'src/shared') } },
   test: {
-    include: ['src/**/*.test.ts', 'tests/unit/**/*.test.ts'],
+    include: ['src/**/*.test.ts', 'tests/unit/**/*.test.ts', 'tests/mock-provider/**/*.test.ts'],
     environment: 'node',
     testTimeout: 30_000,
     hookTimeout: 60_000,
