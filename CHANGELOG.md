@@ -11,6 +11,7 @@
 - 本地 mock 大模型服务（OpenAI / Anthropic / Gemini 接口与 08.3 故障注入）。
 - 翻译批处理、占位符保护、回复校验、缓存、文档翻译阶梯与假服务商。
 - 主进程日志（electron-log，文件滚动 8 MiB）。
+- PDF 测试 fixture：08.2 合成样例与两篇 CC-BY arXiv 论文。
 
 ### 变更
 

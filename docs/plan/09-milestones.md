@@ -29,7 +29,7 @@
 
 ## M2 PDF 解析
 
-- [ ] M2-1 `scripts/make-fixtures.mjs` 生成 08.2 的全部 fixture 并提交；`tests/fixtures/README.md`。
+- [x] M2-1 `scripts/make-fixtures.mjs` 生成 08.2 的全部 fixture 并提交；`tests/fixtures/README.md`。
 - [ ] M2-2 `pdf/inspect.ts` + 错误码 + 单测（encrypted/scanned/empty/normal）。
 - [ ] M2-3 `pdf/analyze/glyphs.ts`：pdf.js 算子流文字状态机（§3.4，含表单、颜色、图片矩形、编码字节数）+ 单测（用 fixture 核对每个字形的 x/y/size/adv 与 `getTextContent` 的结果一致，容差 0.05 pt）。
 - [ ] M2-4 `pdf/analyze/lines.ts`（算子不可拆、竖直重叠规则）、`columns.ts` + 快照单测。
