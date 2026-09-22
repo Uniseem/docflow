@@ -1,5 +1,12 @@
 import { describe, expect, test } from 'vitest'
-import { formatBytes, formatRelativeTime, sanitizeFilename, suggestedNames } from './text'
+import {
+  formatBytes,
+  formatRelativeTime,
+  maskKey,
+  sanitizeFilename,
+  splitKeys,
+  suggestedNames,
+} from './text'
 
 describe('sanitizeFilename', () => {
   test('replaces reserved characters and trims', () => {
@@ -51,5 +58,17 @@ describe('formatRelativeTime', () => {
     expect(formatRelativeTime(new Date('2025-12-01T10:00:00+08:00').toISOString(), now)).toBe(
       '2025年12月1日',
     )
+  })
+})
+
+describe('splitKeys / maskKey', () => {
+  test('splits English/Chinese commas, semicolons and whitespace', () => {
+    expect(splitKeys('a,b，c; d\ne')).toEqual(['a', 'b', 'c', 'd', 'e'])
+  })
+
+  test('masks long and short keys, and counts multiples', () => {
+    expect(maskKey('short')).toBe('••••••••')
+    expect(maskKey('sk-abcdefghijk')).toBe('••••••••hijk')
+    expect(maskKey('sk-abcdefghijk,other')).toBe('••••••••hijk（共 2 个）')
   })
 })

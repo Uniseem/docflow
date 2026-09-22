@@ -65,6 +65,21 @@ function isYesterday(then: Date, now: Date): boolean {
   return isSameDay(then, y)
 }
 
+export function splitKeys(raw: string): string[] {
+  return raw
+    .split(/[,，\s;]+/)
+    .map((part) => part.trim())
+    .filter((part) => part.length > 0)
+}
+
+export function maskKey(raw: string): string {
+  const keys = splitKeys(raw)
+  if (keys.length === 0) return ''
+  const first = keys[0] ?? ''
+  const masked = first.length >= 12 ? `••••••••${first.slice(-4)}` : '••••••••'
+  return keys.length > 1 ? `${masked}（共 ${keys.length} 个）` : masked
+}
+
 export function newDocumentId(at = new Date(), randomHex?: string): string {
   const y = at.getUTCFullYear().toString().padStart(4, '0')
   const mo = (at.getUTCMonth() + 1).toString().padStart(2, '0')
