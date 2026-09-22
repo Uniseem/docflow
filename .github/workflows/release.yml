@@ -17,7 +17,6 @@ concurrency:
 jobs:
   build:
     name: 安装包（${{ matrix.name }}）
-    if: ${{ hashFiles('package.json') != '' }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 40
     strategy:

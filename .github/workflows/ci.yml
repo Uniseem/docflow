@@ -18,7 +18,6 @@ concurrency:
 jobs:
   check:
     name: 检查（typecheck · lint · 单测）
-    if: ${{ hashFiles('package.json') != '' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -32,7 +31,6 @@ jobs:
 
   package:
     name: 打包冒烟（${{ matrix.os }}）
-    if: ${{ hashFiles('package.json') != '' }}
     needs: check
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
