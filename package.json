@@ -29,7 +29,7 @@
     "mock:provider": "tsx tests/mock-provider/server.ts",
     "fixtures": "node scripts/make-fixtures.mjs",
     "icons": "node scripts/make-icons.mjs",
-    "analyze": "node scripts/analyze-pdf.mjs",
+    "analyze": "tsx scripts/analyze-pdf.mjs",
     "compose": "node scripts/compose-pdf.mjs"
   },
   "dependencies": {

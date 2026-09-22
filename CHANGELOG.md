@@ -12,6 +12,7 @@
 - 翻译批处理、占位符保护、回复校验、缓存、文档翻译阶梯与假服务商。
 - 主进程日志（electron-log，文件滚动 8 MiB）。
 - PDF 测试 fixture：08.2 合成样例与两篇 CC-BY arXiv 论文。
+- PDF 解析：inspect、字形/行/栏/公式/段落、表单引用、analyze worker 与调试脚本。
 
 ### 变更
 

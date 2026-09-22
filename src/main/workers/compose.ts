@@ -1,6 +1,9 @@
-/**
- * PDF compose worker entry. Implemented in M3-5.
- */
-export function notImplemented(): never {
-  throw new Error('compose worker is not implemented yet')
-}
+import { parentPort } from 'node:worker_threads'
+
+parentPort?.on('message', (msg: { id: number }) => {
+  parentPort?.postMessage({
+    id: msg.id,
+    ok: false,
+    error: { code: 'internal', message: 'compose worker is not implemented yet' },
+  })
+})

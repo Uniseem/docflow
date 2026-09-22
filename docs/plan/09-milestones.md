@@ -30,14 +30,14 @@
 ## M2 PDF 解析
 
 - [x] M2-1 `scripts/make-fixtures.mjs` 生成 08.2 的全部 fixture 并提交；`tests/fixtures/README.md`。
-- [ ] M2-2 `pdf/inspect.ts` + 错误码 + 单测（encrypted/scanned/empty/normal）。
-- [ ] M2-3 `pdf/analyze/glyphs.ts`：pdf.js 算子流文字状态机（§3.4，含表单、颜色、图片矩形、编码字节数）+ 单测（用 fixture 核对每个字形的 x/y/size/adv 与 `getTextContent` 的结果一致，容差 0.05 pt）。
-- [ ] M2-4 `pdf/analyze/lines.ts`（算子不可拆、竖直重叠规则）、`columns.ts` + 快照单测。
-- [ ] M2-5 `pdf/analyze/formula.ts`（pdf2zh 规则 + 放宽）+ 单测（inline-formula、display-math、italic-sentence）。
-- [ ] M2-6 `pdf/analyze/paragraphs.ts`（角色、对齐、可翻译判定）、`normalize.ts` + 快照单测。
-- [ ] M2-7 表单引用统计（pdf-lib 扫描 `/XObject`，shared 判定）+ 单测（form-wrapped、shared-form fixture）。
-- [ ] M2-8 `workers/analyze.ts` + `pdf/worker-host.ts`（协议、超时、取消、崩溃）+ 单测（用一个故意 `while(true)` 的假 worker 验证超时 terminate）。
-- [ ] M2-9 `scripts/analyze-pdf.mjs` 调试工具（§3.15）。
+- [x] M2-2 `pdf/inspect.ts` + 错误码 + 单测（encrypted/scanned/empty/normal）。
+- [x] M2-3 `pdf/analyze/glyphs.ts`：pdf.js 算子流文字状态机（§3.4，含表单、颜色、图片矩形、编码字节数）+ 单测（用 fixture 核对每个字形的 x/y/size/adv 与 `getTextContent` 的结果一致，容差 0.05 pt）。
+- [x] M2-4 `pdf/analyze/lines.ts`（算子不可拆、竖直重叠规则）、`columns.ts` + 快照单测。
+- [x] M2-5 `pdf/analyze/formula.ts`（pdf2zh 规则 + 放宽）+ 单测（inline-formula、display-math、italic-sentence）。
+- [x] M2-6 `pdf/analyze/paragraphs.ts`（角色、对齐、可翻译判定）、`normalize.ts` + 快照单测。
+- [x] M2-7 表单引用统计（pdf-lib 扫描 `/XObject`，shared 判定）+ 单测（form-wrapped、shared-form fixture）。
+- [x] M2-8 `workers/analyze.ts` + `pdf/worker-host.ts`（协议、超时、取消、崩溃）+ 单测（用一个故意 `while(true)` 的假 worker 验证超时 terminate）。
+- [x] M2-9 `scripts/analyze-pdf.mjs` 调试工具（§3.15）。
 
 验收：所有 fixture 的快照经人工核对合理（worklog 里贴关键数字：段数、可翻译数、公式片段数）；两篇真实论文 `analyze` ≤ 5 s；`npm run check` 全绿。
 
