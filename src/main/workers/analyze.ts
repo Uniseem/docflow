@@ -1,6 +1,7 @@
 import { parentPort } from 'node:worker_threads'
 import { inspectPdf } from '../pdf/inspect'
 import { analyzePdf } from '../pdf/analyze'
+import { verifyPdf } from '../pdf/verify'
 import { isUserError } from '../../shared/errors'
 import type { WorkerRequest, WorkerResponse } from '../pdf/worker-host'
 
@@ -19,8 +20,10 @@ async function handle(msg: WorkerRequest): Promise<void> {
         result = await analyzePdf(msg.path)
         break
       case 'verify':
+        result = await verifyPdf(msg)
+        break
       case 'compose':
-        throw new Error(`${msg.kind} is not implemented yet`)
+        throw new Error('compose belongs to the compose worker')
     }
     post({ id: msg.id, ok: true, result })
   } catch (error) {

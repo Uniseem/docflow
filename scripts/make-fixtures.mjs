@@ -343,6 +343,12 @@ async function cidFont() {
   page.drawText('CID subset 中文段落与公式', { x: 72, y: 720, size: 12, font })
   page.drawText('x', { x: 72, y: 690, size: 12, font: italic })
   page.drawText(' 是变量。', { x: 82, y: 690, size: 12, font })
+  page.drawText('Embedded CIDFont glyphs must remain selectable after rewrite.', {
+    x: 72,
+    y: 660,
+    size: 12,
+    font,
+  })
   await save('cid-font.pdf', await doc.save())
 }
 

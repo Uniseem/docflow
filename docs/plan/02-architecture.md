@@ -167,7 +167,7 @@ docflow/
     "fixtures": "node scripts/make-fixtures.mjs",
     "icons": "node scripts/make-icons.mjs",
     "analyze": "tsx scripts/analyze-pdf.mjs",
-    "compose": "node scripts/compose-pdf.mjs"
+    "compose": "tsx scripts/compose-pdf.mjs"
   },
   "dependencies": {
     "@cantoo/fontkit": "^2.0.12",

@@ -43,13 +43,13 @@
 
 ## M3 PDF 写回
 
-- [ ] M3-1 `pdf/compose/content-lexer.ts`（§3.12.1，含内联图像、字符串转义、字典/数组）+ 单测（把 fixture 的内容流词法分析后原样拼回必须逐字节相等；构造的边角样例）。
-- [ ] M3-2 `pdf/compose/content-walker.ts`（§3.12.2 定位状态机、表单递归）+ 单测（每个 show-text 算子的起点与 M2-3 字形记录的首字形坐标一致，容差 0.5 pt）。
-- [ ] M3-3 `pdf/compose/fonts.ts`（CJK 嵌入与子集回退；`loadedName → 资源名` 映射：起点匹配 + BaseFont 回退；原字体以 `DFo<n>` 挂到页面字典）+ 单测。
-- [ ] M3-4 `pdf/compose/layout.ts`（分词、换行、避头尾、行高/字号缩放、对齐）+ 单测。
-- [ ] M3-5 `pdf/compose/emit.ts`（译文 `Tj`、公式片段重绘与合并、颜色、编码字节数）、`rewrite.ts`（删除集合、一致性校验、整页放弃、流写回）、`dual.ts`；`workers/compose.ts` + 集成测试（假翻译）。
-- [ ] M3-6 `pdf/verify.ts`（含改写页 `getOperatorList` 可执行）+ 单测。
-- [ ] M3-7 集成：每个 fixture → 假翻译 → compose → verify 全部通过；肉眼检查 `two-column`、`inline-formula`、`form-wrapped` 的输出（worklog 附截图路径）；用 `scripts/compose-pdf.mjs` 跑两篇真实论文，记录 `op_mismatch`/`font_unmapped` 数量（目标：0）。
+- [x] M3-1 `pdf/compose/content-lexer.ts`（§3.12.1，含内联图像、字符串转义、字典/数组）+ 单测（把 fixture 的内容流词法分析后原样拼回必须逐字节相等；构造的边角样例）。
+- [x] M3-2 `pdf/compose/content-walker.ts`（§3.12.2 定位状态机、表单递归）+ 单测（每个 show-text 算子的起点与 M2-3 字形记录的首字形坐标一致，容差 0.5 pt）。
+- [x] M3-3 `pdf/compose/fonts.ts`（CJK 嵌入与子集回退；`loadedName → 资源名` 映射：起点匹配 + BaseFont 回退；原字体以 `DFo<n>` 挂到页面字典）+ 单测。
+- [x] M3-4 `pdf/compose/layout.ts`（分词、换行、避头尾、行高/字号缩放、对齐）+ 单测。
+- [x] M3-5 `pdf/compose/emit.ts`（译文 `Tj`、公式片段重绘与合并、颜色、编码字节数）、`rewrite.ts`（删除集合、一致性校验、整页放弃、流写回）、`dual.ts`；`workers/compose.ts` + 集成测试（假翻译）。
+- [x] M3-6 `pdf/verify.ts`（含改写页 `getOperatorList` 可执行）+ 单测。
+- [x] M3-7 集成：每个 fixture → 假翻译 → compose → verify 全部通过；肉眼检查 `two-column`、`inline-formula`、`form-wrapped` 的输出（worklog 附截图路径）；用 `scripts/compose-pdf.mjs` 跑两篇真实论文，记录 `op_mismatch`/`font_unmapped` 数量（目标：0）。
 
 验收：08.4 的 pdf 集成用例全绿；30 页 fixture compose+dual+verify ≤ 15 s；真实论文无 `page_skipped`。
 
