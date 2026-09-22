@@ -1,7 +1,14 @@
 import { describe, expect, test } from 'vitest'
 import { DEFAULT_SYSTEM_PROMPT } from '../../shared/constants'
 import type { TranslationRuntime } from '../../shared/types'
-import { buildSystemPrompt, buildUserMessage, parseBatch, planBatches, smartSplit } from './batch'
+import {
+  buildSystemPrompt,
+  buildUserMessage,
+  joinSplitResults,
+  parseBatch,
+  planBatches,
+  smartSplit,
+} from './batch'
 
 const runtime = (over: Partial<TranslationRuntime['llm']> = {}): TranslationRuntime => ({
   llm: {
@@ -67,5 +74,18 @@ describe('smartSplit / planBatches / parseBatch', () => {
         { id: '2', text: 'B' },
       ]),
     ).toContain('<segment id="1">')
+  })
+
+  test('joins split ids back to the parent', () => {
+    expect(
+      joinSplitResults([
+        { id: 'p1#1', text: 'a' },
+        { id: 'p1#2', text: 'b' },
+        { id: 'p2', text: 'c' },
+      ]),
+    ).toEqual([
+      { id: 'p1', text: 'ab' },
+      { id: 'p2', text: 'c' },
+    ])
   })
 })

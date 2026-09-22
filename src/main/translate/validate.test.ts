@@ -5,7 +5,7 @@ import { describe, expect, test } from 'vitest'
 import { DEFAULT_SYSTEM_PROMPT } from '../../shared/constants'
 import type { ProviderConfig, TranslationRuntime } from '../../shared/types'
 import { cacheFingerprint, TranslationCache } from './cache'
-import { protectTexts } from './protect'
+import { protectTexts, restoreTokens } from './protect'
 import { checkReply, normalizeMarkers, restoreAndCheckPdf } from './validate'
 
 const provider: ProviderConfig = {
@@ -38,6 +38,7 @@ describe('protect + validate', () => {
       'standard',
     )
     expect(restored).toBe(source)
+    expect(restoreTokens(protection.texts[0] ?? '', protection.originals)).toBe(source)
   })
 
   test('repairs damaged markers and rejects count/order changes', () => {
@@ -112,5 +113,7 @@ describe('TranslationCache', () => {
     const other = new TranslationCache(path, cacheFingerprint(provider, 'other', runtime))
     await other.load()
     expect(other.get('hello {v1}')).toBeUndefined()
+    cache.start()
+    cache.stop()
   })
 })
