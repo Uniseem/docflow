@@ -58,6 +58,16 @@ async function launchApp(options: LaunchOptions & { dataDir: string }): Promise<
     },
   })
   const page = await app.firstWindow()
+  // E2E_WINDOW=1000x700 reproduces the narrow layout of CI screens locally.
+  const size = /^(\d+)x(\d+)$/.exec(process.env.E2E_WINDOW ?? '')
+  if (size) {
+    await app.evaluate(
+      ({ BrowserWindow }, bounds) => {
+        BrowserWindow.getAllWindows()[0]?.setSize(bounds.width, bounds.height)
+      },
+      { width: Number(size[1]), height: Number(size[2]) },
+    )
+  }
   await expect(page).toHaveTitle('DocFlow')
   await page.waitForFunction(() => Boolean((globalThis as { docflow?: unknown }).docflow), null, {
     timeout: 15_000,
@@ -214,6 +224,19 @@ export function documentRows(page: Page) {
 
 export function documentRow(page: Page, id: string) {
   return page.locator(`[data-testid="document-row-${id}"]`)
+}
+
+/**
+ * Selects a document as a user would. Below 1100 px (CI screens) the detail is a modal drawer
+ * that covers the list, so an open one is closed first; the click then opens it again.
+ */
+export async function openDocument(page: Page, id: string): Promise<void> {
+  const drawer = page.locator('[data-slot="drawer-backdrop"]')
+  if ((await drawer.count()) > 0) {
+    await page.keyboard.press('Escape')
+    await expect(drawer).toHaveCount(0)
+  }
+  await documentRow(page, id).click()
 }
 
 export function getDocument(page: Page, id: string): Promise<DocumentSummary> {

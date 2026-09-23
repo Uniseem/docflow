@@ -4,7 +4,7 @@ import {
   configureMockProvider,
   createDocument,
   documentEvents,
-  documentRow,
+  openDocument,
   expect,
   fixture,
   test,
@@ -18,7 +18,7 @@ test('取消后重新处理会命中缓存', async ({ launch, dataDir, mockProvi
   const { page } = await launch()
   await configureMockProvider(page, { translation: SLOW_TRANSLATION })
   const id = await createDocument(page, fixture('long.pdf'))
-  await documentRow(page, id).click()
+  await openDocument(page, id)
 
   // Cancel in the middle of the translate stage, once some translations are on disk.
   await waitForDocument(page, id, (doc) => doc.stage === 'translate' && doc.progress > 30, {

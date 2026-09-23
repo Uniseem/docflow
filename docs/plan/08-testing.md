@@ -84,6 +84,8 @@
 
 前置：`globalSetup` 启动 mock 服务；`tests/e2e/helpers.ts` 导出的 `test` 带 fixture：`mockProvider`（自动，每个测试开始时 `POST /reset`，因此 429 计数、延迟都从头开始）、`tempDir`/`dataDir`（每个测试独立的临时目录，作为 `DOCFLOW_DATA_DIR`）、`launch`（启动打包产物，`DOCFLOW_MOCK_PROVIDER_URL=http://127.0.0.1:38111`）。测试结束时 fixture 关闭仍在运行的应用并删除临时目录；失败的测试会先把目录里的 `main.log` 附到报告。
 
+CI 的屏幕较窄（窗口 < 1100 px），文档详情是覆盖列表的抽屉：选中文档用 `openDocument(page, id)`（先关掉已打开的抽屉再点行），操作行菜单直接点行内的 `更多`，不要先点行。本地用 `E2E_WINDOW=1000x700 npx playwright test` 按窄窗口跑一遍。
+
 1. `first-run.spec`：启动 → 空状态显示未配置提示 → 设置 → 翻译服务 → 添加 DeepSeek 预设 → 填 Key `test-key` → 获取模型列表 → 勾选 `mock-chat` → 检查模型显示 `可用` → 返回文档库 → 空状态变为已配置文案。
 2. `translate.spec`：新建翻译 → 选择 `tests/fixtures/two-column.pdf`（用 `app:openFiles` 推送模拟拖入，或 Playwright `setInputFiles` 不适用于 Electron 对话框；通过 `page.evaluate(() => window.docflow.invoke('documents:create', …))` 直连）→ 列表出现、进度推进 → 完成 → 详情 `中文 PDF` 页签 iframe 加载：在主进程里 `net.fetch(iframe.src)` 断言 200、`application/pdf`、`%PDF-` 开头，6 s 后仍没有出现「无法在应用内预览」兜底 → 处理记录含 `校验通过` → 导出中文 PDF（主进程对话框用 `DOCFLOW_E2E_SAVE_PATH` 环境变量绕过）→ Toast `已导出`，导出的文件是 PDF。
 3. `failure.spec`：`encrypted.pdf` → 失败，提示含 `已加密`；`bad-key` → 失败提示含 `API Key`；`missing-model` → 失败提示含 `模型`（`failure.message` 与界面各断言一次）。

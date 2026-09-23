@@ -17,7 +17,7 @@ test('删除完成后的文档会从列表和目录消失', async ({ launch, dat
   const id = await createDocument(page, fixture('single-column.pdf'))
   await waitForStatus(page, id, 'completed')
   const row = documentRow(page, id)
-  await row.click()
+  // The row's own menu: selecting the row would open the detail drawer in narrow windows.
   await row.getByLabel('更多').click()
   await page.getByRole('menuitem', { name: '删除…' }).click()
   await page.getByRole('alertdialog').getByRole('button', { name: '删除', exact: true }).click()
