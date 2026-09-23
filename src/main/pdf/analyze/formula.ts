@@ -73,8 +73,20 @@ export function isFormulaGlyph(
   return false
 }
 
-function italicProse(glyphs: Glyph[]): boolean {
-  const text = glyphs.map((g) => g.unicode).join('')
+function italicProse(glyphs: Glyph[], size: number): boolean {
+  // TeX output has no space glyphs; words are split by gaps, as in the line text below.
+  let text = ''
+  let last: Glyph | undefined
+  for (const g of glyphs) {
+    if (
+      last &&
+      (g.isSpace || last.isSpace || g.x - (last.x + last.width) > PDF.LINE_SPACE_GAP * size)
+    ) {
+      text += ' '
+    }
+    text += g.unicode
+    last = g
+  }
   const words = text.match(ITALIC_WORD) ?? []
   return words.length >= PDF.ITALIC_TEXT_MIN_WORDS
 }
@@ -114,7 +126,7 @@ export function attachFormulas(lines: RawLine[]): Lined[] {
       )
         j += 1
       const slice = line.glyphs.slice(i, j)
-      if (italicProse(slice)) {
+      if (italicProse(slice, prelimSize)) {
         for (let k = i; k < j; k += 1) {
           const g = line.glyphs[k]
           if (!g) continue

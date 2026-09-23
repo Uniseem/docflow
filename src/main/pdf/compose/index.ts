@@ -1,5 +1,5 @@
 import { readFile } from 'node:fs/promises'
-import { PDFDocument, type PDFFont } from '@cantoo/pdf-lib'
+import type { PDFFont } from '@cantoo/pdf-lib'
 import {
   ComposeRequest,
   ComposeResult,
@@ -8,6 +8,7 @@ import {
 } from '../../../shared/pdf-types'
 import { PDF } from '../../../shared/pdf-constants'
 import { writeFileAtomic } from '../../settings/atomic-write'
+import { loadPdfLib } from '../load-pdf-lib'
 import { walkTextOps } from './content-walker'
 import { buildDualPdf } from './dual'
 import { emitPageOps, wrapPageContent } from './emit'
@@ -27,7 +28,7 @@ export type ComposeOutput = ComposeResult & { writtenPages: number[] }
 export async function composePdf(input: ComposeRequest): Promise<ComposeOutput> {
   const request = ComposeRequest.parse(input)
   const sourceBytes = await readFile(request.sourcePath)
-  const doc = await PDFDocument.load(sourceBytes, { ignoreEncryption: true })
+  const doc = await loadPdfLib(sourceBytes)
   const translations = new Map(request.translations.map((row) => [row.id, row]))
   const needBold = request.analysis.paragraphs.some((para) => {
     const tr = translations.get(para.id)

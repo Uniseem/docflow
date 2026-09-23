@@ -1,13 +1,6 @@
-import {
-  PDFArray,
-  PDFDocument,
-  PDFDict,
-  PDFName,
-  PDFRawStream,
-  PDFRef,
-  PDFStream,
-  decodePDFRawStream,
-} from '@cantoo/pdf-lib'
+import { PDFArray, type PDFDocument, PDFDict, PDFName, PDFRef, PDFStream } from '@cantoo/pdf-lib'
+import { streamBytes } from './compose/streams'
+import { loadPdfLib } from './load-pdf-lib'
 
 export type FormRefStat = {
   page: number
@@ -39,25 +32,8 @@ function isForm(doc: PDFDocument, value: unknown): boolean {
   return dict ? subtypeOf(dict) === 'Form' : false
 }
 
-function decodeStream(stream: PDFRawStream): string {
-  try {
-    const decoded = decodePDFRawStream(stream)
-    return Buffer.from(decoded.decode()).toString('latin1')
-  } catch {
-    return ''
-  }
-}
-
 function contentsText(item: unknown): string {
-  if (item instanceof PDFRawStream) return decodeStream(item)
-  if (item instanceof PDFStream) {
-    try {
-      return item.getContentsString()
-    } catch {
-      return ''
-    }
-  }
-  return ''
+  return Buffer.from(streamBytes(item)).toString('latin1')
 }
 
 function doNames(content: string): string[] {
@@ -86,7 +62,7 @@ export async function scanFormRefs(bytes: Uint8Array): Promise<{
   stats: FormRefStat[]
   sharedPaths: Map<number, Set<string>>
 }> {
-  const doc = await PDFDocument.load(bytes, { ignoreEncryption: true })
+  const doc = await loadPdfLib(bytes)
   const pageHits = new Map<string, Set<number>>()
   const pagePaths: Array<{ page: number; formPath: string; ref: string }> = []
 

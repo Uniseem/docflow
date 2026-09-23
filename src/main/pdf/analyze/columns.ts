@@ -10,60 +10,120 @@ function median(values: number[]): number {
     : (sorted[mid] ?? 0)
 }
 
-export function assignColumns(lines: Lined[], pageWidth: number): Lined[] {
-  if (lines.length === 0) return lines
+/** Median line size weighted by text length, so a crowd of tiny figure labels can't win. */
+export function bodySizeOf(lines: Lined[]): number {
   const weights = lines.map((line) => Math.max(1, line.text.replace(/\{v\d+\}/g, '').length))
-  const bodySize = median(
+  return median(
     lines.flatMap((line, i) => Array.from({ length: weights[i] ?? 1 }, () => line.size)),
   )
-  const candidates = lines.filter(
+}
+
+function bodyLines(lines: Lined[]): Lined[] {
+  const bodySize = bodySizeOf(lines)
+  return lines.filter(
     (line) => !line.formulaLine && line.size >= 0.75 * bodySize && line.size <= 1.25 * bodySize,
   )
+}
+
+function crossesSplit(line: Lined, split: number): boolean {
+  const margin = PDF.COLUMN_BIN / 2
+  return line.bbox[0] < split - margin && line.bbox[2] > split + margin
+}
+
+/** x of the gutter when the page's body text sits in two columns. */
+export function detectColumnSplit(lines: Lined[], pageWidth: number): number | undefined {
+  if (lines.length === 0) return undefined
+  const candidates = bodyLines(lines)
+  const binOf = (line: Lined) => Math.floor(line.bbox[0] / PDF.COLUMN_BIN)
   const bins = new Map<number, number>()
-  for (const line of candidates) {
-    const key = Math.floor(line.bbox[0] / PDF.COLUMN_BIN)
-    bins.set(key, (bins.get(key) ?? 0) + 1)
-  }
-  const peaks = [...bins.entries()].sort((a, b) => b[1] - a[1]).slice(0, 4)
+  for (const line of candidates) bins.set(binOf(line), (bins.get(binOf(line)) ?? 0) + 1)
+  // A column's left edges can straddle a bin boundary (72 pt vs 81 pt indents), so each peak
+  // counts its neighbours too.
+  const windowCount = (bin: number) =>
+    (bins.get(bin - 1) ?? 0) + (bins.get(bin) ?? 0) + (bins.get(bin + 1) ?? 0)
+  const peaks = [...bins.keys()].sort((a, b) => windowCount(b) - windowCount(a)).slice(0, 6)
   const minSep = PDF.COLUMN_MIN_SEPARATION * pageWidth
-  let leftPeak: number | undefined
-  let rightPeak: number | undefined
-  for (let i = 0; i < peaks.length; i += 1) {
+  const minCount = PDF.COLUMN_MIN_COVERAGE * Math.max(1, candidates.length)
+  let pair: [number, number] | undefined
+  for (let i = 0; i < peaks.length && !pair; i += 1) {
     for (let j = i + 1; j < peaks.length; j += 1) {
-      const a = (peaks[i]?.[0] ?? 0) * PDF.COLUMN_BIN
-      const b = (peaks[j]?.[0] ?? 0) * PDF.COLUMN_BIN
-      if (Math.abs(a - b) < minSep) continue
-      const coverA = (peaks[i]?.[1] ?? 0) / Math.max(1, candidates.length)
-      const coverB = (peaks[j]?.[1] ?? 0) / Math.max(1, candidates.length)
-      if (coverA >= PDF.COLUMN_MIN_COVERAGE && coverB >= PDF.COLUMN_MIN_COVERAGE) {
-        leftPeak = Math.min(a, b)
-        rightPeak = Math.max(a, b)
+      const a = peaks[i]!
+      const b = peaks[j]!
+      if (Math.abs(a - b) * PDF.COLUMN_BIN < minSep) continue
+      if (windowCount(a) >= minCount && windowCount(b) >= minCount) {
+        pair = [Math.min(a, b), Math.max(a, b)]
+        break
       }
     }
   }
+  if (!pair) return undefined
+  const [leftBin, rightBin] = pair
+  const near = (bin: number) => candidates.filter((line) => Math.abs(binOf(line) - bin) <= 1)
+  // Scan from where every left-column line has started to where the first right one starts.
+  const from = Math.max(...near(leftBin).map((line) => line.bbox[0]))
+  const to = Math.min(...near(rightBin).map((line) => line.bbox[0]))
+  if (!(to - from > 2)) return undefined
+  return gutterCenter(candidates, from, to)
+}
 
-  if (leftPeak === undefined || rightPeak === undefined) {
-    return lines.map((line) => ({ ...line, column: 0 }))
+/**
+ * Whether a split found on an earlier page also fits this one: body text on both sides and
+ * hardly any body line crossing it. Pages where a figure fills one column have too little
+ * text there for detectColumnSplit, but still read column by column.
+ */
+export function columnSplitFits(lines: Lined[], split: number): boolean {
+  const candidates = bodyLines(lines)
+  let left = 0
+  let right = 0
+  let crossing = 0
+  for (const line of candidates) {
+    if (crossesSplit(line, split)) crossing += 1
+    else if ((line.bbox[0] + line.bbox[2]) / 2 < split) left += 1
+    else right += 1
   }
+  return left > 0 && right > 0 && crossing <= 0.15 * candidates.length
+}
 
-  let split = (leftPeak + rightPeak) / 2
-  let best = Infinity
-  for (let x = leftPeak; x <= rightPeak; x += PDF.COLUMN_BIN) {
-    const count = candidates.filter(
-      (line) => line.bbox[0] >= x && line.bbox[0] < x + PDF.COLUMN_BIN,
-    ).length
-    if (count < best) {
-      best = count
-      split = x
-    }
-  }
-
+export function assignColumns(lines: Lined[], split: number | undefined): Lined[] {
+  if (split === undefined) return lines.map((line) => ({ ...line, column: 0 }))
+  // Column text never crosses the gutter, so a text line that does (a centered title, a wide
+  // caption or table) spans both columns, however narrow it is. Formula-only lines (margin
+  // watermarks, figure ticks) never open a band of their own.
   return lines.map((line) => {
+    if (!line.formulaLine && crossesSplit(line, split)) return { ...line, column: -1 }
     const mid = (line.bbox[0] + line.bbox[2]) / 2
-    const wide = line.bbox[2] - line.bbox[0] > PDF.SPAN_MIN_WIDTH * pageWidth
-    if (wide && line.bbox[0] < split && line.bbox[2] > split) return { ...line, column: -1 }
     return { ...line, column: mid < split ? 0 : 1 }
   })
+}
+
+/**
+ * The split is the middle of the widest stretch between the two columns' left edges that the
+ * fewest candidate lines cross — the gutter. Justified columns share one left edge, so the
+ * first empty left-edge bin sits right after the left margin, not in the gutter.
+ */
+function gutterCenter(candidates: Lined[], from: number, to: number): number {
+  let best = Infinity
+  let bestStart = from
+  let bestEnd = to
+  let runStart = -1
+  for (let x = Math.floor(from) + 1; x < to; x += 1) {
+    const cover = candidates.filter((line) => line.bbox[0] < x && line.bbox[2] > x).length
+    if (cover < best) {
+      best = cover
+      bestStart = x
+      bestEnd = x
+      runStart = x
+    } else if (cover === best) {
+      if (runStart < 0) runStart = x
+      if (x - runStart > bestEnd - bestStart) {
+        bestStart = runStart
+        bestEnd = x
+      }
+    } else {
+      runStart = -1
+    }
+  }
+  return (bestStart + bestEnd) / 2
 }
 
 export function readingOrder(lines: Lined[]): Lined[] {

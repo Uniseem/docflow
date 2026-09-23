@@ -3,16 +3,14 @@ import {
   PDFDict,
   PDFName,
   PDFNumber,
-  PDFRawStream,
   PDFRef,
   PDFStream,
-  decodePDFRawStream,
   type PDFDocument,
   type PDFPage,
 } from '@cantoo/pdf-lib'
 import type { Matrix } from '../../../shared/pdf-types'
 import type { FormXObject } from './content-walker'
-import { contentBytesOf } from './streams'
+import { contentBytesOf, streamBytes } from './streams'
 
 const IDENTITY: Matrix = [1, 0, 0, 1, 0, 0]
 
@@ -61,18 +59,6 @@ function asMatrix(value: unknown): Matrix {
     asNumber(value.lookup(4)),
     asNumber(value.lookup(5)),
   ]
-}
-
-function streamBytes(item: unknown): Uint8Array {
-  if (item instanceof PDFRawStream) {
-    try {
-      return decodePDFRawStream(item).decode()
-    } catch {
-      return item.getContents()
-    }
-  }
-  if (item instanceof PDFStream) return item.getContents()
-  return new Uint8Array()
 }
 
 function streamRef(doc: PDFDocument, value: unknown): PDFRef | undefined {

@@ -1,6 +1,15 @@
-import { PDFArray, PDFDocument, PDFRawStream, PDFStream, decodePDFRawStream } from '@cantoo/pdf-lib'
+import {
+  PDFArray,
+  type PDFDocument,
+  PDFFlateStream,
+  PDFRawStream,
+  PDFStream,
+  decodePDFRawStream,
+} from '@cantoo/pdf-lib'
+import { loadPdfLib } from '../load-pdf-lib'
 
-function streamBytes(item: unknown): Uint8Array {
+/** Decoded bytes of a content or form stream. */
+export function streamBytes(item: unknown): Uint8Array {
   if (item instanceof PDFRawStream) {
     try {
       return decodePDFRawStream(item).decode()
@@ -8,13 +17,16 @@ function streamBytes(item: unknown): Uint8Array {
       return item.getContents()
     }
   }
+  // Streams pdf-lib builds itself, such as the q/Q wrappers normalize() adds around the page
+  // contents, are flate-encoded by getContents(); the content lexer needs the operators.
+  if (item instanceof PDFFlateStream) return item.getUnencodedContents()
   if (item instanceof PDFStream) return item.getContents()
   return new Uint8Array()
 }
 
 export async function pageContentBytes(path: string, pageIndex: number): Promise<Uint8Array> {
   const { readFile } = await import('node:fs/promises')
-  const doc = await PDFDocument.load(await readFile(path), { ignoreEncryption: true })
+  const doc = await loadPdfLib(await readFile(path))
   return contentBytesOf(doc.getPages()[pageIndex]!)
 }
 

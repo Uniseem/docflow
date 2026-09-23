@@ -4,7 +4,7 @@ import { AnalysisResult, type Glyph } from '../../shared/pdf-types'
 import { extractPageGraphics } from './analyze/glyphs'
 import { mergeLines } from './analyze/lines'
 import { attachFormulas } from './analyze/formula'
-import { assignColumns, readingOrder } from './analyze/columns'
+import { assignColumns, columnSplitFits, detectColumnSplit, readingOrder } from './analyze/columns'
 import { mergeParagraphs } from './analyze/paragraphs'
 import { scanFormRefs } from './forms'
 import { openPdfDocument } from './pdfjs'
@@ -21,6 +21,11 @@ export async function analyzePdf(path: string) {
   let lineCount = 0
   let runCount = 0
   const formStats = forms.stats
+  // Two-column split of the last page that had one; reused where a figure hides a column.
+  let lastSplit: { split: number; width: number } | undefined
+  // Characters per font size (0.5 pt buckets) over the pages so far: a page that is mostly
+  // figure must not decide what body text looks like.
+  const sizeChars = new Map<number, number>()
 
   for (let i = 0; i < doc.numPages; i += 1) {
     const page = await doc.getPage(i + 1)
@@ -41,7 +46,24 @@ export async function analyzePdf(path: string) {
     runCount += withRuns.reduce((n, line) => n + line.runs.length, 0)
     const width = inspection.pageSizes[i]?.[0] ?? 612
     const height = inspection.pageSizes[i]?.[1] ?? 792
-    const ordered = readingOrder(assignColumns(withRuns, width))
+    const detected = detectColumnSplit(withRuns, width)
+    let split = detected
+    if (
+      split === undefined &&
+      lastSplit &&
+      Math.abs(lastSplit.width - width) < 1 &&
+      columnSplitFits(withRuns, lastSplit.split)
+    ) {
+      split = lastSplit.split
+    }
+    if (detected !== undefined) lastSplit = { split: detected, width }
+    const ordered = readingOrder(assignColumns(withRuns, split))
+    for (const line of withRuns) {
+      if (line.formulaLine) continue
+      const bucket = Math.round(line.size * 2) / 2
+      const chars = line.text.replace(/\{v\d+\}/g, '').length
+      sizeChars.set(bucket, (sizeChars.get(bucket) ?? 0) + chars)
+    }
     const pageParas = mergeParagraphs(
       ordered,
       height,
@@ -49,6 +71,7 @@ export async function analyzePdf(path: string) {
       inspection.rotations[i] ?? 0,
       graphics.imageRects,
       shared,
+      modeOf(sizeChars),
     )
     paragraphs.push(...pageParas)
     for (const stat of formStats.filter((row) => row.page === i)) {
@@ -73,6 +96,18 @@ export async function analyzePdf(path: string) {
       runs: runCount,
     },
   })
+}
+
+function modeOf(counts: Map<number, number>): number | undefined {
+  let best: number | undefined
+  let bestCount = 0
+  for (const [value, count] of counts) {
+    if (count > bestCount) {
+      best = value
+      bestCount = count
+    }
+  }
+  return best
 }
 
 export function analyzeTimeoutMs(pages: number): number {

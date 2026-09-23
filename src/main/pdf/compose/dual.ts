@@ -1,5 +1,6 @@
 import { PDFDocument } from '@cantoo/pdf-lib'
 import { PDF } from '../../../shared/pdf-constants'
+import { loadPdfLib } from '../load-pdf-lib'
 
 export async function buildDualPdf(
   sourceBytes: Uint8Array,
@@ -7,8 +8,8 @@ export async function buildDualPdf(
   title?: string,
 ): Promise<Uint8Array> {
   const dual = await PDFDocument.create()
-  const orig = await PDFDocument.load(sourceBytes, { ignoreEncryption: true })
-  const mono = await PDFDocument.load(monoBytes, { ignoreEncryption: true })
+  const orig = await loadPdfLib(sourceBytes)
+  const mono = await loadPdfLib(monoBytes)
   const pages = orig.getPageCount()
   const batch = pages > PDF.MAX_PAGES_SINGLE_PASS ? 50 : pages
   for (let start = 0; start < pages; start += batch) {

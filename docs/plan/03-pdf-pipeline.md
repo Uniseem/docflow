@@ -247,18 +247,20 @@ x += w0 × size + spacing                             // 文字空间累加，�
 `src/main/pdf/analyze/columns.ts`。
 
 1. 页面正文字号 `bodySize` = 所有行按字符数加权的 `size` 中位数。候选行 = `size ∈ [0.75, 1.25] × bodySize` 且非 `formulaLine`。
-2. 候选行左边界 `x0` 的直方图（bin `COLUMN_BIN (10)` pt）。存在两个峰、峰距 ≥ `COLUMN_MIN_SEPARATION (0.35)` × 页宽、各覆盖 ≥ `COLUMN_MIN_COVERAGE (30%)` 候选行 → 两栏，分界 = 两峰之间覆盖最少的 x；否则单栏。
-3. 行归栏：行中心在分界左 → 0；右 → 1；跨越分界且宽 > `SPAN_MIN_WIDTH (0.6)` × 页宽 → `span`（通栏），把页面按 y 切成若干段，每段内先左栏后右栏。
+2. 候选行左边界 `x0` 的直方图（bin `COLUMN_BIN (10)` pt，每个峰连同左右相邻 bin 一起计数，因为同一栏的左边界常跨 bin，如 72 pt 与首行缩进 81 pt）。存在两个峰、峰距 ≥ `COLUMN_MIN_SEPARATION (0.35)` × 页宽、各覆盖 ≥ `COLUMN_MIN_COVERAGE (30%)` 候选行 → 两栏；分界 = 从「左峰所有行都已开始」（左峰行 `x0` 的最大值）到「右峰第一行开始」（右峰行 `x0` 的最小值）之间，被候选行横跨最少的最宽区间的中点，即栏间空白。否则本页没检测到两栏：若前面某页检测到过分界（页宽相同），且本页候选行在它两侧都有、横跨它的 ≤ 15%，沿用它（一栏被整幅图占满的页面），否则单栏。
+3. 行归栏：行中心在分界左 → 0；右 → 1；非公式行横跨分界（两端都越过分界 `COLUMN_BIN / 2`）→ `span`（通栏，居中的标题、宽图注与表格都算，不论宽度），把页面按 y 切成若干段，每段内先左栏后右栏。公式行（页边竖排水印、图内刻度）不单独切段。
 4. 阅读顺序：段 → 栏 → y 降序。
 
 ## 3.7 段落合并
 
-`src/main/pdf/analyze/paragraphs.ts`。在同一栏序列内，`formulaLine` 单独成段（`translatable=false, skipReason='display_math'`）；紧随其后只含 `(3)`、`[12]` 之类编号的短行并入它。其余相邻行 `prev`、`cur` 同段需全部满足：
+`src/main/pdf/analyze/paragraphs.ts`。在同一栏序列内，`formulaLine` 单独成段（`translatable=false, skipReason='display_math'`）；紧随其后只含 `(3)`、`[12]` 之类编号的短行并入它。其余行 `cur` 找它所续的段：从最近的草稿往前看最多 6 个，跳过末行与 `cur` 在 x 上不重叠（重叠 < `PARA_X_OVERLAP` 较窄者宽度）的草稿——单栏页按基线排序时，环绕在图旁的正文会与图内文字交替出现——第一个重叠的草稿的末行作为 `prev` 决定是否同段。`prev`、`cur` 同段需全部满足：
 
 - `prev.baseline − cur.baseline ≤ PARA_GAP_FACTOR (1.75) × lineHeightEstimate`（段内已有行的基线间距中位数；单行时 `1.3 × size`）；
 - `|cur.size − para.size| ≤ PARA_FONT_TOLERANCE (0.15) × para.size`；
 - `cur.bbox` 与段 bbox 的 x 区间重叠 ≥ `PARA_X_OVERLAP (50%)` 较窄者宽度；
 - 不触发「开新段」信号：首行缩进（`cur.x0 − para.x0 > PARA_INDENT (1.0) × size` 且 `prev` 右端比栏右边界短 > 2·size）；`prev` 以 `.。?!:` 结尾且右端短 > 3·size 且 `cur` 以大写/编号/项目符号开头；`cur` 匹配标题模式 `^(\d+(\.\d+)*\.?\s+\S|[IVX]+\.\s+\S|Abstract|References|Acknowledg|Appendix)` 且（`cur.size ≥ 1.05 × bodySize` 或 `cur` 加粗而段落不加粗）；`cur.rotated`。
+
+段落层的 `bodySize` 用全文档到本页为止所有非公式行按字符数计的字号众数（0.5 pt 一档），不用单页的值：图多的页面小字可能比正文还多。
 
 段落属性：`size` = 行字号中位数；`lineHeight` = 基线间距中位数（单行 = `1.2 × size`）；`bold` = 加粗字形占比 > 60%；`color` = 首行首个主文字字形的颜色；`align`：左右边界方差都 < 1 pt 且 ≥ 2 行 → `justify`；仅左齐 → `left`；行中心与栏中心差 < 2 pt 且左右都不齐 → `center`；否则 `left`。`role`：`headerFooter`（bbox 完全在页面顶部或底部 `HEADER_FOOTER_BAND (6%)` 内且单行且 < 120 字）；`heading`（≤ 2 行且 `size ≥ HEADING_FONT_RATIO (1.15) × bodySize`，或加粗且匹配标题模式）；`caption`（`^(Figure|Fig\.|Table|Algorithm|Listing)\s*\d+`）；`listItem`（`^([•\-–▪◦]|\(\w{1,3}\)|\w{1,3}[.)])\s` 且首行缩进）；`footnote`（`size ≤ FOOTNOTE_FONT_RATIO (0.85) × bodySize` 且位于页面下 30% 且 `^\d{1,2}\s|^[*†‡]`）；其他 `body`；`bodySize` 无法确定 → `other`。
 
@@ -297,6 +299,7 @@ x += w0 × size + spacing                             // 文字空间累加，�
 | 去掉 `{vN}` 与空白后 ≥ `MIN_PARAGRAPH_CHARS (2)` 字且含 ≥ 2 个拉丁字母                                                                                 | `no_letters`                                     |
 | 不匹配纯 URL / DOI / 邮箱 / 纯数字符号                                                                                                                 | `non_text`                                       |
 | 与任何 `imageRect` 的重叠面积 ≤ `IMAGE_OVERLAP_SKIP (30%)` 段落面积                                                                                    | `inside_image`                                   |
+| 不是标题、图注、脚注时，`size ≥ FIGURE_TEXT_RATIO (0.75) × bodySize`（没有版面模型，明显小于正文的文字视为图表内部）                                   | `small_text`（矢量图内的示例框、流程图文字）     |
 | 短段落（< `SHORT_PARAGRAPH_CHARS (40)` 字）须满足 `role ∈ {heading, caption, listItem}`，或宽 ≥ 0.5 × 栏宽，或上下 2 × lineHeight 内有可翻译的 body 段 | `short_isolated`（图表轴标签、图例、表格单元格） |
 | 无 `rotated` 行                                                                                                                                        | `rotated`                                        |
 | 所在页 `rotate === 0`                                                                                                                                  | `rotated_page`                                   |
@@ -459,13 +462,13 @@ export const PDF = {
   COLUMN_BIN: 10,
   COLUMN_MIN_SEPARATION: 0.35,
   COLUMN_MIN_COVERAGE: 0.3,
-  SPAN_MIN_WIDTH: 0.6,
   PARA_GAP_FACTOR: 1.75,
   PARA_FONT_TOLERANCE: 0.15,
   PARA_X_OVERLAP: 0.5,
   PARA_INDENT: 1.0,
   HEADING_FONT_RATIO: 1.15,
   FOOTNOTE_FONT_RATIO: 0.85,
+  FIGURE_TEXT_RATIO: 0.75,
   HEADER_FOOTER_BAND: 0.06,
   FORMULA_FONT_RE:
     /^(CM[^R]|MS.M|XY|MT|BL|RM|EU|LA|RS|LINE|LCIRCLE|TeX-|rsfs|txsy|wasy|stmary|.*Mono|.*Code|.*Ital|.*Sym|.*Math)/,

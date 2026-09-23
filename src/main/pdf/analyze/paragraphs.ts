@@ -1,5 +1,6 @@
 import { PDF } from '../../../shared/pdf-constants'
 import type { FormulaRun, Paragraph, Rect } from '../../../shared/pdf-types'
+import { bodySizeOf } from './columns'
 import type { Lined } from './formula'
 import { joinLineTexts, normalizeParagraphText } from './normalize'
 
@@ -88,6 +89,37 @@ function shouldStartNew(
   return false
 }
 
+const DRAFT_LOOKBACK = 6
+
+function xOverlaps(a: Rect, b: Rect): boolean {
+  const overlap = Math.min(a[2], b[2]) - Math.max(a[0], b[0])
+  const narrower = Math.min(a[2] - a[0], b[2] - b[0])
+  return narrower <= 0 ? overlap >= 0 : overlap >= PDF.PARA_X_OVERLAP * narrower
+}
+
+/**
+ * The paragraph `line` continues, if any. Reading order sorts a single-column page by
+ * baseline, so text wrapped around a figure alternates with the figure's own lines; drafts
+ * whose last line sits beside `line` are skipped, and the nearest one above it decides.
+ */
+function openDraftFor(
+  drafts: Draft[],
+  line: Lined,
+  startsNew: (draft: Draft, prev: Lined) => boolean,
+): Draft | undefined {
+  for (let k = drafts.length - 1; k >= Math.max(0, drafts.length - DRAFT_LOOKBACK); k -= 1) {
+    const draft = drafts[k]!
+    const prev = draft.lines.at(-1)
+    if (!prev) return undefined
+    if (!xOverlaps(prev.bbox, line.bbox)) continue
+    if (draft.formulaLine || prev.column !== line.column || startsNew(draft, prev)) {
+      return undefined
+    }
+    return draft
+  }
+  return undefined
+}
+
 function roleOf(
   lines: Lined[],
   text: string,
@@ -137,13 +169,35 @@ function alignOf(lines: Lined[], colLeft: number, colRight: number): Paragraph['
   return 'left'
 }
 
+const SENTENCE_END_RE = /[.!?。！？:;]["'”’)\]]?$/
+
+/**
+ * A short, narrow fragment that is not a heading, caption, list item or a sentence of its own
+ * (≥ 3 words ending in sentence punctuation): figure labels, legends and table cells look
+ * like this. It is translated only when body text sits next to it (see `besideBody`).
+ */
+function shortFragment(p: Paragraph, colWidth: number): boolean {
+  if (p.text.length >= PDF.SHORT_PARAGRAPH_CHARS) return false
+  if (p.role === 'heading' || p.role === 'caption' || p.role === 'listItem') return false
+  if (p.bbox[2] - p.bbox[0] >= 0.5 * colWidth) return false
+  const words = p.text.replace(/\{v\d+\}/g, ' ').match(/[A-Za-z]{2,}/g) ?? []
+  return !(words.length >= 3 && SENTENCE_END_RE.test(p.text.trim()))
+}
+
+/** Body text within 2 lines above or below (overlapping in x), or on the same line close by. */
+function besideBody(p: Paragraph, other: Paragraph): boolean {
+  const verticalGap = Math.max(p.bbox[1] - other.bbox[3], other.bbox[1] - p.bbox[3], 0)
+  const horizontalGap = Math.max(p.bbox[0] - other.bbox[2], other.bbox[0] - p.bbox[2], 0)
+  if (verticalGap === 0) return horizontalGap < 3 * Math.max(p.size, other.size)
+  return horizontalGap === 0 && verticalGap < 2 * Math.max(p.lineHeight, other.lineHeight)
+}
+
 function skipReason(
   p: Omit<Paragraph, 'translatable' | 'skipReason'>,
   imageRects: Rect[],
   pageRotate: number,
   shared: boolean,
-  colWidth: number,
-  nearbyBody: boolean,
+  bodySize: number,
 ): string | undefined {
   if (p.lines.length && p.role === 'headerFooter') return 'header_footer'
   const plain = lettersOf(p.text)
@@ -154,10 +208,10 @@ function skipReason(
   const area = Math.max(1, (p.bbox[2] - p.bbox[0]) * (p.bbox[3] - p.bbox[1]))
   if (imageRects.some((r) => overlapArea(p.bbox, r) / area > PDF.IMAGE_OVERLAP_SKIP))
     return 'inside_image'
-  if (p.text.length < PDF.SHORT_PARAGRAPH_CHARS) {
-    const allowed = p.role === 'heading' || p.role === 'caption' || p.role === 'listItem'
-    if (!allowed && p.bbox[2] - p.bbox[0] < 0.5 * colWidth && !nearbyBody) return 'short_isolated'
-  }
+  // Without a layout model, text well below the body size that is not a heading, caption or
+  // footnote is taken for the inside of a figure or table.
+  const labelled = p.role === 'heading' || p.role === 'caption' || p.role === 'footnote'
+  if (!labelled && p.size < PDF.FIGURE_TEXT_RATIO * bodySize) return 'small_text'
   if (pageRotate !== 0) return 'rotated_page'
   if (shared) return 'shared_form'
   if ((p.formPath.match(/\//g) ?? []).length + (p.formPath ? 1 : 0) > PDF.MAX_FORM_DEPTH)
@@ -173,9 +227,11 @@ export function mergeParagraphs(
   pageRotate: number,
   imageRects: Rect[],
   sharedPaths: ReadonlySet<string>,
+  documentBodySize?: number,
 ): Paragraph[] {
   if (lines.length === 0) return []
-  const bodySize = median(lines.filter((l) => !l.formulaLine).map((l) => l.size)) || lines[0]!.size
+  const bodySize =
+    documentBodySize || bodySizeOf(lines.filter((l) => !l.formulaLine)) || lines[0]!.size
   const drafts: Draft[] = []
   for (const line of lines) {
     if (line.formulaLine) {
@@ -186,23 +242,32 @@ export function mergeParagraphs(
       drafts[drafts.length - 1]!.lines.push(line)
       continue
     }
-    const prevDraft = drafts.at(-1)
-    const prev = prevDraft?.lines.at(-1)
     const colRight = pageWidth - 72
-    if (
-      !prevDraft ||
-      prevDraft.formulaLine ||
-      !prev ||
-      prev.column !== line.column ||
-      shouldStartNew(prev, line, prevDraft, bodySize, colRight)
-    ) {
-      drafts.push({ lines: [line], formulaLine: false })
-    } else {
-      prevDraft.lines.push(line)
-    }
+    const open = openDraftFor(drafts, line, (draft, prev) =>
+      shouldStartNew(prev, line, draft, bodySize, colRight),
+    )
+    if (open) open.lines.push(line)
+    else drafts.push({ lines: [line], formulaLine: false })
+  }
+
+  // Text extent of each column from body-size lines, for "is this fragment narrow" checks.
+  const columnWidth = new Map<number, number>()
+  for (const column of new Set(lines.map((l) => l.column))) {
+    const body = lines.filter(
+      (l) =>
+        l.column === column &&
+        !l.formulaLine &&
+        l.size >= 0.75 * bodySize &&
+        l.size <= 1.25 * bodySize,
+    )
+    if (body.length === 0) continue
+    const left = Math.min(...body.map((l) => l.bbox[0]))
+    const right = Math.max(...body.map((l) => l.bbox[2]))
+    columnWidth.set(column, right - left)
   }
 
   const paragraphs: Paragraph[] = []
+  const fragments = new Set<Paragraph>()
   drafts.forEach((draft, index) => {
     const page = draft.lines[0]!.page
     let text = ''
@@ -245,20 +310,9 @@ export function mergeParagraphs(
     let reason: string | undefined
     if (draft.formulaLine) reason = 'display_math'
     else {
-      const nearby = paragraphs.some(
-        (other) =>
-          other.role === 'body' &&
-          other.translatable &&
-          Math.abs(other.bbox[1] - para.bbox[3]) < 2 * lineHeight,
-      )
-      reason = skipReason(
-        para,
-        imageRects,
-        pageRotate,
-        sharedPaths.has(formPath),
-        Math.max(1, colRight - colLeft),
-        nearby,
-      )
+      reason = skipReason(para, imageRects, pageRotate, sharedPaths.has(formPath), bodySize)
+      const colWidth = Math.max(1, columnWidth.get(draft.lines[0]!.column) ?? colRight - colLeft)
+      if (reason === undefined && shortFragment(para, colWidth)) fragments.add(para)
       if (para.lines.some((_, i) => draft.lines[i]?.rotated)) reason = reason ?? 'rotated'
       const invisible =
         glyphs.length > 0 && glyphs.every((g) => g.renderMode !== 0 && g.renderMode !== 2)
@@ -268,5 +322,14 @@ export function mergeParagraphs(
     if (reason) para.skipReason = reason
     paragraphs.push(para)
   })
+
+  // Second pass, once every paragraph is known: fragments with body text beside them (above,
+  // below or on the same line) are part of the text; the rest are figure or table labels.
+  const anchors = paragraphs.filter((p) => p.translatable && p.role === 'body' && !fragments.has(p))
+  for (const para of fragments) {
+    if (anchors.some((other) => besideBody(para, other))) continue
+    para.translatable = false
+    para.skipReason = 'short_isolated'
+  }
   return paragraphs
 }

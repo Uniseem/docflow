@@ -50,6 +50,55 @@ describe('analyzePdf', () => {
     const prose = result.paragraphs.find((p) => p.text.includes('entire sentence'))
     expect(prose?.translatable).toBe(true)
   })
+
+  test.each([
+    'single-column.pdf',
+    'two-column.pdf',
+    'inline-formula.pdf',
+    'display-math.pdf',
+    'italic-sentence.pdf',
+    'figure-caption.pdf',
+    'hyphenation.pdf',
+    'tj-arrays.pdf',
+    'colored-text.pdf',
+    'cid-font.pdf',
+    'form-wrapped.pdf',
+  ])('%s has translatable text on every page with body text', async (name) => {
+    const result = await analyzePdf(join(fixtures, name))
+    expect(result.stats.translatable).toBeGreaterThan(0)
+  })
+})
+
+describe('analyzePdf on real papers', () => {
+  test('a two-column paper reads column by column and keeps paragraphs whole', async () => {
+    const result = await analyzePdf(join(fixtures, 'arxiv-2302.13971.pdf'))
+    const first = result.paragraphs.filter((p) => p.page === 0 && p.translatable)
+    const abstract = first.find((p) => p.text.startsWith('We introduce LLaMA'))
+    expect(abstract?.lines.length).toBeGreaterThanOrEqual(10)
+    // Left column (ends with "In this context…") before the right one ("The focus of…").
+    const left = first.findIndex((p) => p.text.startsWith('In this context'))
+    const right = first.findIndex((p) => p.text.startsWith('The focus of this work'))
+    expect(left).toBeGreaterThanOrEqual(0)
+    expect(right).toBeGreaterThan(left)
+    expect(first.length).toBeLessThan(25)
+  })
+
+  test('text wrapped beside a figure stays one paragraph', async () => {
+    const result = await analyzePdf(join(fixtures, 'arxiv-2201.11903.pdf'))
+    const wrapped = result.paragraphs.find(
+      (p) => p.page === 5 && p.text.startsWith('Variable compute only.'),
+    )
+    expect(wrapped?.translatable).toBe(true)
+    expect(wrapped?.lines.length).toBeGreaterThanOrEqual(8)
+  })
+
+  test('small text inside a vector figure is not translated', async () => {
+    const result = await analyzePdf(join(fixtures, 'arxiv-2201.11903.pdf'))
+    const example = result.paragraphs.find(
+      (p) => p.page === 3 && p.text.includes('There are 9 one-digit numbers'),
+    )
+    expect(example?.translatable).toBe(false)
+  })
 })
 
 describe('scanFormRefs', () => {
