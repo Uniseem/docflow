@@ -30,9 +30,13 @@ export type WorkerResponse =
 
 export type PdfWorkerKind = 'analyze' | 'compose'
 
+/** A worker with nothing to do exits after this long, giving its heap back to the OS. */
+export const WORKER_IDLE_MS = 15_000
+
 export class PdfWorkerHost {
   private nextId = 1
   private worker: Worker | undefined
+  private idleTimer: NodeJS.Timeout | undefined
   private readonly pending = new Map<
     number,
     { resolve: (value: unknown) => void; reject: (error: unknown) => void; timer: NodeJS.Timeout }
@@ -41,9 +45,11 @@ export class PdfWorkerHost {
   constructor(
     private readonly workerPath: string,
     private readonly kind: PdfWorkerKind,
+    private readonly idleMs = WORKER_IDLE_MS,
   ) {}
 
   async request<T>(message: WorkerJob, timeoutMs: number, signal?: AbortSignal): Promise<T> {
+    this.cancelIdle()
     const worker = this.ensureWorker()
     const id = this.nextId++
     const payload: WorkerRequest = { ...message, id }
@@ -69,11 +75,13 @@ export class PdfWorkerHost {
         resolve: (value) => {
           signal?.removeEventListener('abort', onAbort)
           clearTimeout(timer)
+          this.scheduleIdle()
           resolve(value as T)
         },
         reject: (error: unknown) => {
           signal?.removeEventListener('abort', onAbort)
           clearTimeout(timer)
+          this.scheduleIdle()
           reject(error instanceof Error ? error : new Error(String(error)))
         },
         timer,
@@ -82,7 +90,13 @@ export class PdfWorkerHost {
     })
   }
 
+  /** Whether a worker thread is alive (tests). */
+  get running(): boolean {
+    return this.worker !== undefined
+  }
+
   kill(): void {
+    this.cancelIdle()
     const worker = this.worker
     this.worker = undefined
     for (const [id, pending] of this.pending) {
@@ -91,6 +105,23 @@ export class PdfWorkerHost {
       this.pending.delete(id)
     }
     void worker?.terminate()
+  }
+
+  // pdf.js caches and the parsed CJK font stay in a worker's heap; between documents the
+  // worker exits instead of holding hundreds of MB. Back-to-back stages reuse it.
+  private scheduleIdle(): void {
+    if (this.pending.size > 0 || !this.worker) return
+    this.cancelIdle()
+    this.idleTimer = setTimeout(() => {
+      this.idleTimer = undefined
+      if (this.pending.size === 0) this.kill()
+    }, this.idleMs)
+    this.idleTimer.unref()
+  }
+
+  private cancelIdle(): void {
+    if (this.idleTimer) clearTimeout(this.idleTimer)
+    this.idleTimer = undefined
   }
 
   private ensureWorker(): Worker {
