@@ -1,6 +1,6 @@
 # ADR-0008：写回采用内容流改写（PDFMathTranslate 方式），公式用原字体重绘
 
-- 状态：已采纳（取代 ADR-0006）
+- 状态：已采纳（取代 ADR-0006；删除集合的判定由 ADR-0015 修订）
 - 日期：2026-09-21
 - 相关：docs/plan/03-pdf-pipeline.md §3.12、docs/reference/pdfmathtranslate-notes.md
 

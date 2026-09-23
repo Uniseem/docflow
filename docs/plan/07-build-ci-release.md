@@ -6,7 +6,7 @@
 appId: com.uniseem.docflow
 productName: DocFlow
 copyright: Copyright © 2026 DocFlow contributors
-artifactName: ${productName}-${version}-${os}-${arch}.${ext} # DocFlow-4.0.0-win-x64-setup.exe 由 nsis.artifactName 覆盖
+artifactName: ${productName}-${version}-${os}-${arch}.${ext} # mac/win 各自的 artifactName 覆盖它
 directories:
   output: release
   buildResources: build
@@ -14,7 +14,7 @@ files:
   - out/**
   - package.json
   - '!**/*.map'
-  - '!**/node_modules/@napi-rs/**' # pdf.js 的可选原生依赖；DOMMatrix 由 src/main/pdf/dom-matrix.ts 补齐
+  - '!**/node_modules/@napi-rs/**' # pdf.js 的可选原生依赖；DOMMatrix 由 src/main/pdf/dom-matrix.ts 补齐（ADR-0010）
 extraResources:
   - from: resources/fonts
     to: fonts
@@ -78,7 +78,7 @@ nsis:
 publish: null
 ```
 
-主进程读取资源路径：`app.isPackaged ? join(process.resourcesPath, 'fonts') : join(app.getAppPath(), 'resources/fonts')`；pdf.js 的 `standardFontDataUrl`/`cMapUrl` 同理（开发时指向 `node_modules/pdfjs-dist/...`），注意 pdf.js 需要以 `/` 结尾的 URL 或路径字符串。
+主进程读取资源路径：字体应为 `app.isPackaged ? join(process.resourcesPath, 'fonts') : join(app.getAppPath(), 'resources/fonts')`（`src/main/pipeline/run.ts` 的 `bundledFonts()`；当前代码按 `process.resourcesPath` 是否存在判断，未打包的 Electron 也有这个值，`npm run dev` 下会指到 Electron 自带的资源目录而找不到字体，待修）。pdf.js 的 `standardFontDataUrl`/`cMapUrl` 在开发与打包后都用 `require.resolve('pdfjs-dist/package.json')` 定位 `node_modules/pdfjs-dist/{standard_fonts,cmaps}`（打包后在 `app.asar` 里，`src/main/pdf/pdfjs.ts`），并转成以 `/` 结尾的 `file:` URL（pdf.js 要求）。因此 extraResources 里的 `pdfjs/` 两个目录目前没有被读取，与 asar 里的是重复的（worklog 2026-09-23-m5-fixes）。
 
 E2E 启动的是 `electron-builder --dir` 产物，改渲染进程或主进程后必须重新 `npm run dist:dir`，否则测的是旧代码。
 
@@ -88,21 +88,22 @@ E2E 启动的是 `electron-builder --dir` 产物，改渲染进程或主进程�
 
 ## 7.3 第三方许可
 
-`scripts/third-party-notices.mjs`（在 `npm run build` 前由 `prebuild` 钩子执行）：读取 `package-lock.json` 里 `dependencies` 的生产依赖树，汇总每个包的 `license` 与 `LICENSE` 文件内容到 `THIRD_PARTY_NOTICES.md`；开头固定一段：Electron（MIT）、Chromium（BSD）、Node.js（MIT）、pdf.js（Apache-2.0）、pdf-lib/@cantoo（MIT）、fontkit（MIT）、Noto Sans SC（OFL-1.1）。渲染进程的 devDependencies（React、HeroUI、Tailwind、zustand、lucide）也要列入（它们被打进 bundle）——脚本按 `src/renderer` 的 import 图无法精确得到，简单做法：列一个手工维护的 `scripts/bundled-deps.json` 数组。
+`scripts/third-party-notices.mjs`（在 `npm run build` 前由 `prebuild` 钩子执行）：读取 `package.json` 的 `dependencies` 与 `package-lock.json` 里所有非 dev 的顶层包，汇总每个包的 `license` 与 `LICENSE` 文件内容到 `THIRD_PARTY_NOTICES.md`（生成物，已 gitignore）；开头固定一段：Electron（MIT）、Chromium（BSD）、Node.js（MIT）、pdf.js（Apache-2.0）、pdf-lib/@cantoo（MIT）、fontkit（MIT）、Noto Sans SC（OFL-1.1）。渲染进程的 devDependencies 也要列入（它们被打进 bundle）——脚本按 `src/renderer` 的 import 图无法精确得到，所以读手工维护的 `scripts/bundled-deps.json` 数组（现为 react、react-dom、@heroui/react、@heroui/styles、tailwindcss、zustand、lucide-react、clsx）；渲染进程新增依赖时要同步加进去。
 
 ## 7.4 CI（`.github/workflows/ci.yml`，已在仓库中）
 
-- 触发：push `main`、PR、手动。`hashFiles('package.json') != ''` 守卫让空仓库阶段自动跳过。
-- `check`（ubuntu）：`npm ci` → `npm run check`。目标 ≤ 4 分钟。
-- `package`（windows-latest、macos-15）：`npm ci` → `npm run build` → `electron-builder --dir` → `npm run test:e2e`（E2E 用 `--dir` 产物，`DOCFLOW_DATA_DIR` 指向临时目录，mock 服务在 Playwright `globalSetup` 里启动）。缓存 Electron 下载。目标 ≤ 10 分钟。
-- 不上传安装包。
+- 触发：push `main`、PR、手动；同一 ref 的新运行会取消旧运行；`permissions: contents: read`。（原规划的 job 级 `hashFiles('package.json')` 守卫在 Actions 里不合法，M0 已删除，见 worklog 2026-09-22-m0-skeleton。）
+- 两个 job 都用 `actions/setup-node`（版本取 `.nvmrc`，缓存 npm）。
+- `check`（ubuntu-latest，超时 15 分钟）：`npm ci` → `npm run check`。目标 ≤ 4 分钟。
+- `package`（`needs: check`；windows-latest、macos-15；超时 30 分钟）：`npm ci` → `npm run build` → `npx electron-builder --dir --publish never` → `npm run test:e2e`（E2E 用 `--dir` 产物，`DOCFLOW_DATA_DIR` 由 `tests/e2e/helpers.ts` 指向临时目录，mock 服务在 Playwright `globalSetup` 里启动）。缓存 Electron 与 electron-builder 的下载（key 为 `package-lock.json` 的哈希）。目标 ≤ 10 分钟。
+- 不上传安装包，也不上传 Playwright 报告。
 
 ## 7.5 发布（`.github/workflows/release.yml`，已在仓库中）
 
 1. 本地：更新 `CHANGELOG.md`（Unreleased → 版本），`npm version 4.0.0 --no-git-tag-version`，提交 `chore: 发布 4.0.0`，`git tag v4.0.0`，`git push origin main v4.0.0`。
-2. 工作流：两台 runner 并行打包（Windows x64；macOS 在一台 arm64 runner 上打 arm64 + x64），校验标签 == 版本，跑 `check`，上传工件；`publish` job 合并工件、生成 `SHA256SUMS.txt`、用 `.github/release-notes.md`（`__VERSION__` 替换）建 Release。
+2. 工作流：`build` job 两台 runner 并行打包（Windows x64：windows-latest，`--win --x64`；macOS：一台 macos-15（arm64）runner 上 `--mac --arm64 --x64`）。每台依次 `npm ci` → 校验标签 == `package.json` 版本 → `npm run check` → `npm run build` → `npx electron-builder <参数> --publish never`，把 `release/DocFlow-*.{exe,dmg,pkg,zip}` 上传为工件 `installers-<OS>`（保留 7 天，缺文件即失败）；`publish` job（ubuntu-latest）合并工件、`sha256sum` 生成 `SHA256SUMS.txt`、用 `.github/release-notes.md`（`__VERSION__` 替换）`gh release create --verify-tag` 建 Release。工作流也能手动触发（`workflow_dispatch`），但标签校验与 `--verify-tag` 要求所选 ref 是 `v*` 标签。
 3. 产物名：`DocFlow-4.0.0-win-x64-setup.exe`、`DocFlow-4.0.0-macos-arm64.pkg/.dmg/.zip`、`DocFlow-4.0.0-macos-x64.pkg/.dmg/.zip`、`SHA256SUMS.txt`。
-4. 先用 `v4.0.0-beta.1` 演练一次（prerelease：在 publish 步骤给 `gh release create` 加 `--prerelease`，当标签含 `-` 时）。
+4. 先用 `v4.0.0-beta.1` 演练一次：版本号含 `-` 时 publish 步骤自动给 `gh release create` 加 `--prerelease`。
 
 ## 7.6 签名（预留，不在 4.0.0 范围）
 
@@ -111,6 +112,7 @@ electron-builder 读取环境变量自动签名：macOS `CSC_LINK`（p12 base64�
 ## 7.7 本地打包检查清单
 
 - `npm run dist:dir` 后启动 `release/mac-arm64/DocFlow.app` 或 `release/win-unpacked/DocFlow.exe`，确认：字体路径正确（写回成功）、pdf.js 的 cmaps 路径正确（含 CJK 字体的 PDF 能解析）、`docflow://` 预览正常、日志在文档库 `logs/`。
-- 安装包体积 ≤ 130 MB；`npx electron-builder --dir` 的 `app.asar` 里没有 `tests/`、`docs/`、`.map`。
+- 安装包体积 ≤ 130 MB；`npx electron-builder --dir` 的 `app.asar` 里没有 `tests/`、`docs/`、`.map`，`app.asar.unpacked` 里没有 `.node`（ADR-0010）。
+  - 2026-09-23 实测（macOS arm64，`npm run dist`）：dmg 155.6 MB、pkg 155.8 MB、zip 155.8 MB，超出目标；是调整目标还是只带一个字重，待维护者决定（worklog 2026-09-23-m5-fixes）。
 - Windows：安装到含中文的路径也能启动；卸载不删文档库。
 - macOS：`sudo installer -pkg … -target /` 后应用能直接打开；`.dmg` 拖入后首次打开需要在隐私设置放行（写在 README）。

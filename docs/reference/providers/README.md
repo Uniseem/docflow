@@ -20,7 +20,7 @@
 
 ## 进度
 
-查证日都是 2026-09-23。下面是给预设用的结论摘要，依据和「未查到」的项在各厂商文件里。`src/shared/presets.ts` 和请求代码还没按这些建议改。
+查证日都是 2026-09-23。下面是给预设用的结论摘要，依据和「未查到」的项在各厂商文件里。净改动 1–3 已在 2026-09-23 落到 `src/shared/presets.ts`，见下方「状态」。
 
 ### 已完成（第一轮 + 第二轮，共 19 家）
 
@@ -56,4 +56,8 @@
 
 ### 状态
 
-`src/shared/presets.ts` 和请求代码还没按这些建议改。
+2026-09-23 已落实（见 [ADR-0011](../../adr/0011-provider-presets-follow-research.md) 与 worklog [2026-09-23-presets](../../worklog/2026-09-23-presets.md)）：
+
+- 1–3：`presets.ts` 移除 `lingyi`、新增 `minimax`（按量），DeepSeek Base URL 去掉 `/v1`。MiniMax Token Plan 预设暂不加。
+- 4：请求代码本来就不传 `temperature`，维持不变；需要固定温度的（DeepSeek 1.3、MiMo 1.0）由用户在附加请求参数里配置。
+- 表中的「新账号并发」「思考开关」没有写进预设，预设结构仍是 `{id,name,type,baseUrl,keyUrl,group}`，并发靠默认值 + 429 自适应。
