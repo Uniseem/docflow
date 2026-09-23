@@ -37,12 +37,12 @@
 
 ## 8.3 mock 大模型服务（`tests/mock-provider/server.ts`）
 
-移植自 3.x `engine/tests/mock_providers.py`。`tsx tests/mock-provider/server.ts --port 38111`，提供：
+移植自 3.x `engine/tests/mock_providers.py`。`tsx tests/mock-provider/server.ts --port 38111 [--delay <ms>] [--open]`，提供：
 
 - `POST /v1/chat/completions`（OpenAI）、`GET /v1/models`；`POST /anthropic/v1/messages`、`GET /anthropic/v1/models`；`POST /gemini/v1beta/models/:model:generateContent`、`GET /gemini/v1beta/models`。
 - 默认行为：把每个 `<segment>` 原样返回，正文 = 原文 + `〔测试译文〕`，占位符原样保留；单段请求返回 `原文〔测试译文〕`。
 - 故障注入（按请求正文里的触发词或计数）：
-  - 每第 9 个请求返回 429（带 `Retry-After: 1`）；
+  - 每第 9 个请求返回 429（带 `Retry-After: 1`；间隔可用 `rateLimitEvery` 调整，0 表示关闭）；
   - 正文 > 3000 字符 → `finish_reason: length` 截断输出；
   - 含 `DROP_ME` 的段落在回复里缺失；
   - 含 `DAMAGE_MARKERS` → 把标记改写成 `` `DOCFLOW KEEP 0 0 0 0 0 1 TOKEN` ``；
@@ -52,8 +52,10 @@
   - 模型 `mock-reasoner` → 回复外包一层 `<think>…</think>`；
   - Key 等于 `bad-key` → 401；Key 等于 `poor-key` → 429 + `insufficient balance`；
   - 模型 `missing-model` → 404。
+- 延迟：每个对话请求先等 `delayMs` 再回复（默认 0）。客户端在等待期间断开（取消、退出应用）时不再回写，服务不受影响。
+- `GET /config` / `POST /config`（JSON `{ delayMs?, rateLimitEvery? }`，非负整数，未知字段返回 400）读取或修改上面两个运行时参数；启动值来自 `--delay` 或 `listenMockProvider(port, { config })`。
 - `GET /stats` 返回每种接口的峰值并发与请求计数（测试并发池）。
-- `POST /reset` 清零。
+- `POST /reset` 清零计数，并把运行时参数恢复为启动值。
 
 ## 8.4 单元测试清单（最低要求）
 
@@ -80,21 +82,23 @@
 
 ## 8.5 E2E 场景（`tests/e2e/*.spec.ts`）
 
-前置：`globalSetup` 启动 mock 服务；每个测试用独立临时 `DOCFLOW_DATA_DIR`；`DOCFLOW_MOCK_PROVIDER_URL=http://127.0.0.1:38111`。
+前置：`globalSetup` 启动 mock 服务；`tests/e2e/helpers.ts` 导出的 `test` 带 fixture：`mockProvider`（自动，每个测试开始时 `POST /reset`，因此 429 计数、延迟都从头开始）、`tempDir`/`dataDir`（每个测试独立的临时目录，作为 `DOCFLOW_DATA_DIR`）、`launch`（启动打包产物，`DOCFLOW_MOCK_PROVIDER_URL=http://127.0.0.1:38111`）。测试结束时 fixture 关闭仍在运行的应用并删除临时目录；失败的测试会先把目录里的 `main.log` 附到报告。
 
 1. `first-run.spec`：启动 → 空状态显示未配置提示 → 设置 → 翻译服务 → 添加 DeepSeek 预设 → 填 Key `test-key` → 获取模型列表 → 勾选 `mock-chat` → 检查模型显示 `可用` → 返回文档库 → 空状态变为已配置文案。
-2. `translate.spec`：新建翻译 → 选择 `tests/fixtures/two-column.pdf`（用 `app:openFiles` 推送模拟拖入，或 Playwright `setInputFiles` 不适用于 Electron 对话框；通过 `page.evaluate(() => window.docflow.invoke('documents:create', …))` 直连）→ 列表出现、进度推进 → 完成 → 详情 `中文 PDF` 页签 iframe 加载（检查 `docflow://` 请求成功）→ 处理记录含 `校验通过` → 导出中文 PDF（主进程对话框用 `DOCFLOW_E2E_SAVE_PATH` 环境变量绕过）→ Toast `已导出`。
-3. `failure.spec`：`encrypted.pdf` → 失败，提示含 `已加密`；`bad-key` → 失败提示含 `API Key`；`missing-model` → 失败提示含 `模型`。
-4. `cancel-retry.spec`：`long.pdf` 开始后取消 → 状态已取消 → 重新处理 → 完成，且处理记录含 `缓存` 命中事件。
-5. `restart.spec`：翻译进行中关闭应用（`electronApp.close()`）→ 重新启动 → 文档从断点继续并完成。
-6. `settings.spec`：修改并发、代理、提示词、主题 → 重启后保留；更改文档库位置 → 新库为空、改回后文档还在。
+2. `translate.spec`：新建翻译 → 选择 `tests/fixtures/two-column.pdf`（用 `app:openFiles` 推送模拟拖入，或 Playwright `setInputFiles` 不适用于 Electron 对话框；通过 `page.evaluate(() => window.docflow.invoke('documents:create', …))` 直连）→ 列表出现、进度推进 → 完成 → 详情 `中文 PDF` 页签 iframe 加载：在主进程里 `net.fetch(iframe.src)` 断言 200、`application/pdf`、`%PDF-` 开头，6 s 后仍没有出现「无法在应用内预览」兜底 → 处理记录含 `校验通过` → 导出中文 PDF（主进程对话框用 `DOCFLOW_E2E_SAVE_PATH` 环境变量绕过）→ Toast `已导出`，导出的文件是 PDF。
+3. `failure.spec`：`encrypted.pdf` → 失败，提示含 `已加密`；`bad-key` → 失败提示含 `API Key`；`missing-model` → 失败提示含 `模型`（`failure.message` 与界面各断言一次）。
+4. `cancel-retry.spec`：mock 延迟 500 ms、关闭周期 429，`perDocumentConcurrency: 1`、每批 2 段（`SLOW_TRANSLATION`），`long.pdf` 的翻译阶段约 15 s；用 `documents:get` 轮询到 `stage=translate` 且进度超过 30%、`work/translation-cache.json` 已有条目，再点「取消处理…」→ 状态已取消且停在翻译阶段 → 重新处理 → 完成；取消之后的事件里有 `缓存命中 n 段`，整个处理记录只有一条「已取消处理」。
+5. `restart.spec`：同样放慢翻译，确认在翻译阶段且缓存文件已有条目后关闭应用（`electronApp.close()`）→ 重新启动 → 文档完成；处理记录含「应用重新启动，从断点继续」与 `缓存命中 n 段`，且没有「已取消处理」（退出应用不算取消）。
+6. `settings.spec`：修改主题、同时处理的文档数、代理、提示词 → 关闭前轮询 `settings:get`/`app:info` 确认已写入 → 重启后保留（IPC 与界面各断言一次）；更改文档库位置 → 新库为空、改回后文档还在，设置也随文档库回来。
 7. `delete.spec`：删除完成的文档 → 目录消失、列表更新。
 
-约定（M5 实测，见 `docs/worklog/2026-09-22-m5-ui.md`）：
+约定（M5 实测，见 `docs/worklog/2026-09-22-m5-ui.md`、`docs/worklog/2026-09-23-m5-review.md`）：
 
 - 启动的是 `electron-builder --dir` 产物，不是 `npm run dev`。改 `src/renderer` 后必须重打，否则 DOM 与源码不一致。
-- HeroUI 3 的 `Button` 常常没有 `role="button"`，也不转发 `data-testid`。优先 `getByText`；列表行用 `data-testid="document-row-<id>"` 与 `data-status`。
-- 侧栏筛选文案「已完成」始终存在，不能当翻译完成判定。
+- HeroUI 3 的 `Button` 渲染原生 `<button>`，会转发 `data-testid` 与 `aria-label`（M5 时「找不到 testid」是打包产物过期）。按钮优先 `getByRole('button', { name, exact: true })` 或 testid，页签用 `getByRole('tab', …)`，菜单项用 `getByRole('menuitem', …)`，确认框里的按钮先限定在 `getByRole('alertdialog')` 内；列表行用 `data-testid="document-row-<id>"` 与 `data-status`。
+- 等状态用 IPC：`waitForStatus(page, id, status)` / `waitForDocument(page, id, predicate)` 轮询 `documents:get`（到了别的终态立即失败并给出 failure），再断言对应行的 `data-status`。不要用界面上常驻的文字当同步点（侧栏筛选「已完成」、按钮「新建翻译」里的「翻译」都一直在）。
+- 需要「处理到一半」的场景用 `mockProvider.configure({ delayMs })` 放慢请求，并在创建文档前用 `configureMockProvider(page, { translation: SLOW_TRANSLATION })` 让批次串行；不要靠固定等待去猜阶段。
+- 确认写盘：设置改动是异步 IPC，关窗前用 `expect.poll` 等 `settings:get` / `app:info` 反映新值（写入完成后才会更新内存值）。
 - 改文档库位置：`DOCFLOW_E2E_FOLDER_PATH` 绕过选文件夹对话框；有它时 `dataDirFromEnv` 为 false，设置页「更改位置」可点。
 
 ## 8.6 验收清单（发布前人工）

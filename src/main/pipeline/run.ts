@@ -8,7 +8,7 @@ import type {
   TranslatedParagraph,
   VerifyResult,
 } from '../../shared/pdf-types'
-import type { DocumentManifest, ProcessingEvent } from '../../shared/types'
+import type { DocumentManifest, ProcessingEvent, Stage } from '../../shared/types'
 import type { DocumentLibrary } from '../library/library'
 import { sourcePath, workDir } from '../library/manifest'
 import { writeJsonAtomic } from '../settings/atomic-write'
@@ -65,17 +65,24 @@ export async function runPipeline(
   const work = workDir(library.dir, id)
   await mkdir(work, { recursive: true })
 
+  const processing = (current: DocumentManifest) => current.status === 'processing'
   const emit = async (
     event: Omit<ProcessingEvent, 'seq' | 'at'> & { at?: string },
     patch?: Partial<DocumentManifest>,
   ) => {
     await library.events.append(id, event)
-    const current = library.require(id)
-    if (current.status !== 'processing') return
-    const next = await library.update(id, patch ?? {})
-    hooks.onChanged?.(next)
+    // Only while processing: a cancelled document must not be revived by a late write.
+    const next = await library.updateWhen(id, processing, patch ?? {})
+    if (next) hooks.onChanged?.(next)
+  }
+  // Stage and progress are written when a stage starts (manifest only, no event), so the
+  // list and a failure icon point at the stage that is actually running.
+  const enterStage = async (stage: Stage, progress: number) => {
+    const next = await library.updateWhen(id, processing, { stage, progress })
+    if (next) hooks.onChanged?.(next)
   }
 
+  await enterStage('inspect', 3)
   const inspection = await withCheckpoint(
     join(work, 'inspection.json'),
     manifest.sourceSha256,
@@ -84,11 +91,11 @@ export async function runPipeline(
       return hooks.inspect(src, signal)
     },
   )
-  if (!manifest.titleCustom && inspection.title) {
-    await library.update(id, { title: inspection.title.slice(0, 300), pages: inspection.pages })
-  } else {
-    await library.update(id, { pages: inspection.pages })
-  }
+  await library.update(id, (current: DocumentManifest) =>
+    !current.titleCustom && inspection.title
+      ? { title: inspection.title.slice(0, 300), pages: inspection.pages }
+      : { pages: inspection.pages },
+  )
   await emit(
     {
       stage: 'inspect',
@@ -99,6 +106,7 @@ export async function runPipeline(
     { stage: 'inspect', progress: 9, pages: inspection.pages },
   )
 
+  await enterStage('analyze', 10)
   const analysis = await withCheckpoint(
     join(work, 'analysis.json'),
     manifest.sourceSha256,
@@ -141,6 +149,7 @@ export async function runPipeline(
     },
   )
 
+  await enterStage('translate', 30)
   const translation = await hooks.translate({
     analysis,
     manifest: library.require(id),
@@ -187,6 +196,7 @@ export async function runPipeline(
   const bilingual = hooks.bilingual(current)
   const monoWork = join(work, 'mono.pdf')
   const dualWork = join(work, 'dual.pdf')
+  await enterStage('compose', 80)
   const composed = await hooks.compose({
     sourcePath: src,
     monoPath: monoWork,
@@ -226,6 +236,7 @@ export async function runPipeline(
     },
   )
 
+  await enterStage('verify', 90)
   const verified = await hooks.verify({
     monoPath: monoWork,
     dualPath: bilingual ? dualWork : null,
@@ -245,6 +256,10 @@ export async function runPipeline(
     { stage: 'verify', progress: 93 },
   )
 
+  // Point of no return: from here the outputs replace work/, so a cancel is refused
+  // (Scheduler.cancel checks the archive stage) and a shutdown lets the stage finish.
+  await enterStage('archive', 94)
+  throwIfAborted(signal)
   const outDir = join(library.dir, 'documents', id, 'output')
   await mkdir(outDir, { recursive: true })
   await rename(monoWork, join(outDir, 'mono.pdf'))
@@ -255,17 +270,22 @@ export async function runPipeline(
   }
   const monoBytes = (await stat(join(outDir, 'mono.pdf'))).size
   await rm(work, { recursive: true, force: true })
-  await emit(
-    { stage: 'archive', level: 'success', progress: 100, message: '已保存到文档库' },
-    {
-      stage: 'archive',
-      progress: 100,
-      outputs: {
-        mono: { bytes: monoBytes },
-        dual: dualBytes === null ? null : { bytes: dualBytes },
-      },
+  await library.events.append(id, {
+    stage: 'archive',
+    level: 'success',
+    progress: 100,
+    message: '已保存到文档库',
+  })
+  // The files are in output/ whatever the status is now: always record them.
+  const archived = await library.update(id, {
+    stage: 'archive',
+    progress: 100,
+    outputs: {
+      mono: { bytes: monoBytes },
+      dual: dualBytes === null ? null : { bytes: dualBytes },
     },
-  )
+  })
+  hooks.onChanged?.(archived)
 }
 
 async function withCheckpoint<T>(path: string, sha: string, produce: () => Promise<T>): Promise<T> {

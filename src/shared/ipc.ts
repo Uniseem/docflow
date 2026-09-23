@@ -52,6 +52,11 @@ export const channels = {
     ]),
   },
   'app:relaunch': { request: empty, response: empty },
+  /** PDFs from argv, open-file and second-instance that arrived before the renderer subscribed. */
+  'app:takePendingFiles': {
+    request: empty,
+    response: z.object({ paths: z.array(z.string()) }),
+  },
   'settings:get': { request: empty, response: z.unknown() },
   'settings:update': { request: z.unknown(), response: z.unknown() },
   'secrets:set': {
@@ -171,6 +176,11 @@ export const channels = {
   },
   'shell:openExternal': {
     request: z.object({ url: z.string() }),
+    response: empty,
+  },
+  /** Reveals a file written by documents:export in this session; any other path is not_found. */
+  'shell:revealExport': {
+    request: z.object({ path: z.string() }),
     response: empty,
   },
   'shell:openLogs': { request: empty, response: empty },

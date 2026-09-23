@@ -38,7 +38,8 @@ export type EventInput = {
 export type TranslatedParagraph = { id: string; text: string; kept: boolean }
 
 export type TranslateHooks = {
-  delay?: (ms: number) => Promise<void>
+  /** Retry wait; resolves early (or never) when `signal` aborts — the caller races it. */
+  delay?: (ms: number, signal?: AbortSignal) => Promise<void>
   jitterMs?: () => number
 }
 
@@ -156,7 +157,7 @@ type TranslateContext = {
   rejected: number
   notices: number
   indexOf: Map<string, number>
-  delay: (ms: number) => Promise<void>
+  delay: (ms: number, signal?: AbortSignal) => Promise<void>
   jitterMs: () => number
 }
 
@@ -468,12 +469,12 @@ async function submit(
   request: { model: string; system: string; user: string; maxTokens?: number },
   ctx: TranslateContext,
 ): Promise<{ text: string; finish: 'complete' | 'truncated' | 'refused' }> {
-  const pool = ctx.pools.get(ctx.provider)
   let lastError: ProviderError | undefined
   for (let attempt = 1; attempt <= SUBMIT_ATTEMPTS; attempt += 1) {
     throwIfAborted(ctx.signal)
     try {
-      const reply = await pool.execute(request, ctx.signal)
+      // Looked up per attempt: a key or provider change invalidates the pool mid-document.
+      const reply = await ctx.pools.execute(ctx.provider, request, ctx.signal)
       if (reply.usage) {
         ctx.usage.input += reply.usage.input
         ctx.usage.output += reply.usage.output
@@ -504,7 +505,7 @@ async function submit(
         })
       }
       if (attempt === SUBMIT_ATTEMPTS) break
-      await ctx.delay(wait)
+      await abortable(ctx.delay(wait, ctx.signal), ctx.signal)
     }
   }
   throw new ProviderError(
@@ -513,9 +514,34 @@ async function submit(
   )
 }
 
-async function defaultDelay(ms: number): Promise<void> {
+/** Settles with `promise`, or rejects with a cancellation as soon as `signal` aborts. */
+function abortable(promise: Promise<void>, signal: AbortSignal): Promise<void> {
+  if (signal.aborted) return Promise.reject(new UserError(ERROR_CODES.cancelled))
+  return new Promise<void>((resolve, reject) => {
+    const onAbort = () => reject(new UserError(ERROR_CODES.cancelled))
+    signal.addEventListener('abort', onAbort, { once: true })
+    promise.then(
+      () => {
+        signal.removeEventListener('abort', onAbort)
+        resolve()
+      },
+      (error: unknown) => {
+        signal.removeEventListener('abort', onAbort)
+        reject(error instanceof Error ? error : new Error(String(error)))
+      },
+    )
+  })
+}
+
+async function defaultDelay(ms: number, signal?: AbortSignal): Promise<void> {
   await new Promise<void>((resolve) => {
-    setTimeout(resolve, ms)
+    const done = () => {
+      clearTimeout(timer)
+      signal?.removeEventListener('abort', done)
+      resolve()
+    }
+    const timer = setTimeout(done, ms)
+    signal?.addEventListener('abort', done, { once: true })
   })
 }
 

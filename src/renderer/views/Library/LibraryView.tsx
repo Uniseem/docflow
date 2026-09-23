@@ -22,20 +22,39 @@ import {
   Upload,
   XCircle,
 } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import clsx from 'clsx'
+import { isActiveStatus } from '../../../shared/library-filter'
 import { formatBytes, formatRelativeTime } from '../../../shared/text'
 import type { DocumentStatus, DocumentSummary } from '../../../shared/types'
 import { invoke } from '../../api/invoke'
 import { ConfirmDialog } from '../../components/ConfirmDialog'
-import { useDocumentsStore } from '../../store/documents'
+import { notifyError } from '../../lib/notify'
+import { sortDocuments, useDocumentsStore } from '../../store/documents'
 import { useSettingsStore } from '../../store/settings'
-import { useUiStore } from '../../store/ui'
+import { useUiStore, type ConfirmState } from '../../store/ui'
 import { progressLabel, stageName } from '../../lib/labels'
+import { confirmCancel, confirmDelete } from '../Document/actions'
+import { rowHeight, rowOffsets, scrollTopFor, visibleRange } from './virtual-list'
 
-const ROW_HEIGHT = 88
+const VIRTUAL_THRESHOLD = 200
+const OVERSCAN_ROWS = 20
+const RELATIVE_TIME_REFRESH_MS = 60_000
 
-export function LibraryView() {
+function useMinuteClock(): Date {
+  const [now, setNow] = useState(() => new Date())
+  useEffect(() => {
+    const timer = setInterval(() => setNow(new Date()), RELATIVE_TIME_REFRESH_MS)
+    return () => clearInterval(timer)
+  }, [])
+  return now
+}
+
+function reportError(error: unknown): void {
+  notifyError(error)
+}
+
+export function LibraryView(props: { onOpenDetail?: (id: string) => void }) {
   const itemsMap = useDocumentsStore((s) => s.items)
   const counts = useDocumentsStore((s) => s.counts)
   const filter = useDocumentsStore((s) => s.filter)
@@ -45,20 +64,17 @@ export function LibraryView() {
   const select = useDocumentsStore((s) => s.select)
   const llmReady = useSettingsStore((s) => s.view?.capabilities.llmReady ?? false)
   const openNew = useUiStore((s) => s.openNewTranslation)
-  const setView = useUiStore((s) => s.setView)
-  const setSettingsTab = useUiStore((s) => s.setSettingsTab)
+  const openSettings = useUiStore((s) => s.openSettings)
   const platform = useUiStore((s) => s.appInfo?.platform)
-  const items = useMemo(
-    () => [...itemsMap.values()].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)),
-    [itemsMap],
-  )
+  const items = useMemo(() => sortDocuments(itemsMap.values()), [itemsMap])
+  const now = useMinuteClock()
 
   const empty = counts.all === 0 && !query
   const filteredEmpty = items.length === 0 && !empty
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1">
-      <aside className="flex w-[220px] shrink-0 flex-col border-r border-divider">
+      <aside className="flex w-[220px] shrink-0 flex-col border-r border-separator">
         <ListBox
           aria-label="文档筛选"
           selectedKeys={new Set([filter])}
@@ -79,14 +95,7 @@ export function LibraryView() {
           <FilterItem id="failed" label="失败与取消" count={counts.failed} />
         </ListBox>
         <div className="p-2">
-          <Button
-            variant="ghost"
-            className="w-full justify-start"
-            onPress={() => {
-              setSettingsTab('general')
-              setView('settings')
-            }}
-          >
+          <Button variant="ghost" className="w-full justify-start" onPress={() => openSettings()}>
             <Settings size={16} />
             设置
           </Button>
@@ -97,10 +106,7 @@ export function LibraryView() {
           <EmptyLibrary
             llmReady={llmReady}
             onNew={() => openNew()}
-            onAddProvider={() => {
-              setSettingsTab('providers')
-              setView('settings')
-            }}
+            onAddProvider={() => openSettings('providers')}
           />
         ) : filteredEmpty ? (
           <div className="flex flex-1 flex-col items-center justify-center gap-1 px-6 text-center">
@@ -112,7 +118,9 @@ export function LibraryView() {
             items={items}
             selectedId={selectedId}
             onSelect={select}
+            onOpen={(id) => props.onOpenDetail?.(id)}
             platform={platform}
+            now={now}
           />
         )}
       </section>
@@ -165,47 +173,116 @@ function EmptyLibrary(props: { llmReady: boolean; onNew: () => void; onAddProvid
   )
 }
 
+function rowDomId(id: string): string {
+  return `document-row-${id}`
+}
+
 function DocumentList(props: {
   items: DocumentSummary[]
   selectedId: string | null
   onSelect: (id: string) => void
+  onOpen: (id: string) => void
   platform: 'darwin' | 'win32' | undefined
+  now: Date
 }) {
+  const { items, selectedId } = props
   const scroller = useRef<HTMLDivElement>(null)
-  const [range, setRange] = useState({ start: 0, end: 40 })
-  const virtual = props.items.length > 200
+  const virtual = items.length > VIRTUAL_THRESHOLD
+  const offsets = useMemo(() => rowOffsets(items), [items])
+  const [viewport, setViewport] = useState({ top: 0, height: 0 })
 
   useEffect(() => {
     const el = scroller.current
     if (!el || !virtual) return
-    const onScroll = () => {
-      const start = Math.max(0, Math.floor(el.scrollTop / ROW_HEIGHT) - 20)
-      const end = Math.min(props.items.length, start + Math.ceil(el.clientHeight / ROW_HEIGHT) + 40)
-      setRange({ start, end })
+    const update = () => setViewport({ top: el.scrollTop, height: el.clientHeight })
+    update()
+    el.addEventListener('scroll', update, { passive: true })
+    const observer = new ResizeObserver(update)
+    observer.observe(el)
+    return () => {
+      el.removeEventListener('scroll', update)
+      observer.disconnect()
     }
-    onScroll()
-    el.addEventListener('scroll', onScroll)
-    return () => el.removeEventListener('scroll', onScroll)
-  }, [props.items.length, virtual])
+  }, [virtual])
 
-  const slice = virtual ? props.items.slice(range.start, range.end) : props.items
-  const padTop = virtual ? range.start * ROW_HEIGHT : 0
-  const padBottom = virtual ? Math.max(0, (props.items.length - range.end) * ROW_HEIGHT) : 0
+  // Keep the selected row in view whenever the selection changes (arrow keys, removal,
+  // list refresh). Setting scrollTop directly also works for rows the virtual list has not
+  // rendered yet.
+  useLayoutEffect(() => {
+    const el = scroller.current
+    if (!el || selectedId === null) return
+    const index = items.findIndex((item) => item.id === selectedId)
+    if (index < 0) return
+    const next = scrollTopFor(offsets, index, el.scrollTop, el.clientHeight)
+    if (next === null) return
+    el.scrollTop = next
+    if (virtual) setViewport({ top: el.scrollTop, height: el.clientHeight })
+    // Only a selection change should scroll; progress updates must not move the view.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedId])
+
+  const range = virtual
+    ? visibleRange(offsets, viewport.top, viewport.height || 800, OVERSCAN_ROWS)
+    : { start: 0, end: items.length }
+  const slice = items.slice(range.start, range.end)
+  const padTop = offsets[range.start] ?? 0
+  const padBottom = Math.max(0, (offsets[items.length] ?? 0) - (offsets[range.end] ?? 0))
+  const activeRendered = slice.some((item) => item.id === selectedId)
+
+  function move(step: number | 'first' | 'last') {
+    if (items.length === 0) return
+    let index: number
+    if (step === 'first') index = 0
+    else if (step === 'last') index = items.length - 1
+    else {
+      const current = items.findIndex((item) => item.id === selectedId)
+      index = current < 0 ? 0 : Math.min(items.length - 1, Math.max(0, current + step))
+    }
+    const next = items[index]
+    if (next && next.id !== selectedId) props.onSelect(next.id)
+  }
 
   return (
     <div
       ref={scroller}
-      className="min-h-0 flex-1 overflow-auto"
+      className="group min-h-0 flex-1 overflow-auto outline-none"
       role="listbox"
       aria-label="文档列表"
+      tabIndex={0}
+      data-testid="document-list"
+      {...(selectedId && activeRendered ? { 'aria-activedescendant': rowDomId(selectedId) } : {})}
+      onKeyDown={(event) => {
+        // Keys pressed on a row's menu button belong to that button.
+        if (event.target !== event.currentTarget) return
+        if (event.metaKey || event.ctrlKey || event.altKey) return
+        const steps: Record<string, number | 'first' | 'last'> = {
+          ArrowDown: 1,
+          ArrowUp: -1,
+          PageDown: 10,
+          PageUp: -10,
+          Home: 'first',
+          End: 'last',
+        }
+        const step = steps[event.key]
+        if (step !== undefined) {
+          event.preventDefault()
+          move(step)
+          return
+        }
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault()
+          if (selectedId) props.onOpen(selectedId)
+        }
+      }}
     >
       <div style={{ height: padTop }} />
       {slice.map((item) => (
         <DocumentRow
           key={item.id}
           item={item}
-          selected={item.id === props.selectedId}
+          selected={item.id === selectedId}
           platform={props.platform}
+          now={props.now}
           onSelect={() => props.onSelect(item.id)}
         />
       ))}
@@ -218,107 +295,88 @@ function DocumentRow(props: {
   item: DocumentSummary
   selected: boolean
   platform: 'darwin' | 'win32' | undefined
+  now: Date
   onSelect: () => void
 }) {
   const { item } = props
   const setRename = useUiStore((s) => s.setRename)
-  const setConfirm = useUiStore((s) => s.setConfirm)
   const subtitle = [
     item.translator.label,
     formatBytes(item.sourceSize),
     item.pages != null ? `${item.pages} 页` : null,
-    formatRelativeTime(item.updatedAt),
+    formatRelativeTime(item.updatedAt, props.now),
   ]
     .filter(Boolean)
     .join(' · ')
-  const active =
-    item.status === 'queued' || item.status === 'processing' || item.status === 'retrying'
+  const active = isActiveStatus(item.status)
 
   return (
     <div
+      id={rowDomId(item.id)}
       role="option"
       aria-selected={props.selected}
       data-testid={`document-row-${item.id}`}
       data-status={item.status}
+      style={{ height: rowHeight(item) }}
       className={clsx(
-        'flex cursor-default items-start gap-3 border-b border-divider px-3 py-2',
-        props.selected && 'bg-accent/10',
+        'flex cursor-default items-center overflow-hidden border-b border-separator px-3',
+        props.selected &&
+          'bg-accent/10 group-focus-visible:ring-2 group-focus-visible:ring-accent group-focus-visible:ring-inset',
       )}
       onClick={props.onSelect}
       onDoubleClick={() => {
         if (item.status === 'completed') {
-          void invoke('documents:openExternal', { id: item.id, kind: 'mono' })
+          invoke('documents:openExternal', { id: item.id, kind: 'mono' }).catch(reportError)
         }
       }}
     >
-      <StatusIcon status={item.status} />
-      <div className="min-w-0 flex-1">
-        <p className="truncate text-sm font-medium" title={item.title}>
-          {item.title}
-        </p>
-        <p className="truncate text-xs text-foreground/60">{subtitle}</p>
-        {active ? (
-          <div className="mt-1 flex items-center gap-2">
-            <ProgressBar
-              className="flex-1"
-              size="sm"
-              value={item.progress}
-              minValue={0}
-              maxValue={100}
-              isIndeterminate={item.progress <= 3}
-              aria-label="进度"
-            >
-              <ProgressBar.Track>
-                <ProgressBar.Fill />
-              </ProgressBar.Track>
-            </ProgressBar>
-            <span className="shrink-0 text-xs text-foreground/70">
-              {progressLabel(item.status, item.progress)} · {stageName(item.stage)}
-            </span>
-          </div>
-        ) : null}
+      <div className="flex min-w-0 flex-1 items-start gap-3">
+        <div className="mt-0.5 flex w-[18px] shrink-0 justify-center">
+          <StatusIcon status={item.status} />
+        </div>
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-sm font-medium" title={item.title}>
+            {item.title}
+          </p>
+          <p className="truncate text-xs text-foreground/60">{subtitle}</p>
+          {active ? (
+            <div className="mt-1 flex items-center gap-2">
+              <ProgressBar
+                className="flex-1"
+                size="sm"
+                value={item.progress}
+                minValue={0}
+                maxValue={100}
+                isIndeterminate={item.progress <= 3}
+                aria-label="进度"
+              >
+                <ProgressBar.Track>
+                  <ProgressBar.Fill />
+                </ProgressBar.Track>
+              </ProgressBar>
+              <span className="shrink-0 text-xs text-foreground/70">
+                {progressLabel(item.status, item.progress)} · {stageName(item.stage)}
+              </span>
+            </div>
+          ) : null}
+        </div>
+        <RowMenu
+          item={item}
+          platform={props.platform}
+          onRename={() => setRename({ id: item.id, title: item.title })}
+          onDelete={() => confirmDelete(item)}
+          onCancel={() => confirmCancel(item)}
+          onRetry={() => {
+            invoke('documents:retry', { id: item.id }).catch(reportError)
+          }}
+        />
       </div>
-      <RowMenu
-        item={item}
-        platform={props.platform}
-        onRename={() => setRename({ id: item.id, title: item.title })}
-        onDelete={() =>
-          setConfirm({
-            title: `删除“${item.title}”？`,
-            body: '译文、PDF、处理记录和文档库里的源文件副本都会被删除，你最初选择的文件不受影响。此操作无法撤销。',
-            confirmLabel: '删除',
-            danger: true,
-            onConfirm: async () => {
-              await invoke('documents:delete', { ids: [item.id] })
-              useUiStore.getState().setConfirm(null)
-            },
-          })
-        }
-        onCancel={() =>
-          setConfirm({
-            title: `取消处理“${item.title}”？`,
-            body: '正在进行的解析、翻译或排版会停止。源文件和已完成的翻译断点会保留，之后可以重新处理。',
-            confirmLabel: '取消处理',
-            cancelLabel: '继续处理',
-            danger: true,
-            onConfirm: async () => {
-              await invoke('documents:cancel', { id: item.id })
-              useUiStore.getState().setConfirm(null)
-            },
-          })
-        }
-        onRetry={() => {
-          void invoke('documents:retry', { id: item.id })
-        }}
-      />
     </div>
   )
 }
 
 function StatusIcon(props: { status: DocumentStatus }) {
-  if (props.status === 'processing' || props.status === 'queued' || props.status === 'retrying') {
-    return <Spinner size="sm" />
-  }
+  if (isActiveStatus(props.status)) return <Spinner size="sm" />
   if (props.status === 'failed') return <AlertTriangle size={18} className="text-danger" />
   if (props.status === 'completed') return <CheckCircle2 size={18} className="text-success" />
   if (props.status === 'cancelled') return <XCircle size={18} className="text-foreground/40" />
@@ -335,10 +393,7 @@ function RowMenu(props: {
 }) {
   const reveal = props.platform === 'win32' ? '在文件资源管理器中显示' : '在访达中显示'
   const completed = props.item.status === 'completed'
-  const active =
-    props.item.status === 'queued' ||
-    props.item.status === 'processing' ||
-    props.item.status === 'retrying'
+  const active = isActiveStatus(props.item.status)
   const retryable = props.item.status === 'failed' || props.item.status === 'cancelled'
   return (
     <Dropdown>
@@ -349,10 +404,14 @@ function RowMenu(props: {
       <Dropdown.Popover>
         <Dropdown.Menu
           onAction={(key) => {
-            if (key === 'open')
-              void invoke('documents:openExternal', { id: props.item.id, kind: 'mono' })
-            if (key === 'reveal')
-              void invoke('documents:reveal', { id: props.item.id, kind: 'folder' })
+            if (key === 'open') {
+              invoke('documents:openExternal', { id: props.item.id, kind: 'mono' }).catch(
+                reportError,
+              )
+            }
+            if (key === 'reveal') {
+              invoke('documents:reveal', { id: props.item.id, kind: 'folder' }).catch(reportError)
+            }
             if (key === 'retry') props.onRetry()
             if (key === 'cancel') props.onCancel()
             if (key === 'rename') props.onRename()
@@ -399,15 +458,29 @@ export function RenameDialog() {
 function RenameForm(props: { id: string; initial: string; open: boolean }) {
   const setRename = useUiStore((s) => s.setRename)
   const [title, setTitle] = useState(props.initial)
+  const [saving, setSaving] = useState(false)
   const state = useOverlayState({
     isOpen: props.open,
     onOpenChange: (open) => {
-      if (!open) setRename(null)
+      if (!open && !saving) setRename(null)
     },
   })
+  async function submit() {
+    const trimmed = title.trim()
+    if (!props.id || !trimmed || saving) return
+    setSaving(true)
+    try {
+      await invoke('documents:rename', { id: props.id, title: trimmed })
+      setRename(null)
+    } catch (error) {
+      notifyError(error)
+    } finally {
+      setSaving(false)
+    }
+  }
   return (
     <Modal state={state}>
-      <Modal.Backdrop isDismissable>
+      <Modal.Backdrop isDismissable={!saving}>
         <Modal.Container size="sm">
           <Modal.Dialog>
             <Modal.Header>
@@ -416,21 +489,29 @@ function RenameForm(props: { id: string; initial: string; open: boolean }) {
             <Modal.Body>
               <TextField value={title} onChange={setTitle} autoFocus>
                 <Label>标题</Label>
-                <Input />
+                {/* 06 §6.2: the title is preselected so typing replaces it. */}
+                <Input
+                  onFocus={(event) => event.currentTarget.select()}
+                  onKeyDown={(event) => {
+                    // Enter that confirms an IME composition (Chinese input) is not a submit.
+                    if (event.key === 'Enter' && !event.nativeEvent.isComposing) {
+                      event.preventDefault()
+                      void submit()
+                    }
+                  }}
+                />
               </TextField>
             </Modal.Body>
             <Modal.Footer>
-              <Button variant="ghost" onPress={() => setRename(null)}>
+              <Button variant="ghost" isDisabled={saving} onPress={() => setRename(null)}>
                 取消
               </Button>
               <Button
                 variant="primary"
                 isDisabled={!title.trim()}
+                isPending={saving}
                 onPress={() => {
-                  if (!props.id || !title.trim()) return
-                  void invoke('documents:rename', { id: props.id, title: title.trim() }).then(() =>
-                    setRename(null),
-                  )
+                  void submit()
                 }}
               >
                 重命名
@@ -443,6 +524,19 @@ function RenameForm(props: { id: string; initial: string; open: boolean }) {
   )
 }
 
+const confirmKeys = new WeakMap<ConfirmState, number>()
+let nextConfirmKey = 0
+
+function confirmKey(confirm: ConfirmState): number {
+  let key = confirmKeys.get(confirm)
+  if (key === undefined) {
+    nextConfirmKey += 1
+    key = nextConfirmKey
+    confirmKeys.set(confirm, key)
+  }
+  return key
+}
+
 export function GlobalConfirm() {
   const confirm = useUiStore((s) => s.confirm)
   // Keep the last content while the dialog plays its exit animation, so the
@@ -450,6 +544,7 @@ export function GlobalConfirm() {
   const [shown, setShown] = useState(confirm)
   if (confirm && confirm !== shown) setShown(confirm)
   const content = confirm ?? shown
+
   if (!content) {
     return (
       <ConfirmDialog
@@ -464,17 +559,21 @@ export function GlobalConfirm() {
   }
   return (
     <ConfirmDialog
-      isOpen={confirm !== null}
+      // A fresh dialog per confirm: nothing (pending state, content) leaks into the next one.
+      key={confirmKey(content)}
+      isOpen={confirm === content}
       title={content.title}
       body={content.body}
       confirmLabel={content.confirmLabel}
       {...(content.cancelLabel ? { cancelLabel: content.cancelLabel } : {})}
       {...(content.danger ? { danger: true } : {})}
       onOpenChange={(open) => {
-        if (!open) useUiStore.getState().setConfirm(null)
+        if (!open) useUiStore.getState().clearConfirm(content)
       }}
-      onConfirm={() => {
-        if (confirm) return confirm.onConfirm()
+      onConfirm={async () => {
+        await content.onConfirm()
+        // Close only this confirm; one opened in the meantime stays.
+        useUiStore.getState().clearConfirm(content)
       }}
     />
   )
@@ -482,9 +581,14 @@ export function GlobalConfirm() {
 
 export function DropOverlay(props: { visible: boolean }) {
   if (!props.visible) return null
+  // The overlay takes the drag events itself: over the PDF preview they would otherwise go
+  // to the iframe (Chromium's PDF viewer), and the drop would be lost.
   return (
-    <div className="pointer-events-none fixed inset-0 z-50 flex items-center justify-center bg-background/80">
-      <div className="flex flex-col items-center gap-3">
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-background/80"
+      data-testid="drop-overlay"
+    >
+      <div className="pointer-events-none flex flex-col items-center gap-3">
         <Upload size={48} />
         <p className="text-lg font-medium">松开以添加文档</p>
       </div>

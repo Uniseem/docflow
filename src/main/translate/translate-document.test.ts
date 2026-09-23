@@ -160,6 +160,48 @@ describe('translateDocument against mock provider', () => {
     ).rejects.toMatchObject({ code: 'cancelled' })
   })
 
+  test('cancelling during a retry wait ends at once, without another request', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'df-wait-'))
+    const config = provider('https://unavailable.example.com')
+    const cache = new TranslationCache(
+      join(dir, 'c.json'),
+      cacheFingerprint(config, 'mock-chat', runtime),
+    )
+    let requests = 0
+    const pools = new TranslationPools(
+      () => {
+        requests += 1
+        return Promise.resolve(new Response('overloaded', { status: 503 }))
+      },
+      () => 'test-key',
+    )
+    const controller = new AbortController()
+    let waiting = false
+    const pending = translateDocument({
+      segments: [{ id: 'a', text: 'Hello' }],
+      provider: config,
+      model: 'mock-chat',
+      runtime,
+      pools,
+      cache,
+      signal: controller.signal,
+      onProgress: () => undefined,
+      onEvent: () => undefined,
+      // A retry wait that would take minutes and ignores the signal.
+      hooks: {
+        delay: () => {
+          waiting = true
+          return new Promise<void>(() => undefined)
+        },
+        jitterMs: () => 0,
+      },
+    })
+    await expect.poll(() => waiting).toBe(true)
+    controller.abort()
+    await expect(pending).rejects.toMatchObject({ code: 'cancelled' })
+    expect(requests).toBe(1)
+  })
+
   test('fake fetch appends the test suffix without network', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'df-fake-'))
     const config = provider('http://127.0.0.1:9')

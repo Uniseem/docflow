@@ -1,28 +1,29 @@
-import { Button, Drawer, SearchField, Toast, toast } from '@heroui/react'
+import { Button, Drawer, SearchField, Toast } from '@heroui/react'
 import { useEffect, useState } from 'react'
-import type { DocumentSummary } from '../shared/types'
 import { invoke } from './api/invoke'
-import { subscribeDocuments, useDocumentsStore } from './store/documents'
+import { adjacentDocumentId, subscribeDocuments, useDocumentsStore } from './store/documents'
 import { subscribeSettings, useSettingsStore } from './store/settings'
 import { useUiStore } from './store/ui'
 import { DropOverlay, GlobalConfirm, LibraryView, RenameDialog } from './views/Library/LibraryView'
 import { NewTranslationModal } from './views/NewTranslation/NewTranslationModal'
 import { collectPdfDrop } from './lib/drop'
+import { notify, notifyError } from './lib/notify'
+import { applyTheme } from './lib/theme'
+import { confirmDelete } from './views/Document/actions'
 import { DocumentDetail } from './views/Document/DocumentDetail'
 import { SettingsView } from './views/Settings/SettingsView'
 
-function applyTheme(theme: 'system' | 'light' | 'dark'): void {
-  const dark =
-    theme === 'dark' ||
-    (theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches)
-  const root = document.documentElement
-  root.classList.toggle('dark', dark)
-  root.classList.toggle('light', !dark)
-  root.setAttribute('data-theme', dark ? 'dark' : 'light')
-}
+// Hide the drop overlay if no dragover arrived for this long (a drag cancelled without
+// dragleave would otherwise leave it covering the window).
+const DRAG_IDLE_MS = 3_000
 
 function isMac(): boolean {
   return /Mac|iPhone|iPad/.test(navigator.platform) || /Mac OS X/.test(navigator.userAgent)
+}
+
+/** ⌘ on macOS (Control there moves the caret in text fields), Ctrl on Windows. */
+function commandKey(event: KeyboardEvent): boolean {
+  return isMac() ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey
 }
 
 // Mounted HeroUI overlays (modal/alert/drawer backdrops, dropdown/select popovers) own the
@@ -51,13 +52,6 @@ function listShortcutBlocked(event: KeyboardEvent): boolean {
   if (target.isContentEditable) return true
   if (target.closest('[role="dialog"], [role="alertdialog"], [role="menu"]')) return true
   return target.closest(TEXT_ENTRY_SELECTOR) !== null
-}
-
-// Same order as the library list (LibraryView sorts by updatedAt, newest first).
-function visibleDocuments(): DocumentSummary[] {
-  return [...useDocumentsStore.getState().items.values()].sort((a, b) =>
-    b.updatedAt.localeCompare(a.updatedAt),
-  )
 }
 
 export default function App() {
@@ -107,19 +101,27 @@ export default function App() {
     })
     const offCommand = window.docflow.on('app:command', ({ name }) => {
       if (name === 'new-translation') useUiStore.getState().openNewTranslation()
-      if (name === 'settings') useUiStore.getState().setView('settings')
+      if (name === 'settings') useUiStore.getState().openSettings()
       if (name === 'focus-search') useUiStore.getState().focusSearch()
     })
     void (async () => {
-      const info = await invoke('app:info', {})
-      useUiStore.getState().setAppInfo(info)
-      applyTheme(info.theme)
-      await useSettingsStore.getState().load()
-      const settings = useSettingsStore.getState().view
-      if (settings && !settings.capabilities.llmReady) {
-        useUiStore.getState().setSettingsTab('providers')
+      try {
+        const info = await invoke('app:info', {})
+        useUiStore.getState().setAppInfo(info)
+        applyTheme(info.theme)
+        await useSettingsStore.getState().load()
+        await useDocumentsStore.getState().list()
+      } catch (error) {
+        notifyError(error)
       }
-      await useDocumentsStore.getState().list()
+      // PDFs from the command line, open-file or a second instance that arrived before this
+      // window subscribed wait in main; from now on main pushes them via app:openFiles.
+      try {
+        const { paths } = await invoke('app:takePendingFiles', {})
+        if (paths.length > 0) useUiStore.getState().openNewTranslation(paths)
+      } catch (error) {
+        notifyError(error)
+      }
     })()
     return () => {
       offDocs()
@@ -131,7 +133,7 @@ export default function App() {
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      const meta = event.metaKey || event.ctrlKey
+      const meta = commandKey(event)
       if (meta && event.key.toLowerCase() === 'n') {
         event.preventDefault()
         useUiStore.getState().openNewTranslation()
@@ -139,7 +141,7 @@ export default function App() {
       }
       if (meta && event.key === ',') {
         event.preventDefault()
-        useUiStore.getState().setView('settings')
+        useUiStore.getState().openSettings()
         return
       }
       if (meta && event.key.toLowerCase() === 'f') {
@@ -160,40 +162,20 @@ export default function App() {
         const item = id ? useDocumentsStore.getState().items.get(id) : undefined
         if (!item) return
         event.preventDefault()
-        useUiStore.getState().setConfirm({
-          title: `删除“${item.title}”？`,
-          body: '译文、PDF、处理记录和文档库里的源文件副本都会被删除，你最初选择的文件不受影响。此操作无法撤销。',
-          confirmLabel: '删除',
-          danger: true,
-          onConfirm: async () => {
-            await invoke('documents:delete', { ids: [item.id] })
-            useUiStore.getState().setConfirm(null)
-          },
-        })
+        confirmDelete(item)
         return
       }
       if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
-        if (meta || event.altKey || listShortcutBlocked(event)) return
+        if (event.metaKey || event.ctrlKey || event.altKey || listShortcutBlocked(event)) return
         if (event.target instanceof HTMLElement && event.target.matches(ARROW_WIDGET_SELECTOR)) {
           return
         }
-        const docs = visibleDocuments()
-        if (docs.length === 0) return
         const current = useDocumentsStore.getState().selectedId
-        const index = docs.findIndex((item) => item.id === current)
-        const next =
-          index < 0
-            ? 0
-            : event.key === 'ArrowDown'
-              ? Math.min(docs.length - 1, index + 1)
-              : Math.max(0, index - 1)
-        const item = docs[next]
-        if (!item) return
+        const next = adjacentDocumentId(current, event.key === 'ArrowDown' ? 1 : -1)
+        if (!next) return
         event.preventDefault()
-        if (item.id !== current) useDocumentsStore.getState().select(item.id)
-        document
-          .querySelector(`[data-testid="document-row-${CSS.escape(item.id)}"]`)
-          ?.scrollIntoView({ block: 'nearest' })
+        // The list scrolls the new selection into view itself (also when virtualized).
+        if (next !== current) useDocumentsStore.getState().select(next)
       }
     }
     window.addEventListener('keydown', onKey)
@@ -201,30 +183,47 @@ export default function App() {
   }, [])
 
   useEffect(() => {
+    // The overlay captures pointer events while shown (so drops over the PDF preview reach
+    // us), so it must never outlive the drag: dragover repeats while a drag is over the
+    // window, and mousemove only fires again once the drag has ended.
+    let idle: ReturnType<typeof setTimeout> | undefined
+    const stop = () => {
+      if (idle) clearTimeout(idle)
+      idle = undefined
+      setDragging(false)
+    }
     const onDragOver = (event: DragEvent) => {
       event.preventDefault()
       setDragging(true)
+      if (idle) clearTimeout(idle)
+      idle = setTimeout(stop, DRAG_IDLE_MS)
     }
     const onDragLeave = (event: DragEvent) => {
       if (event.relatedTarget) return
-      setDragging(false)
+      stop()
     }
     const onDrop = (event: DragEvent) => {
       event.preventDefault()
-      setDragging(false)
+      stop()
       const list = event.dataTransfer?.files
       if (!list || list.length === 0) return
       const { paths, ignored } = collectPdfDrop([...list])
-      if (ignored > 0) toast.warning(`已忽略 ${ignored} 个非 PDF 文件`)
+      if (ignored > 0) notify.warning(`已忽略 ${ignored} 个非 PDF 文件`)
       if (paths.length > 0) useUiStore.getState().openNewTranslation(paths)
+    }
+    const onMouseMove = () => {
+      if (idle) stop()
     }
     window.addEventListener('dragover', onDragOver)
     window.addEventListener('dragleave', onDragLeave)
     window.addEventListener('drop', onDrop)
+    window.addEventListener('mousemove', onMouseMove)
     return () => {
+      if (idle) clearTimeout(idle)
       window.removeEventListener('dragover', onDragOver)
       window.removeEventListener('dragleave', onDragLeave)
       window.removeEventListener('drop', onDrop)
+      window.removeEventListener('mousemove', onMouseMove)
     }
   }, [])
 
@@ -303,7 +302,11 @@ export default function App() {
               if (target.closest('[data-testid^="document-row-"]')) setDrawerOpen(true)
             }}
           >
-            <LibraryView />
+            <LibraryView
+              onOpenDetail={() => {
+                if (useUiStore.getState().narrow) setDrawerOpen(true)
+              }}
+            />
             {!narrow && selectedId ? (
               <aside className="w-[52%] min-w-[480px] border-l border-separator">
                 <DocumentDetail key={selectedId} />

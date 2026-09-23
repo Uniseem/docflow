@@ -1,15 +1,16 @@
-import { mkdtemp } from 'node:fs/promises'
+import { mkdtemp, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { access } from 'node:fs/promises'
 import { describe, expect, test } from 'vitest'
+import type { AnalysisResult } from '../../shared/pdf-types'
 import { defaultTranslationRuntime } from '../../shared/types'
 import { analyzePdf } from '../pdf/analyze'
 import { composePdf, defaultComposeOptions } from '../pdf/compose'
 import { inspectPdf } from '../pdf/inspect'
 import { verifyPdf } from '../pdf/verify'
 import { DocumentLibrary } from '../library/library'
-import { bundledFonts, runPipeline } from './run'
+import { bundledFonts, runPipeline, type PipelineHooks } from './run'
 
 const fonts = bundledFonts()
 const translator = { providerId: 'fake', model: 'fake-model', label: '假 · fake-model' }
@@ -69,4 +70,114 @@ describe('runPipeline', () => {
     expect(events.items.some((e) => e.message.includes('校验通过'))).toBe(true)
     expect(lib.require(created.id).outputs.mono?.bytes).toBeGreaterThan(1024)
   }, 60_000)
+
+  test('marks each stage when it starts and stops before archiving once aborted', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'df-pipe-'))
+    const lib = new DocumentLibrary()
+    await lib.open(dir)
+    const pdf = join(dir, 'in.pdf')
+    await writeFile(pdf, '%PDF-1.4')
+    const created = await lib.create({
+      path: pdf,
+      translator,
+      settingsSnapshot: defaultTranslationRuntime(),
+    })
+    await lib.update(created.id, { status: 'processing' })
+    const seen: string[] = []
+    const hooks = fakeHooks((manifest) => seen.push(`${manifest.stage}:${manifest.progress}`))
+    await runPipeline(lib, created.id, new AbortController().signal, hooks)
+    const starts = [
+      'inspect:3',
+      'analyze:10',
+      'translate:30',
+      'compose:80',
+      'verify:90',
+      'archive:94',
+    ]
+    const positions = starts.map((entry) => seen.indexOf(entry))
+    expect(positions.every((at) => at >= 0)).toBe(true)
+    expect([...positions].sort((a, b) => a - b)).toEqual(positions)
+    expect(lib.require(created.id).outputs.mono?.bytes).toBe(4)
+
+    const second = await lib.create({
+      path: pdf,
+      translator,
+      settingsSnapshot: defaultTranslationRuntime(),
+    })
+    await lib.update(second.id, { status: 'processing' })
+    const controller = new AbortController()
+    const aborting: PipelineHooks = {
+      ...fakeHooks(() => undefined),
+      verify: () => {
+        controller.abort()
+        return Promise.resolve({
+          monoPages: 1,
+          dualPages: 2,
+          sizeMismatches: 0,
+          translatedPagesWithoutCjk: [],
+        })
+      },
+    }
+    await expect(runPipeline(lib, second.id, controller.signal, aborting)).rejects.toMatchObject({
+      code: 'cancelled',
+    })
+    await access(join(dir, 'documents', second.id, 'work', 'mono.pdf'))
+    expect(lib.require(second.id).outputs.mono).toBeNull()
+  })
 })
+
+function fakeHooks(onChanged: NonNullable<PipelineHooks['onChanged']>): PipelineHooks {
+  const analysis = {
+    version: 2,
+    pages: 1,
+    pageSizes: [[612, 792]],
+    paragraphs: [{ id: 'p0', page: 0, text: 'Hello', translatable: true }],
+    fontMap: {},
+    forms: [],
+    stats: { glyphs: 5, lines: 1, paragraphs: 1, translatable: 1, runs: 0 },
+  } as unknown as AnalysisResult
+  return {
+    inspect: () =>
+      Promise.resolve({
+        pages: 1,
+        pageSizes: [[612, 792]],
+        rotations: [0],
+        textChars: 5,
+        visibleTextChars: 5,
+        hasTextLayer: true,
+      }),
+    analyze: () => Promise.resolve(analysis),
+    translate: () =>
+      Promise.resolve({
+        translations: [{ id: 'p0', text: '你好', kept: false }],
+        usage: { input: 1, output: 1 },
+        kept: 0,
+        translated: 1,
+      }),
+    compose: async (input) => {
+      await writeFile(input.monoPath, 'mono')
+      if (input.dualPath) await writeFile(input.dualPath, 'dual')
+      return {
+        monoBytes: 4,
+        dualBytes: 4,
+        paragraphsWritten: 1,
+        paragraphsKept: 0,
+        opsRemoved: 1,
+        runsRedrawn: 0,
+        warnings: [],
+        writtenPages: [0],
+      }
+    },
+    verify: () =>
+      Promise.resolve({
+        monoPages: 1,
+        dualPages: 2,
+        sizeMismatches: 0,
+        translatedPagesWithoutCjk: [],
+      }),
+    fonts,
+    bilingual: () => true,
+    minFontScale: () => 0.6,
+    onChanged,
+  }
+}

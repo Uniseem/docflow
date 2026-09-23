@@ -1,4 +1,4 @@
-import { Alert, Button, CloseButton, Label, Modal, TextField, Input, toast } from '@heroui/react'
+import { Alert, Button, CloseButton, Label, Modal, TextField, Input } from '@heroui/react'
 import { FileText } from 'lucide-react'
 import { useState } from 'react'
 import { MAX_PDF_BYTES } from '../../../shared/constants'
@@ -6,6 +6,7 @@ import { formatBytes } from '../../../shared/text'
 import { invoke } from '../../api/invoke'
 import { TranslatorSelect } from '../../components/TranslatorSelect'
 import { basename, fileStem } from '../../lib/labels'
+import { notify, notifyError } from '../../lib/notify'
 import { defaultTranslatorKey, parseTranslatorKey, translatorOptions } from '../../lib/translators'
 import { useDocumentsStore } from '../../store/documents'
 import { useSettingsStore } from '../../store/settings'
@@ -33,9 +34,11 @@ export function NewTranslationModal() {
   // Settings may still be loading when the modal opens (e.g. macOS open-file at launch);
   // fall back to the default once they arrive instead of leaving nothing selected.
   const translatorKey = pickedKey ?? defaultTranslatorKey(settings)
-  const [title, setTitle] = useState(() =>
-    preset.length === 1 ? fileStem(basename(preset[0] ?? '')) : '',
-  )
+  // null until the user edits the title: the field then shows the current file's stem, and
+  // no title is sent, so the PDF's own metadata title can still replace the filename (05 §5.7).
+  const [titleDraft, setTitleDraft] = useState<string | null>(null)
+  const onlyFile = files.length === 1 ? files[0] : undefined
+  const title = titleDraft ?? (onlyFile ? fileStem(basename(onlyFile.path)) : '')
   const [pending, setPending] = useState(false)
   const [failures, setFailures] = useState<Array<{ path: string; message: string }>>([])
 
@@ -54,8 +57,9 @@ export function NewTranslationModal() {
     try {
       const { paths } = await invoke('dialog:pickPdfs', {})
       setFiles((current) => mergePaths(current, paths))
-    } catch {
-      // invoke() already reports internal errors; a failed picker leaves the list unchanged.
+    } catch (error) {
+      // A failed picker leaves the list unchanged.
+      notifyError(error)
     }
   }
 
@@ -65,17 +69,13 @@ export function NewTranslationModal() {
     setPending(true)
     setFailures([])
     try {
-      const payload =
-        files.length === 1 && title.trim()
-          ? {
-              paths: files.map((file) => file.path),
-              translator: parsed,
-              title: title.trim(),
-            }
-          : { paths: files.map((file) => file.path), translator: parsed }
+      const customTitle = files.length === 1 && titleDraft !== null ? titleDraft.trim() : ''
+      const payload = customTitle
+        ? { paths: files.map((file) => file.path), translator: parsed, title: customTitle }
+        : { paths: files.map((file) => file.path), translator: parsed }
       const result = await invoke('documents:create', payload)
       if (result.created.length > 0) {
-        toast.success(`已添加 ${result.created.length} 个文档`)
+        notify.success(`已添加 ${result.created.length} 个文档`)
         const docs = useDocumentsStore.getState()
         if (docs.filter === 'completed' || docs.filter === 'failed') docs.setFilter('all')
         for (const item of result.created) docs.upsert(item)
@@ -134,7 +134,7 @@ export function NewTranslationModal() {
             <div>
               <p className="mb-2 text-sm font-medium">文件</p>
               {files.length === 0 ? (
-                <div className="flex w-full flex-col items-center gap-2 rounded-lg border border-dashed border-divider px-4 py-8 text-sm">
+                <div className="flex w-full flex-col items-center gap-2 rounded-lg border border-dashed border-separator px-4 py-8 text-sm">
                   将文件拖到这里
                   <Button variant="secondary" onPress={() => void addFromDialog()}>
                     选择文件…
@@ -183,7 +183,7 @@ export function NewTranslationModal() {
               由所选的大模型翻译；速度和费用取决于服务商和模型。
             </p>
             {files.length === 1 ? (
-              <TextField value={title} onChange={setTitle}>
+              <TextField value={title} onChange={setTitleDraft}>
                 <Label>标题</Label>
                 <Input placeholder="默认使用文件名" />
               </TextField>

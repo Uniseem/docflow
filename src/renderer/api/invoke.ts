@@ -1,4 +1,3 @@
-import { toast } from '@heroui/react'
 import type { z } from 'zod'
 import type {
   ChannelName,
@@ -7,6 +6,7 @@ import type {
   PushChannelName,
   PushChannels,
 } from '../../shared/ipc'
+import { notify } from '../lib/notify'
 import { toDocflowError } from './errors'
 
 export function hasApi(): boolean {
@@ -25,8 +25,7 @@ export async function invoke<K extends ChannelName>(
   } catch (raw) {
     const err = toDocflowError(raw)
     if (!err.user) {
-      toast.danger('发生内部错误，详情见日志', {
-        timeout: 6000,
+      notify.danger('发生内部错误，详情见日志', {
         actionProps: {
           children: '打开日志',
           onPress: () => {

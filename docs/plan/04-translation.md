@@ -7,6 +7,10 @@
 `src/shared/types.ts`：
 
 ```ts
+// z.url() 自己检查协议且不会抛错：在 .url() 后面接 .refine((u) => new URL(u)…)，zod 4 对
+// 无效输入仍会执行 refine，new URL() 抛出的 TypeError 会从 parse() 里漏出来（M5 复查第 22 条）。
+export const HttpUrl = z.url({ protocol: /^https?$/ }) // 必须写 `://`，`127.0.0.1:7890` 不通过
+
 export const ProviderType = z.enum(['openai', 'azure', 'anthropic', 'gemini'])
 // 标签：openai → 'OpenAI 兼容'，azure → 'Azure OpenAI'，anthropic → 'Anthropic'，gemini → 'Gemini'
 
@@ -24,10 +28,7 @@ export const ProviderConfig = z
     id: z.string().regex(/^[a-z0-9-_]{1,64}$/),
     name: z.string().min(1).max(64),
     type: ProviderType,
-    baseUrl: z
-      .string()
-      .url()
-      .refine((u) => /^https?:$/.test(new URL(u).protocol)),
+    baseUrl: HttpUrl,
     enabled: z.boolean().default(true),
     models: z.array(ModelConfig).max(500), // id 唯一
     concurrency: z.number().int().min(1).max(2000).default(100),
@@ -144,13 +145,27 @@ class ProviderError extends Error {
 retryable = kind === 'transient' || kind === 'rateLimited'
 ```
 
-按 HTTP 状态：401/402/403 → credential（403 且正文同时含 `rate` 与 `limit` → rateLimited）；404 → fatal；408/409/425/500/502/503/504/520–529 → transient；429 → rateLimited（正文含 `insufficient` 或 `exceeded your current quota` → credential）；413 → oversized；400/422 → 按正文分类；其他 4xx → rejected；网络错误/中止 → transient。
+按 HTTP 状态：401/402 → credential；403 → 正文同时含 `rate` 与 `limit` → rateLimited，否则按正文分类，正文不能证明是 Key 的问题时 → fatal（地区限制、代理拦截、Key 无权使用该模型都会回 403，不能一律说成 Key 无效）；404 → fatal；408/409/425/500/502/503/504/520–529 → transient；429 → rateLimited（正文含 `insufficient` 或 `exceeded your current quota` → credential）；413 → oversized；400/422 → 按正文分类；其他 4xx → rejected；网络错误/中止 → transient。
 
 按正文（小写匹配）：`context length|context_length|maximum context|too many tokens|token limit|max_tokens|input is too long|prompt is too long` → oversized；`content_filter|content filter|safety|sensitive|violat|inappropriate|blocked` → refused；`invalid api key|invalid_api_key|incorrect api key|authentication|unauthorized|api key not valid|permission denied` → credential；`model not found|does not exist|no such model|unknown model|not supported model|model_not_found` → fatal；`rate limit|rate_limit|too many requests|quota exceeded|throttl` → rateLimited；`insufficient` 且含 `balance|quota|credit` → credential；否则 rejected。
 
 `Retry-After` 头：秒数或 HTTP 日期，转毫秒，上限 300 s；rateLimited 无头时默认 5 s。
 
 `redact(text)`：把出现的所有 Key（按已知 Key 列表）替换为 `[redacted]`；`snippet(text)` 截到 400 字符。用户可见的错误信息格式：`翻译服务返回错误（HTTP 429）：<snippet>`。
+
+文档因服务商错误失败时，界面文案由 `userFacingProviderError()` 给出。**只有 credential 才提 API Key**，其他都保留服务端原因（`<snippet>`）并说明下一步：
+
+| 情况                                 | 文案                                                                                                                         |
+| ------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------- |
+| credential，402 或正文提到余额/额度  | `账户余额不足或 API Key 已欠费（HTTP n）。请到服务商后台充值，或在设置中更换 API Key。`                                      |
+| credential，其他                     | `API Key 无效或已欠费（HTTP n）。请在设置中检查密钥。`（KeyRing 自己的「全部 N 个 API Key…」原样显示）                       |
+| fatal 且正文提到 model/模型          | `找不到这个模型（HTTP n）：<snippet>。请在设置中重新选择模型。`                                                              |
+| 403                                  | `翻译服务拒绝了请求（HTTP 403）：<snippet>。请检查代理设置、所在地区是否受这个服务支持，以及 API Key 是否有权使用这个模型。` |
+| 404                                  | `翻译服务返回错误（HTTP 404）：<snippet>。请在设置中检查服务地址是否正确。`                                                  |
+| 其他 fatal                           | `翻译服务返回了无法恢复的错误（HTTP n）：<snippet>。`                                                                        |
+| rateLimited                          | `翻译服务返回错误（HTTP 429）：<snippet>。请求过于频繁，请稍后重试或在设置中降低并发数。`                                    |
+| 没有 HTTP 状态（网络错误、重试用尽） | 错误自身的 message，例如 `无法连接翻译服务：<原因>`、`翻译请求多次重试后仍然失败：<原因>`                                    |
+| 其他                                 | `翻译服务返回错误（HTTP n）：<snippet>`                                                                                      |
 
 ## 4.6 模型列表与检查（`providers.ts`）
 
@@ -161,7 +176,7 @@ retryable = kind === 'transient' || kind === 'rateLimited'
 
 - 存储：`<library>/secrets.bin` = `safeStorage.encryptString(JSON.stringify({ [providerId]: rawValue }))`；读取时 `decryptString`；`safeStorage.isEncryptionAvailable()` 为 false → 保存时报用户错误 `这台电脑的系统钥匙串不可用，无法安全保存 API Key。`。内存中保存解密后的 Map；渲染进程只拿到 `keyConfigured`、`keyMasked`。
 - `splitKeys(raw)`：按 `[,，\s;]+` 拆分、去空。`mask(raw)`：Key ≥ 12 位时显示 `••••••••` + 末 4 位，否则 `••••••••`；多个时加 `（共 N 个）`。
-- `KeyRing`（每个服务商一个）：轮询 `next = (next+1) % usable.length`；某个 Key 返回 credential 且总数 > 1 → 该 Key 下架 600 s（`KEY_BENCH_MS`），错误降级为 transient 让任务继续；全部下架 → credential 错误 `全部 N 个 API Key 都无法使用：<最近错误>`。`secrets.set` 后重置 KeyRing。
+- `KeyRing`（每个服务商一个）：轮询 `next = (next+1) % usable.length`；某个 Key 返回 credential 且总数 > 1 → 该 Key 下架 600 s（`KEY_BENCH_MS`），错误降级为 transient 让任务继续；全部下架 → credential 错误 `全部 N 个 API Key 都无法使用：<最近错误>`。`secrets:set` 后作废该服务商的池与 KeyRing（4.8 `invalidate`），下一次请求读新 Key。
 
 ## 4.8 并发池（`pool.ts`）
 
@@ -170,7 +185,9 @@ retryable = kind === 'transient' || kind === 'rateLimited'
 - `configured` = `provider.concurrency`；`current` 初始 = configured；队列 FIFO（容量 4096，满了 `submit` 等待）。
 - 自适应：收到 rateLimited → `current = max(1, floor(current/2))`，10 s 冷却期内只降一次；在降过之后每累计 `max(current, 4)` 次成功 → `current = min(configured, current + max(1, floor(current/4)))`。
 - `setConfigured(n)` 实时生效（降低时不打断进行中的请求，等待自然回落）。
-- `execute(request) → Promise<ChatReply>`：拿槽 → 选 Key → fetch → 解析 → 更新自适应 → 释放。
+- `execute(request, signal, provider) → Promise<ChatReply>`：拿槽 → 选 Key → fetch → 解析 → 更新自适应 → 释放。**池不保存服务商配置**：每个请求带上调用方（文档开始翻译时）的 provider 快照，所以两篇按不同设置开始的文档不会互相改掉对方的服务地址。上层统一走 `TranslationPools.execute(provider, request, signal)`，每次尝试都重新取池。
+- 排队可中断：`signal` abort 时排队中的请求立刻离开队列（不占槽），进行中的请求随 fetch 一起中止；调用方取消（文档取消、应用退出）一律以 `UserError('cancelled')` 结束，不当作服务商错误、不发重试事件。
+- `TranslationPools.invalidate(providerId?)`：丢弃该服务商（不传则全部）的池与 KeyRing，下一次请求重新读 Key 与并发数。`secrets:set`、`providers:save`、`providers:delete` 之后作废对应服务商，更改文档库时全部作废（换库后不会再用旧库的 Key）；已在进行中的请求在旧池上完成。
 - 文档级并发 `perDocumentConcurrency` 在 `translate-document.ts` 用 `pLimit` 风格的信号量实现（自己写 20 行，不引库）。
 
 ## 4.9 批处理与提示词（`batch.ts`、`protect.ts`）
@@ -252,7 +269,7 @@ PDF 模式下每个片段文本里的 `{vN}` 在送模型前替换为 `DOCFLOWKE
 
 **传输级** `submit()`：最多 `SUBMIT_ATTEMPTS (8)` 次。`fatal | credential` → 立即永久失败（credential 在 KeyRing 有其他 Key 时已被降级）；`rejected` → 计入连续拒绝，不重试本次（返回失败给上层阶梯）；`transient | rateLimited` → `backoff = min(2^(attempt-1), 32) × 1000 ms`（attempt 从 1 起，指数上限 5），`delay = max(retryAfterMs ?? backoff, backoff/2) + jitter(0–2040 ms)`；前 `RETRY_NOTICES (12)` 次和第 3 次起的每次都发 warning 事件 `翻译请求失败（<原因>），<n> 秒后重试`；用尽 → 错误 `翻译请求多次重试后仍然失败：<原因>`（可重试错误，由任务级重试处理）。
 
-取消：所有 await 点检查 `signal.aborted`；`fetch` 传入同一 `signal`。
+取消：所有 await 点检查 `signal.aborted`；`fetch` 传入同一 `signal`；重试等待（`delay`）与并发池排队都随 `signal` 立即结束，取消或删除不会被几十秒的退避卡住。
 
 ## 4.12 缓存（`cache.ts`）
 
@@ -293,15 +310,17 @@ export async function checkModel(
 
 // pool.ts
 export class ProviderPool {
-  constructor(p: ProviderConfig, keys: KeyRing, fetchFn: FetchFn)
-  execute(req: ChatRequest, signal: AbortSignal): Promise<ChatReply>
+  constructor(p: ProviderConfig, keys: KeyRing, fetchFn: FetchFn) // p 只用于初始并发数与默认 provider
+  execute(req: ChatRequest, signal: AbortSignal, provider?: ProviderConfig): Promise<ChatReply>
   setConfigured(n: number): void
   stats(): PoolStats
 }
 export class TranslationPools {
   get(p: ProviderConfig): ProviderPool
+  execute(p: ProviderConfig, req: ChatRequest, signal: AbortSignal): Promise<ChatReply>
   configure(providers: ProviderConfig[]): void
   resetKeys(providerId: string): void
+  invalidate(providerId?: string): void
 }
 
 // translate-document.ts

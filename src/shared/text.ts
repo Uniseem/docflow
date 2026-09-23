@@ -24,18 +24,15 @@ export function suggestedNames(
   }
 }
 
+/** 06 §6.8: under 1 MB in whole KB, then MB with one decimal, from 1 GB on GB with two. */
 export function formatBytes(bytes: number): string {
-  if (!Number.isFinite(bytes) || bytes < 0) return '0 B'
-  if (bytes < 1024) return `${Math.round(bytes)} B`
-  const units = ['KB', 'MB', 'GB', 'TB'] as const
-  let value = bytes / 1024
-  let unit = 0
-  while (value >= 1024 && unit < units.length - 1) {
-    value /= 1024
-    unit += 1
-  }
-  const digits = value >= 10 ? 0 : 1
-  return `${value.toFixed(digits)} ${units[unit]}`
+  if (!Number.isFinite(bytes) || bytes <= 0) return '0 KB'
+  const kb = bytes / 1024
+  // Round first so 1023.6 KB shows as 1.0 MB rather than 1024 KB.
+  if (Math.round(kb) < 1024) return `${Math.max(1, Math.round(kb))} KB`
+  const mb = kb / 1024
+  if (Number(mb.toFixed(1)) < 1024) return `${mb.toFixed(1)} MB`
+  return `${(mb / 1024).toFixed(2)} GB`
 }
 
 export function formatRelativeTime(iso: string, now = new Date()): string {

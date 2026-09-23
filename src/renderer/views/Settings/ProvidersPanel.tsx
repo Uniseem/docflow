@@ -15,19 +15,27 @@ import {
   Switch,
   TextArea,
   TextField,
-  toast,
   Tooltip,
 } from '@heroui/react'
 import { Minus } from 'lucide-react'
 import { useMemo, useState } from 'react'
-import { EXTRA_BODY_FORBIDDEN } from '../../../shared/constants'
+import type { z } from 'zod'
+import { EXTRA_BODY_FORBIDDEN, MAX_MODELS_PER_PROVIDER } from '../../../shared/constants'
 import { chatUrl } from '../../../shared/provider-url'
 import { uniqueProviderId } from '../../../shared/presets'
-import { PROVIDER_TYPE_LABELS, ProviderConfig, type ProviderType } from '../../../shared/types'
+import {
+  HttpUrl,
+  ModelConfig,
+  PROVIDER_TYPE_LABELS,
+  ProviderConfig,
+  type ProviderType,
+} from '../../../shared/types'
 import type { ModelInfo } from '../../../shared/types'
 import type { SettingsView, SettingsViewProvider } from '../../../shared/view'
+import { toDocflowError } from '../../api/errors'
 import { invoke } from '../../api/invoke'
 import { ConfirmDialog } from '../../components/ConfirmDialog'
+import { notify, notifyError } from '../../lib/notify'
 import { useSettingsStore } from '../../store/settings'
 
 const GROUP_LABEL: Record<string, string> = {
@@ -36,12 +44,53 @@ const GROUP_LABEL: Record<string, string> = {
   local: '本机模型',
 }
 
+const NAME_MAX = 64
+const NAME_REQUIRED = '请填写名称'
+const NAME_TOO_LONG = `名称不能超过 ${NAME_MAX} 个字符`
+const BASE_URL_INVALID = '请填写以 http:// 或 https:// 开头的完整地址'
+
+function nameProblem(name: string): string | null {
+  const trimmed = name.trim()
+  if (!trimmed) return NAME_REQUIRED
+  if (trimmed.length > NAME_MAX) return NAME_TOO_LONG
+  return null
+}
+
+function baseUrlProblem(baseUrl: string): string | null {
+  return HttpUrl.safeParse(baseUrl).success ? null : BASE_URL_INVALID
+}
+
+/** Chinese reason for the first issue of a rejected ProviderConfig. */
+function providerIssueMessage(error: z.ZodError): string {
+  const issue = error.issues[0]
+  const field = issue?.path[0]
+  if (field === 'name') return NAME_TOO_LONG
+  if (field === 'baseUrl') return `API 地址无效：${BASE_URL_INVALID}`
+  if (field === 'extraBody') return '附加请求参数不能覆盖 model、messages 等字段'
+  if (field === 'concurrency') return '并发请求数需在 1–2000 之间'
+  if (field === 'models') {
+    return issue?.code === 'too_big'
+      ? `模型不能超过 ${MAX_MODELS_PER_PROVIDER} 个`
+      : '模型 ID 重复或无效'
+  }
+  return '输入无效'
+}
+
+/** The saved config of a provider, freshest first (the store may be ahead of props). */
+function savedProvider(fallback: SettingsViewProvider): SettingsViewProvider {
+  return (
+    useSettingsStore.getState().view?.providers.find((item) => item.id === fallback.id) ?? fallback
+  )
+}
+
 export function ProvidersPanel() {
   const view = useSettingsStore((s) => s.view)
   const selectedId = useSettingsStore((s) => s.selectedProviderId)
   const select = useSettingsStore((s) => s.selectProvider)
   const apply = useSettingsStore((s) => s.apply)
   const [customOpen, setCustomOpen] = useState(false)
+  // Remounts the modal on every open so it never shows the previous input.
+  const [customKey, setCustomKey] = useState(0)
   const [deleteOpen, setDeleteOpen] = useState(false)
   if (!view) return null
   const selected = view.providers.find((item) => item.id === selectedId) ?? null
@@ -55,7 +104,7 @@ export function ProvidersPanel() {
       preset.id,
       snapshot.providers.map((item) => item.id),
     )
-    const provider = ProviderConfig.parse({
+    const parsed = ProviderConfig.safeParse({
       id,
       name: preset.name,
       type: preset.type,
@@ -65,14 +114,22 @@ export function ProvidersPanel() {
       concurrency: 100,
       preset: preset.id,
     })
-    const next = (await invoke('providers:save', { provider })) as NonNullable<typeof snapshot>
-    apply(next)
-    select(id)
+    if (!parsed.success) {
+      notify.danger(`设置未保存：${providerIssueMessage(parsed.error)}`)
+      return
+    }
+    try {
+      const next = (await invoke('providers:save', { provider: parsed.data })) as SettingsView
+      apply(next)
+      select(id)
+    } catch (error) {
+      notifyError(error, '设置未保存：')
+    }
   }
 
   return (
     <div className="flex h-full min-h-0">
-      <div className="flex w-[240px] shrink-0 flex-col border-r border-divider">
+      <div className="flex w-[240px] shrink-0 flex-col border-r border-separator">
         <div className="flex items-center justify-between gap-2 px-3 py-2">
           <p className="text-sm font-medium">大模型服务商</p>
           <div data-testid="add-provider">
@@ -83,8 +140,10 @@ export function ProvidersPanel() {
               <Dropdown.Popover>
                 <Dropdown.Menu
                   onAction={(key) => {
-                    if (key === 'custom') setCustomOpen(true)
-                    else void addPreset(String(key))
+                    if (key === 'custom') {
+                      setCustomKey((current) => current + 1)
+                      setCustomOpen(true)
+                    } else void addPreset(String(key))
                   }}
                 >
                   {(['domestic', 'international', 'local'] as const).map((group) => (
@@ -132,7 +191,7 @@ export function ProvidersPanel() {
             </ListBox.Item>
           ))}
         </ListBox>
-        <div className="flex gap-1 border-t border-divider p-2">
+        <div className="flex gap-1 border-t border-separator p-2">
           <Button
             isIconOnly
             size="sm"
@@ -152,7 +211,7 @@ export function ProvidersPanel() {
           <p className="text-sm text-foreground/60">添加一个服务商以开始翻译。</p>
         )}
       </div>
-      <CustomProviderModal isOpen={customOpen} onOpenChange={setCustomOpen} />
+      <CustomProviderModal key={customKey} isOpen={customOpen} onOpenChange={setCustomOpen} />
       <ConfirmDialog
         isOpen={deleteOpen}
         title={`删除“${selected?.name ?? ''}”？`}
@@ -178,49 +237,167 @@ function providerStatus(provider: SettingsViewProvider): string {
   return `${provider.models.length} 个模型`
 }
 
+type ProviderPatch = Partial<
+  Pick<ProviderConfig, 'name' | 'baseUrl' | 'enabled' | 'models' | 'concurrency' | 'extraBody'>
+>
+
 function ProviderDetail(props: { provider: SettingsViewProvider }) {
   const apply = useSettingsStore((s) => s.apply)
   const update = useSettingsStore((s) => s.update)
   const [name, setName] = useState(props.provider.name)
+  const [nameError, setNameError] = useState<string | null>(null)
   const [baseUrl, setBaseUrl] = useState(props.provider.baseUrl)
+  const [baseUrlError, setBaseUrlError] = useState<string | null>(null)
   const [keyDraft, setKeyDraft] = useState('')
   const [extra, setExtra] = useState(
     props.provider.extraBody ? JSON.stringify(props.provider.extraBody, null, 2) : '',
   )
   const [extraError, setExtraError] = useState<string | null>(null)
   const [addModelOpen, setAddModelOpen] = useState(false)
+  const [addModelKey, setAddModelKey] = useState(0)
   const [pickOpen, setPickOpen] = useState(false)
   const [remoteModels, setRemoteModels] = useState<ModelInfo[]>([])
+  const [listing, setListing] = useState(false)
   const [checks, setChecks] = useState<Record<string, string>>({})
+  const [checking, setChecking] = useState<ReadonlySet<string>>(() => new Set())
 
-  async function savePatch(patch: Partial<typeof props.provider>) {
-    const next = ProviderConfig.parse({
-      id: props.provider.id,
-      name: patch.name ?? name,
-      type: props.provider.type,
-      baseUrl: patch.baseUrl ?? baseUrl,
-      enabled: patch.enabled ?? props.provider.enabled,
-      models: patch.models ?? props.provider.models,
-      concurrency: patch.concurrency ?? props.provider.concurrency,
-      ...(props.provider.preset ? { preset: props.provider.preset } : {}),
-      ...(patch.extraBody !== undefined
-        ? patch.extraBody
-          ? { extraBody: patch.extraBody }
-          : {}
-        : props.provider.extraBody
-          ? { extraBody: props.provider.extraBody }
-          : {}),
+  /**
+   * Saves `patch` on top of the saved config. Unsaved drafts of other fields are never sent,
+   * so one invalid input cannot make later saves fail. Resolves false (after a toast) on error.
+   */
+  async function savePatch(patch: ProviderPatch): Promise<boolean> {
+    const saved = savedProvider(props.provider)
+    const extraBody = 'extraBody' in patch ? patch.extraBody : saved.extraBody
+    const parsed = ProviderConfig.safeParse({
+      id: saved.id,
+      name: patch.name ?? saved.name,
+      type: saved.type,
+      baseUrl: patch.baseUrl ?? saved.baseUrl,
+      enabled: patch.enabled ?? saved.enabled,
+      models: patch.models ?? saved.models,
+      concurrency: patch.concurrency ?? saved.concurrency,
+      ...(saved.preset ? { preset: saved.preset } : {}),
+      ...(extraBody ? { extraBody } : {}),
     })
-    const viewNext = (await invoke('providers:save', { provider: next })) as SettingsView
-    apply(viewNext)
-    if (patch.models && patch.models.length > 0 && !viewNext.defaultTranslator) {
-      await update({
-        defaultTranslator: { providerId: props.provider.id, model: patch.models[0]!.id },
+    if (!parsed.success) {
+      notify.danger(`设置未保存：${providerIssueMessage(parsed.error)}`)
+      return false
+    }
+    try {
+      const viewNext = (await invoke('providers:save', { provider: parsed.data })) as SettingsView
+      apply(viewNext)
+      const firstModel = patch.models?.[0]
+      if (firstModel && !viewNext.defaultTranslator) {
+        await update({ defaultTranslator: { providerId: saved.id, model: firstModel.id } })
+      }
+      return true
+    } catch (error) {
+      notifyError(error, '设置未保存：')
+      return false
+    }
+  }
+
+  /** Validates the API address draft; shows the field error and returns null when invalid. */
+  function validBaseUrl(): string | null {
+    const problem = baseUrlProblem(baseUrl)
+    setBaseUrlError(problem)
+    return problem ? null : HttpUrl.parse(baseUrl)
+  }
+
+  async function saveKey(value: string | null) {
+    try {
+      const next = (await invoke('secrets:set', {
+        providerId: props.provider.id,
+        value,
+      })) as SettingsView
+      apply(next)
+      if (value !== null) setKeyDraft('')
+    } catch (error) {
+      notifyError(error)
+    }
+  }
+
+  async function checkModel(modelId: string) {
+    const url = validBaseUrl()
+    if (!url) return
+    setChecking((current) => new Set(current).add(modelId))
+    try {
+      const result = await invoke('providers:check', {
+        providerId: props.provider.id,
+        type: props.provider.type,
+        baseUrl: url,
+        ...(keyDraft.trim() ? { key: keyDraft.trim() } : {}),
+        model: modelId,
+      })
+      setChecks((current) => ({
+        ...current,
+        [modelId]: result.ok ? `可用 · ${result.latencyMs} ms · “${result.reply}”` : result.message,
+      }))
+    } catch (error) {
+      // Internal errors were toasted by invoke(); user-facing ones are shown in place.
+      const err = toDocflowError(error)
+      if (err.user) setChecks((current) => ({ ...current, [modelId]: err.message }))
+    } finally {
+      setChecking((current) => {
+        const next = new Set(current)
+        next.delete(modelId)
+        return next
       })
     }
   }
 
+  async function fetchModels() {
+    const url = validBaseUrl()
+    if (!url) return
+    setListing(true)
+    try {
+      const result = await invoke('providers:listModels', {
+        providerId: props.provider.id,
+        type: props.provider.type,
+        baseUrl: url,
+        ...(keyDraft.trim() ? { key: keyDraft.trim() } : {}),
+      })
+      if (result.models.length === 0) {
+        notify.info('服务商没有返回任何模型，请手动添加模型 ID。')
+        return
+      }
+      setRemoteModels(result.models)
+      setPickOpen(true)
+    } catch (error) {
+      notifyError(error)
+    } finally {
+      setListing(false)
+    }
+  }
+
+  function applyExtra() {
+    if (!extra.trim()) {
+      setExtraError(null)
+      void savePatch({ extraBody: undefined })
+      return
+    }
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(extra)
+    } catch {
+      setExtraError('不是有效的 JSON')
+      return
+    }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      setExtraError('不是有效的 JSON')
+      return
+    }
+    const rec = parsed as Record<string, unknown>
+    if (Object.keys(rec).some((key) => (EXTRA_BODY_FORBIDDEN as readonly string[]).includes(key))) {
+      setExtraError('不能覆盖 model、messages 等字段')
+      return
+    }
+    setExtraError(null)
+    void savePatch({ extraBody: rec })
+  }
+
   const previewModel = props.provider.models[0]?.id ?? '<模型>'
+  const remoteIds = new Set(remoteModels.map((item) => item.id))
 
   return (
     <form className="flex max-w-2xl flex-col gap-4" onSubmit={(event) => event.preventDefault()}>
@@ -238,13 +415,23 @@ function ProviderDetail(props: { provider: SettingsViewProvider }) {
       </Switch>
       <TextField
         value={name}
-        onChange={setName}
+        onChange={(value) => {
+          setName(value)
+          if (nameError) setNameError(nameProblem(value))
+        }}
+        isInvalid={Boolean(nameError)}
         onBlur={() => {
-          if (name.trim() && name !== props.provider.name) void savePatch({ name: name.trim() })
+          const problem = nameProblem(name)
+          setNameError(problem)
+          if (problem) return
+          const trimmed = name.trim()
+          setName(trimmed)
+          if (trimmed !== savedProvider(props.provider).name) void savePatch({ name: trimmed })
         }}
       >
         <Label>名称</Label>
         <Input />
+        {nameError ? <FieldError>{nameError}</FieldError> : null}
       </TextField>
       <div>
         <p className="text-sm">接口类型</p>
@@ -252,13 +439,21 @@ function ProviderDetail(props: { provider: SettingsViewProvider }) {
       </div>
       <TextField
         value={baseUrl}
-        onChange={setBaseUrl}
+        onChange={(value) => {
+          setBaseUrl(value)
+          if (baseUrlError) setBaseUrlError(baseUrlProblem(value))
+        }}
+        isInvalid={Boolean(baseUrlError)}
         onBlur={() => {
-          if (baseUrl !== props.provider.baseUrl) void savePatch({ baseUrl })
+          const url = validBaseUrl()
+          if (!url) return
+          setBaseUrl(url)
+          if (url !== savedProvider(props.provider).baseUrl) void savePatch({ baseUrl: url })
         }}
       >
         <Label>API 地址</Label>
         <Input placeholder="https://…/v1" />
+        {baseUrlError ? <FieldError>{baseUrlError}</FieldError> : null}
         <Description>
           请求地址：{chatUrl({ type: props.provider.type, baseUrl }, previewModel)}
         </Description>
@@ -285,39 +480,22 @@ function ProviderDetail(props: { provider: SettingsViewProvider }) {
             <Button
               variant="primary"
               isDisabled={!keyDraft.trim()}
-              onPress={() => {
-                void (async () => {
-                  const next = (await invoke('secrets:set', {
-                    providerId: props.provider.id,
-                    value: keyDraft.trim(),
-                  })) as SettingsView
-                  apply(next)
-                  setKeyDraft('')
-                })()
-              }}
+              onPress={() => void saveKey(keyDraft.trim())}
             >
               保存
             </Button>
             {props.provider.keyConfigured ? (
-              <Button
-                variant="ghost"
-                onPress={() => {
-                  void (async () => {
-                    const next = (await invoke('secrets:set', {
-                      providerId: props.provider.id,
-                      value: null,
-                    })) as SettingsView
-                    apply(next)
-                  })()
-                }}
-              >
+              <Button variant="ghost" onPress={() => void saveKey(null)}>
                 移除
               </Button>
             ) : null}
             {props.provider.keyUrl ? (
               <Button
                 variant="ghost"
-                onPress={() => void invoke('shell:openExternal', { url: props.provider.keyUrl! })}
+                onPress={() => {
+                  const url = props.provider.keyUrl
+                  if (url) invoke('shell:openExternal', { url }).catch(notifyError)
+                }}
               >
                 获取 API Key
               </Button>
@@ -338,26 +516,13 @@ function ProviderDetail(props: { provider: SettingsViewProvider }) {
             <div key={model.id} className="flex items-center gap-2 text-sm">
               <span className="flex-1">{model.name ?? model.id}</span>
               <Tooltip>
-                <Tooltip.Trigger>
+                {/* The trigger is a focusable div role="button"; around a real Button that
+                    makes a nested control with two tab stops, so it only listens for hover. */}
+                <Tooltip.Trigger role="presentation" tabIndex={-1}>
                   <Button
                     size="sm"
-                    onPress={() => {
-                      void (async () => {
-                        const result = await invoke('providers:check', {
-                          providerId: props.provider.id,
-                          type: props.provider.type,
-                          baseUrl,
-                          ...(keyDraft.trim() ? { key: keyDraft.trim() } : {}),
-                          model: model.id,
-                        })
-                        setChecks((current) => ({
-                          ...current,
-                          [model.id]: result.ok
-                            ? `可用 · ${result.latencyMs} ms · “${result.reply}”`
-                            : result.message,
-                        }))
-                      })()
-                    }}
+                    isPending={checking.has(model.id)}
+                    onPress={() => void checkModel(model.id)}
                   >
                     检查
                   </Button>
@@ -368,7 +533,9 @@ function ProviderDetail(props: { provider: SettingsViewProvider }) {
                 aria-label={`删除 ${model.id}`}
                 onPress={() =>
                   void savePatch({
-                    models: props.provider.models.filter((item) => item.id !== model.id),
+                    models: savedProvider(props.provider).models.filter(
+                      (item) => item.id !== model.id,
+                    ),
                   })
                 }
               />
@@ -382,32 +549,16 @@ function ProviderDetail(props: { provider: SettingsViewProvider }) {
             </div>
           ))}
           <div className="flex gap-2">
-            <Button variant="secondary" onPress={() => setAddModelOpen(true)}>
-              手动添加…
-            </Button>
             <Button
-              variant="primary"
+              variant="secondary"
               onPress={() => {
-                void (async () => {
-                  try {
-                    const result = await invoke('providers:listModels', {
-                      providerId: props.provider.id,
-                      type: props.provider.type,
-                      baseUrl,
-                      ...(keyDraft.trim() ? { key: keyDraft.trim() } : {}),
-                    })
-                    if (result.models.length === 0) {
-                      toast.info('服务商没有返回任何模型，请手动添加模型 ID。')
-                      return
-                    }
-                    setRemoteModels(result.models)
-                    setPickOpen(true)
-                  } catch (error) {
-                    toast.danger(error instanceof Error ? error.message : String(error))
-                  }
-                })()
+                setAddModelKey((current) => current + 1)
+                setAddModelOpen(true)
               }}
             >
+              手动添加…
+            </Button>
+            <Button variant="primary" isPending={listing} onPress={() => void fetchModels()}>
               获取模型列表…
             </Button>
           </div>
@@ -425,42 +576,18 @@ function ProviderDetail(props: { provider: SettingsViewProvider }) {
           合并进每个请求，例如 {'{"temperature": 0.3}'}，或关闭思考模式的参数。
         </Description>
       </TextField>
-      <Button
-        className="w-fit"
-        onPress={() => {
-          if (!extra.trim()) {
-            setExtraError(null)
-            void savePatch({ extraBody: undefined })
-            return
-          }
-          try {
-            const parsed: unknown = JSON.parse(extra)
-            if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-              setExtraError('不是有效的 JSON')
-              return
-            }
-            const rec = parsed as Record<string, unknown>
-            for (const key of Object.keys(rec)) {
-              if ((EXTRA_BODY_FORBIDDEN as readonly string[]).includes(key)) {
-                setExtraError('不能覆盖 model、messages 等字段')
-                return
-              }
-            }
-            setExtraError(null)
-            void savePatch({ extraBody: rec })
-          } catch {
-            setExtraError('不是有效的 JSON')
-          }
-        }}
-      >
+      <Button className="w-fit" onPress={applyExtra}>
         应用
       </Button>
       <AddModelModal
+        key={addModelKey}
         isOpen={addModelOpen}
         onOpenChange={setAddModelOpen}
+        existing={props.provider.models.map((item) => item.id)}
         onAdd={(id) => {
-          if (props.provider.models.some((item) => item.id === id)) return
-          void savePatch({ models: [...props.provider.models, { id }] })
+          const saved = savedProvider(props.provider)
+          if (saved.models.some((item) => item.id === id)) return
+          void savePatch({ models: [...saved.models, { id }] })
         }}
       />
       <PickModelsModal
@@ -469,29 +596,41 @@ function ProviderDetail(props: { provider: SettingsViewProvider }) {
         onOpenChange={setPickOpen}
         providerName={props.provider.name}
         models={remoteModels}
-        selected={props.provider.models.map((item) => item.id)}
+        // Preselect only saved models the remote list offers; manually added ones stay as
+        // they are and must not come back as picks (duplicate ids fail the schema).
+        selected={props.provider.models.map((item) => item.id).filter((id) => remoteIds.has(id))}
         onConfirm={(ids) => {
-          const manual = props.provider.models.filter(
-            (item) => !remoteModels.some((remote) => remote.id === item.id),
-          )
-          const picked = ids.map((id) => {
-            const remote = remoteModels.find((item) => item.id === id)
-            return remote?.name ? { id, name: remote.name } : { id }
-          })
-          const added = ids.filter(
-            (id) => !props.provider.models.some((item) => item.id === id),
-          ).length
-          const removed = props.provider.models.filter(
-            (item) =>
-              remoteModels.some((remote) => remote.id === item.id) && !ids.includes(item.id),
-          ).length
-          void savePatch({ models: [...manual, ...picked] }).then(() => {
-            toast.success(`已添加 ${added} 个、移除 ${removed} 个模型。`)
+          const result = pickModels(savedProvider(props.provider).models, remoteModels, ids)
+          void savePatch({ models: result.models }).then((ok) => {
+            if (ok) notify.success(`已添加 ${result.added} 个、移除 ${result.removed} 个模型。`)
           })
         }}
       />
     </form>
   )
+}
+
+/**
+ * Applies a model-list pick: saved models the remote list offers follow the picks, manually
+ * added ones stay; saved entries keep their order and names, new picks follow in remote order.
+ */
+function pickModels(
+  saved: readonly ModelConfig[],
+  remote: readonly ModelInfo[],
+  ids: readonly string[],
+): { models: ModelConfig[]; added: number; removed: number } {
+  const picked = new Set(ids)
+  const remoteIds = new Set(remote.map((item) => item.id))
+  const kept = saved.filter((item) => !remoteIds.has(item.id) || picked.has(item.id))
+  const keptIds = new Set(kept.map((item) => item.id))
+  const additions: ModelConfig[] = remote
+    .filter((item) => picked.has(item.id) && !keptIds.has(item.id))
+    .map((item) => (item.name ? { id: item.id, name: item.name } : { id: item.id }))
+  return {
+    models: [...kept, ...additions],
+    added: additions.length,
+    removed: saved.length - kept.length,
+  }
 }
 
 function NumberFieldLike(props: { value: number; onChange: (value: number) => void }) {
@@ -502,8 +641,9 @@ function NumberFieldLike(props: { value: number; onChange: (value: number) => vo
       onChange={setText}
       onBlur={() => {
         const n = Number(text)
-        if (Number.isInteger(n) && n >= 1 && n <= 2000) props.onChange(n)
-        else setText(String(props.value))
+        if (Number.isInteger(n) && n >= 1 && n <= 2000) {
+          if (n !== props.value) props.onChange(n)
+        } else setText(String(props.value))
       }}
     >
       <Label>并发请求数</Label>
@@ -519,9 +659,18 @@ function NumberFieldLike(props: { value: number; onChange: (value: number) => vo
 function AddModelModal(props: {
   isOpen: boolean
   onOpenChange: (open: boolean) => void
+  existing: readonly string[]
   onAdd: (id: string) => void
 }) {
   const [id, setId] = useState('')
+  const trimmed = id.trim()
+  const problem = !trimmed
+    ? null
+    : props.existing.includes(trimmed)
+      ? '这个模型已在列表中'
+      : ModelConfig.shape.id.safeParse(trimmed).success
+        ? null
+        : '模型 ID 不能超过 256 个字符'
   // Controlled modal without a trigger: drive Modal.Backdrop directly (HeroUI "Controlled"
   // example). A trigger-less <Modal> root is a DialogTrigger with no pressable child.
   return (
@@ -532,9 +681,10 @@ function AddModelModal(props: {
             <Modal.Heading>添加模型</Modal.Heading>
           </Modal.Header>
           <Modal.Body>
-            <TextField value={id} onChange={setId} autoFocus>
+            <TextField value={id} onChange={setId} isInvalid={Boolean(problem)} autoFocus>
               <Label>模型 ID</Label>
               <Input />
+              {problem ? <FieldError>{problem}</FieldError> : null}
               <Description>与服务商文档中的模型名称一致，例如 deepseek-chat。</Description>
             </TextField>
           </Modal.Body>
@@ -544,10 +694,9 @@ function AddModelModal(props: {
             </Button>
             <Button
               variant="primary"
-              isDisabled={!id.trim()}
+              isDisabled={!trimmed || Boolean(problem)}
               onPress={() => {
-                props.onAdd(id.trim())
-                setId('')
+                props.onAdd(trimmed)
                 props.onOpenChange(false)
               }}
             >
@@ -596,8 +745,11 @@ function PickModelsModal(props: {
               selectionMode="multiple"
               selectedKeys={picked}
               onSelectionChange={(keys) => {
-                if (keys === 'all') setPicked(new Set(filtered.map((item) => item.id)))
-                else setPicked(new Set([...keys].map(String)))
+                // "Select all" covers the visible (filtered) rows; picks hidden by the search
+                // stay picked.
+                if (keys === 'all') {
+                  setPicked((current) => new Set([...current, ...filtered.map((item) => item.id)]))
+                } else setPicked(new Set([...keys].map(String)))
               }}
               className="min-h-0 flex-1 overflow-auto"
             >
@@ -649,7 +801,48 @@ function CustomProviderModal(props: { isOpen: boolean; onOpenChange: (open: bool
   const [name, setName] = useState('')
   const [type, setType] = useState<ProviderType>('openai')
   const [baseUrl, setBaseUrl] = useState('')
+  const [nameError, setNameError] = useState<string | null>(null)
+  const [baseUrlError, setBaseUrlError] = useState<string | null>(null)
+  const [pending, setPending] = useState(false)
   if (!view) return null
+
+  async function add() {
+    const nameIssue = nameProblem(name)
+    const urlIssue = baseUrlProblem(baseUrl)
+    setNameError(nameIssue)
+    setBaseUrlError(urlIssue)
+    if (nameIssue || urlIssue) return
+    const current = useSettingsStore.getState().view ?? view
+    const id = uniqueProviderId(
+      'custom',
+      (current?.providers ?? []).map((item) => item.id),
+    )
+    const parsed = ProviderConfig.safeParse({
+      id,
+      name: name.trim(),
+      type,
+      baseUrl,
+      enabled: true,
+      models: [],
+      concurrency: 100,
+    })
+    if (!parsed.success) {
+      notify.danger(`设置未保存：${providerIssueMessage(parsed.error)}`)
+      return
+    }
+    setPending(true)
+    try {
+      const next = (await invoke('providers:save', { provider: parsed.data })) as SettingsView
+      apply(next)
+      select(id)
+      props.onOpenChange(false)
+    } catch (error) {
+      notifyError(error, '设置未保存：')
+    } finally {
+      setPending(false)
+    }
+  }
+
   return (
     <Modal.Backdrop isDismissable isOpen={props.isOpen} onOpenChange={props.onOpenChange}>
       <Modal.Container size="md">
@@ -658,9 +851,17 @@ function CustomProviderModal(props: { isOpen: boolean; onOpenChange: (open: bool
             <Modal.Heading>自定义服务商</Modal.Heading>
           </Modal.Header>
           <Modal.Body className="flex flex-col gap-3">
-            <TextField value={name} onChange={setName}>
+            <TextField
+              value={name}
+              onChange={(value) => {
+                setName(value)
+                if (nameError) setNameError(nameProblem(value))
+              }}
+              isInvalid={Boolean(nameError)}
+            >
               <Label>名称</Label>
               <Input placeholder="例如 公司网关" />
+              {nameError ? <FieldError>{nameError}</FieldError> : null}
             </TextField>
             <Select
               value={type}
@@ -696,9 +897,20 @@ function CustomProviderModal(props: { isOpen: boolean; onOpenChange: (open: bool
                 </ListBox>
               </Select.Popover>
             </Select>
-            <TextField value={baseUrl} onChange={setBaseUrl}>
+            <TextField
+              value={baseUrl}
+              onChange={(value) => {
+                setBaseUrl(value)
+                if (baseUrlError) setBaseUrlError(baseUrlProblem(value))
+              }}
+              onBlur={() => {
+                if (baseUrl.trim()) setBaseUrlError(baseUrlProblem(baseUrl))
+              }}
+              isInvalid={Boolean(baseUrlError)}
+            >
               <Label>API 地址</Label>
               <Input />
+              {baseUrlError ? <FieldError>{baseUrlError}</FieldError> : null}
               <Description>
                 OpenAI 兼容接口填写到 /v1 为止，程序会在后面加上 /chat/completions。
               </Description>
@@ -710,28 +922,9 @@ function CustomProviderModal(props: { isOpen: boolean; onOpenChange: (open: bool
             </Button>
             <Button
               variant="primary"
+              isPending={pending}
               isDisabled={!name.trim() || !baseUrl.trim()}
-              onPress={() => {
-                void (async () => {
-                  const id = uniqueProviderId(
-                    'custom',
-                    view.providers.map((item) => item.id),
-                  )
-                  const provider = ProviderConfig.parse({
-                    id,
-                    name: name.trim(),
-                    type,
-                    baseUrl,
-                    enabled: true,
-                    models: [],
-                    concurrency: 100,
-                  })
-                  const next = (await invoke('providers:save', { provider })) as SettingsView
-                  apply(next)
-                  select(id)
-                  props.onOpenChange(false)
-                })()
-              }}
+              onPress={() => void add()}
             >
               添加
             </Button>

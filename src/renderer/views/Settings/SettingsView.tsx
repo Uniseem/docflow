@@ -2,6 +2,7 @@ import {
   Button,
   Card,
   Description,
+  FieldError,
   Input,
   Label,
   Link,
@@ -16,9 +17,11 @@ import {
 } from '@heroui/react'
 import { useState } from 'react'
 import { DEFAULT_SYSTEM_PROMPT } from '../../../shared/constants'
+import { ProxyConfig } from '../../../shared/types'
 import { invoke } from '../../api/invoke'
 import { TranslatorSelect } from '../../components/TranslatorSelect'
 import { ConfirmDialog } from '../../components/ConfirmDialog'
+import { notifyError } from '../../lib/notify'
 import { defaultTranslatorKey, parseTranslatorKey, translatorOptions } from '../../lib/translators'
 import { useDocumentsStore } from '../../store/documents'
 import { useSettingsStore } from '../../store/settings'
@@ -38,7 +41,7 @@ export function SettingsView() {
         }}
         className="flex min-h-0 flex-1"
       >
-        <Tabs.ListContainer className="w-[180px] shrink-0 border-r border-divider p-2">
+        <Tabs.ListContainer className="w-[180px] shrink-0 border-r border-separator p-2">
           <Tabs.List aria-label="设置">
             <Tabs.Tab id="general">
               通用
@@ -138,7 +141,7 @@ function GeneralPanel() {
           <RadioGroup
             value={theme}
             onChange={(value) => {
-              void setTheme(value as typeof theme)
+              setTheme(value as typeof theme).catch(notifyError)
             }}
           >
             <Label>主题</Label>
@@ -183,7 +186,9 @@ function GeneralPanel() {
               <Button
                 size="sm"
                 variant="secondary"
-                onPress={() => void invoke('documents:reveal', { id: '', kind: 'folder' })}
+                onPress={() => {
+                  invoke('documents:reveal', { id: '', kind: 'folder' }).catch(notifyError)
+                }}
               >
                 {reveal}
               </Button>
@@ -191,13 +196,15 @@ function GeneralPanel() {
                 size="sm"
                 isDisabled={appInfo.dataDirFromEnv}
                 onPress={() => {
-                  void invoke('dialog:pickFolder', {
+                  invoke('dialog:pickFolder', {
                     title: '选择文档库位置',
                     message: '选择存放文档库的文件夹，DocFlow 会在其中使用“DocFlow”文件夹。',
-                  }).then((picked) => {
-                    if ('cancelled' in picked) return
-                    setPendingFolder(picked.path)
                   })
+                    .then((picked) => {
+                      if ('cancelled' in picked) return
+                      setPendingFolder(picked.path)
+                    })
+                    .catch(notifyError)
                 }}
               >
                 更改…
@@ -209,7 +216,13 @@ function GeneralPanel() {
           </div>
           <div>
             <p className="text-sm">日志</p>
-            <Button size="sm" variant="secondary" onPress={() => void invoke('shell:openLogs', {})}>
+            <Button
+              size="sm"
+              variant="secondary"
+              onPress={() => {
+                invoke('shell:openLogs', {}).catch(notifyError)
+              }}
+            >
               打开日志文件夹
             </Button>
           </div>
@@ -258,20 +271,52 @@ function GeneralPanel() {
   )
 }
 
+const PROXY_URL_INVALID = '请填写完整的代理地址，例如 http://127.0.0.1:7890'
+
 function NetworkPanel() {
   const view = useSettingsStore((s) => s.view)
   const update = useSettingsStore((s) => s.update)
+  // Choosing “自定义” only shows the address field; nothing is saved until “应用” with a
+  // valid address, so an unreachable placeholder never becomes the active proxy.
+  const [modeDraft, setModeDraft] = useState<'custom' | null>(null)
   const [draft, setDraft] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [pending, setPending] = useState(false)
   if (!view) return null
-  const customUrl = draft ?? (view.proxy.mode === 'custom' ? view.proxy.url : '')
+  const savedUrl = view.proxy.mode === 'custom' ? view.proxy.url : ''
+  const mode = modeDraft ?? view.proxy.mode
+  const customUrl = draft ?? savedUrl
+
+  async function applyCustom() {
+    const parsed = ProxyConfig.safeParse({ mode: 'custom', url: customUrl })
+    if (!parsed.success) {
+      setError(PROXY_URL_INVALID)
+      return
+    }
+    setError(null)
+    setPending(true)
+    const saved = await update({ proxy: parsed.data })
+    setPending(false)
+    if (!saved) return
+    setModeDraft(null)
+    setDraft(null)
+  }
+
   return (
     <div className="mx-auto max-w-2xl">
       <RadioGroup
-        value={view.proxy.mode}
-        onChange={(mode) => {
-          if (mode === 'system' || mode === 'direct') void update({ proxy: { mode } })
-          if (mode === 'custom')
-            void update({ proxy: { mode: 'custom', url: customUrl || 'http://127.0.0.1:7890' } })
+        value={mode}
+        onChange={(next) => {
+          if (next === 'custom') {
+            setModeDraft('custom')
+            return
+          }
+          if (next !== 'system' && next !== 'direct') return
+          // Keep the last custom address around in case the user switches back.
+          if (view.proxy.mode === 'custom' && draft === null) setDraft(view.proxy.url)
+          setModeDraft(null)
+          setError(null)
+          void update({ proxy: { mode: next } })
         }}
       >
         <Label>代理</Label>
@@ -300,15 +345,26 @@ function NetworkPanel() {
           </Radio.Content>
         </Radio>
       </RadioGroup>
-      {view.proxy.mode === 'custom' ? (
-        <div className="mt-3 flex gap-2">
-          <TextField value={customUrl} onChange={setDraft} className="flex-1">
+      {mode === 'custom' ? (
+        <div className="mt-3 flex items-start gap-2">
+          <TextField
+            value={customUrl}
+            onChange={(value) => {
+              setDraft(value)
+              if (error) setError(null)
+            }}
+            isInvalid={Boolean(error)}
+            className="flex-1"
+          >
             <Label>代理地址</Label>
             <Input placeholder="http://127.0.0.1:7890 或 socks5://127.0.0.1:1080" />
+            {error ? <FieldError>{error}</FieldError> : null}
           </TextField>
           <Button
-            className="self-end"
-            onPress={() => void update({ proxy: { mode: 'custom', url: customUrl } })}
+            className="mt-6"
+            isDisabled={!customUrl.trim()}
+            isPending={pending}
+            onPress={() => void applyCustom()}
           >
             应用
           </Button>
@@ -403,7 +459,13 @@ function AdvancedPanel() {
             <Button variant="secondary" onPress={() => setDraft(DEFAULT_SYSTEM_PROMPT)}>
               恢复默认
             </Button>
-            <Button onPress={() => void update({ translation: { systemPrompt: prompt } })}>
+            <Button
+              onPress={() => {
+                void update({ translation: { systemPrompt: prompt } }).then((saved) => {
+                  if (saved) setDraft(null)
+                })
+              }}
+            >
               保存
             </Button>
           </div>
@@ -427,8 +489,7 @@ function AdvancedPanel() {
               onChangeEnd={(value) => {
                 const n = Array.isArray(value) ? value[0] : value
                 if (typeof n !== 'number') return
-                const clear = () => setScaleDraft(null)
-                void update({ pdf: { minFontScale: n } }).then(clear, clear)
+                void update({ pdf: { minFontScale: n } }).then(() => setScaleDraft(null))
               }}
             >
               <Label>译文最小缩放</Label>
@@ -496,7 +557,30 @@ function AboutPanel() {
   const update = useSettingsStore((s) => s.update)
   const [result, setResult] = useState<string | null>(null)
   const [url, setUrl] = useState<string | null>(null)
+  const [checking, setChecking] = useState(false)
   if (!appInfo || !view) return null
+
+  async function checkUpdates() {
+    setChecking(true)
+    try {
+      const check = await invoke('app:checkUpdates', {})
+      if ('error' in check) {
+        setResult(check.error)
+        setUrl(null)
+      } else if (check.newer) {
+        setResult(`有新版本 ${check.latest.replace(/^v/, '')}`)
+        setUrl(check.url)
+      } else {
+        setResult('已是最新版本')
+        setUrl(null)
+      }
+    } catch (error) {
+      notifyError(error)
+    } finally {
+      setChecking(false)
+    }
+  }
+
   return (
     <div className="mx-auto flex max-w-2xl flex-col gap-4">
       <div>
@@ -506,21 +590,7 @@ function AboutPanel() {
         </p>
       </div>
       <div className="flex items-center gap-2">
-        <Button
-          onPress={() => {
-            void invoke('app:checkUpdates', {}).then((check) => {
-              if ('error' in check) {
-                setResult(check.error)
-                setUrl(null)
-                return
-              }
-              if (check.newer) {
-                setResult(`有新版本 ${check.latest.replace(/^v/, '')}`)
-                setUrl(check.url)
-              } else setResult('已是最新版本')
-            })
-          }}
-        >
+        <Button isPending={checking} onPress={() => void checkUpdates()}>
           检查更新
         </Button>
         {result ? <span className="text-sm">{result}</span> : null}
@@ -528,7 +598,9 @@ function AboutPanel() {
           <Button
             size="sm"
             variant="secondary"
-            onPress={() => void invoke('shell:openExternal', { url })}
+            onPress={() => {
+              invoke('shell:openExternal', { url }).catch(notifyError)
+            }}
           >
             前往下载
           </Button>
@@ -549,20 +621,30 @@ function AboutPanel() {
         {/* No href: an <a href> would also navigate the window (caught by will-navigate,
             which opens the URL a second time); onPress alone opens it once. */}
         <Link
-          onPress={() =>
-            void invoke('shell:openExternal', { url: 'https://github.com/Uniseem/docflow' })
-          }
+          onPress={() => {
+            invoke('shell:openExternal', { url: 'https://github.com/Uniseem/docflow' }).catch(
+              notifyError,
+            )
+          }}
         >
           源代码
         </Link>
         <Button
           variant="ghost"
           className="w-fit"
-          onPress={() => void invoke('shell:openNotices', {})}
+          onPress={() => {
+            invoke('shell:openNotices', {}).catch(notifyError)
+          }}
         >
           第三方许可
         </Button>
-        <Button variant="ghost" className="w-fit" onPress={() => void invoke('shell:openLogs', {})}>
+        <Button
+          variant="ghost"
+          className="w-fit"
+          onPress={() => {
+            invoke('shell:openLogs', {}).catch(notifyError)
+          }}
+        >
           打开日志文件夹
         </Button>
       </div>

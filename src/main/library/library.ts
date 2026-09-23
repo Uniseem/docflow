@@ -31,10 +31,16 @@ export type CreateDocumentInput = {
   randomHex?: string
 }
 
+export type ManifestPatch = Partial<DocumentManifest>
+
 export class DocumentLibrary {
   events: EventLog
   readonly index = new DocumentIndex()
   private libraryDir = ''
+  /** Per-document queue: each update merges onto the manifest the previous one wrote. */
+  private readonly chains = new Map<string, Promise<unknown>>()
+  /** Deleted in this session: late writes from an interrupted task must not revive them. */
+  private readonly removed = new Set<string>()
 
   constructor() {
     this.events = new EventLog('')
@@ -46,6 +52,7 @@ export class DocumentLibrary {
 
   async open(libraryDir: string): Promise<void> {
     this.libraryDir = libraryDir
+    this.removed.clear()
     this.events = new EventLog(libraryDir)
     await mkdir(join(libraryDir, 'documents'), { recursive: true })
     const items: DocumentManifest[] = []
@@ -155,16 +162,63 @@ export class DocumentLibrary {
     return this.summary(manifest, false)
   }
 
-  async update(id: string, patch: Partial<DocumentManifest>): Promise<DocumentManifest> {
-    const current = this.require(id)
-    const next = await writeManifest(this.libraryDir, {
-      ...current,
-      ...patch,
-      id,
-      updatedAt: isoNow(),
-    })
-    this.index.set(next)
+  async update(
+    id: string,
+    patch: ManifestPatch | ((current: DocumentManifest) => ManifestPatch),
+  ): Promise<DocumentManifest> {
+    const next = await this.updateWhen(id, () => true, patch)
+    if (!next) throw new UserError(ERROR_CODES.not_found)
     return next
+  }
+
+  /**
+   * Applies `patch` only if `when(current)` still holds once the update's turn comes, so a
+   * status change can't be overwritten by a write that was decided on stale state.
+   * Resolves `undefined` when the condition fails.
+   */
+  updateWhen(
+    id: string,
+    when: (current: DocumentManifest) => boolean,
+    patch: ManifestPatch | ((current: DocumentManifest) => ManifestPatch),
+  ): Promise<DocumentManifest | undefined> {
+    return this.serialize(id, async () => {
+      const current = this.require(id)
+      if (!when(current)) return undefined
+      const gone = () => this.removed.has(id) || !this.index.get(id)
+      let next: DocumentManifest
+      try {
+        next = await writeManifest(this.libraryDir, {
+          ...current,
+          ...(typeof patch === 'function' ? patch(current) : patch),
+          id,
+          updatedAt: isoNow(),
+        })
+      } catch (error) {
+        // The folder vanished under the write because the document was deleted.
+        if (gone()) throw new UserError(ERROR_CODES.not_found)
+        throw error
+      }
+      if (gone()) {
+        // Deleted while the write was in flight: don't leave a manifest behind.
+        await rm(documentDir(this.libraryDir, id), RM_OPTIONS).catch(() => undefined)
+        throw new UserError(ERROR_CODES.not_found)
+      }
+      this.index.set(next)
+      return next
+    })
+  }
+
+  private serialize<T>(id: string, fn: () => Promise<T>): Promise<T> {
+    const run = (this.chains.get(id) ?? Promise.resolve()).then(fn, fn)
+    const tail = run.then(
+      () => undefined,
+      () => undefined,
+    )
+    this.chains.set(id, tail)
+    void tail.then(() => {
+      if (this.chains.get(id) === tail) this.chains.delete(id)
+    })
+    return run
   }
 
   async rename(id: string, title: string): Promise<DocumentSummary> {
@@ -175,9 +229,17 @@ export class DocumentLibrary {
   }
 
   async remove(id: string): Promise<void> {
-    this.require(id)
-    await rm(documentDir(this.libraryDir, id), { recursive: true, force: true })
+    const manifest = this.require(id)
+    // Out of the index first so the scheduler and late pipeline writes see not_found.
     this.index.delete(id)
+    this.removed.add(id)
+    try {
+      await rm(documentDir(this.libraryDir, id), RM_OPTIONS)
+    } catch (error) {
+      this.removed.delete(id)
+      this.index.set(manifest)
+      throw error
+    }
   }
 
   pathFor(id: string, kind: 'source' | 'mono' | 'dual' | 'folder'): string {
@@ -187,6 +249,9 @@ export class DocumentLibrary {
     return join(outputDir(this.libraryDir, id), `${kind}.pdf`)
   }
 }
+
+// Windows: a PDF viewer or antivirus may hold a file open for a moment (EBUSY/EPERM).
+const RM_OPTIONS = { recursive: true, force: true, maxRetries: 5, retryDelay: 200 } as const
 
 async function sha256File(path: string): Promise<string> {
   const { readFile } = await import('node:fs/promises')

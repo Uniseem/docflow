@@ -10,7 +10,6 @@ import {
   Spinner,
   Switch,
   Tabs,
-  toast,
   Tooltip,
   useOverlayState,
 } from '@heroui/react'
@@ -23,28 +22,42 @@ import {
   XCircle,
   XOctagon,
 } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
+import { ERROR_CODES } from '../../../shared/errors'
+import { isActiveStatus } from '../../../shared/library-filter'
 import { formatBytes } from '../../../shared/text'
-import type { DocumentSummary, ProcessingEvent, Stage } from '../../../shared/types'
+import type { DocumentSummary, ProcessingEvent } from '../../../shared/types'
+import { toDocflowError } from '../../api/errors'
 import { invoke } from '../../api/invoke'
 import { ConfirmDialog } from '../../components/ConfirmDialog'
 import {
   STATUS_COLOR,
   STATUS_LABEL,
   STAGES,
+  basename,
   formatClock,
   formatElapsed,
   stageName,
 } from '../../lib/labels'
+import { notify, notifyError } from '../../lib/notify'
 import { useDocumentsStore } from '../../store/documents'
-import { useSettingsStore } from '../../store/settings'
 import { useUiStore } from '../../store/ui'
+import { confirmCancel, confirmDelete, useDeletingStore } from './actions'
+import { elapsedMs, latestEvent, stageState, type StageState } from './progress'
 
 type ExportKind = 'mono' | 'dual' | 'source' | 'bundle'
 
 // Stable fallback: zustand 5 selectors must not return a fresh array on every call,
 // otherwise useSyncExternalStore loops forever ("Maximum update depth exceeded").
 const NO_EVENTS: ProcessingEvent[] = []
+
+/** 06 §6.4: fall back to the default app when the embedded viewer has not loaded by then. */
+const PREVIEW_TIMEOUT_MS = 5_000
+
+/** Fire-and-forget IPC from a button: a user-facing failure becomes a toast. */
+function fire(request: Promise<unknown>): void {
+  request.catch((error: unknown) => notifyError(error))
+}
 
 // `overlay` is set when the detail is rendered inside the narrow-window Drawer (App.tsx).
 export function DocumentDetail(props: { overlay?: boolean }) {
@@ -53,22 +66,35 @@ export function DocumentDetail(props: { overlay?: boolean }) {
   const events = useDocumentsStore((s) =>
     selectedId ? (s.events.get(selectedId) ?? NO_EVENTS) : NO_EVENTS,
   )
+  const deleting = useDeletingStore((s) => (selectedId ? s.ids.has(selectedId) : false))
   const infoOpen = useUiStore((s) => s.infoOpen)
   const setInfoOpen = useUiStore((s) => s.setInfoOpen)
   const setRename = useUiStore((s) => s.setRename)
   const platform = useUiStore((s) => s.appInfo?.platform)
-  const bilingualSetting = useSettingsStore((s) => s.view?.pdf.bilingual ?? true)
   const [userTab, setUserTab] = useState<string | null>(null)
   const [warningsOnly, setWarningsOnly] = useState(false)
   const [now, setNow] = useState(() => Date.now())
-  const [previewFailed, setPreviewFailed] = useState(false)
   const [exportError, setExportError] = useState<string | null>(null)
-  const markPreviewFailed = useCallback(() => setPreviewFailed(true), [])
+  // Only unfinished documents have a running clock (elapsed time, retry countdown).
+  const ticking = item ? isActiveStatus(item.status) : false
 
   useEffect(() => {
+    if (!ticking) return
     const timer = setInterval(() => setNow(Date.now()), 1000)
     return () => clearInterval(timer)
-  }, [])
+  }, [ticking])
+
+  // Processing records are loaded once per document; pushed events are merged by the store.
+  useEffect(() => {
+    if (!selectedId) return
+    useDocumentsStore
+      .getState()
+      .ensureEvents(selectedId)
+      .catch((error: unknown) => {
+        // A document deleted in the meantime simply has no records to show.
+        if (toDocflowError(error).code !== ERROR_CODES.not_found) notifyError(error)
+      })
+  }, [selectedId])
 
   if (!item) {
     return (
@@ -79,7 +105,8 @@ export function DocumentDetail(props: { overlay?: boolean }) {
   }
 
   const completed = item.status === 'completed'
-  const showDual = Boolean(item.files.dual) || (completed && bilingualSetting)
+  // Only a bilingual PDF that was actually written gets a tab (the setting may have been off).
+  const showDual = Boolean(item.files.dual)
   const reveal = platform === 'win32' ? '在文件资源管理器中显示' : '在访达中显示'
   const tabKeys = completed
     ? showDual
@@ -87,12 +114,12 @@ export function DocumentDetail(props: { overlay?: boolean }) {
       : ['mono', 'events']
     : ['events']
   // A controlled selectedKey that is missing from the tab list leaves React Aria with no
-  // selected tab (and no panel), e.g. after retrying a completed document from the PDF tab.
+  // selected tab (and no panel), e.g. when the selected PDF tab disappears.
   const tab = userTab && tabKeys.includes(userTab) ? userTab : completed ? 'mono' : 'events'
 
   return (
     <div className="flex h-full min-w-0 flex-col" data-overlay={props.overlay ? 'true' : undefined}>
-      <header className="flex items-start gap-3 border-b border-divider px-4 py-3">
+      <header className="flex items-start gap-3 border-b border-separator px-4 py-3">
         <div className="min-w-0 flex-1">
           <h2
             className="truncate text-base font-medium"
@@ -154,9 +181,8 @@ export function DocumentDetail(props: { overlay?: boolean }) {
             <PdfPreview
               src={item.files.mono}
               title="中文 PDF"
-              failed={previewFailed}
-              onFailed={markPreviewFailed}
-              onOpen={() => void invoke('documents:openExternal', { id: item.id, kind: 'mono' })}
+              unloaded={deleting}
+              onOpen={() => fire(invoke('documents:openExternal', { id: item.id, kind: 'mono' }))}
             />
           </Tabs.Panel>
         ) : null}
@@ -165,9 +191,8 @@ export function DocumentDetail(props: { overlay?: boolean }) {
             <PdfPreview
               src={item.files.dual}
               title="双语对照 PDF"
-              failed={previewFailed}
-              onFailed={markPreviewFailed}
-              onOpen={() => void invoke('documents:openExternal', { id: item.id, kind: 'dual' })}
+              unloaded={deleting}
+              onOpen={() => fire(invoke('documents:openExternal', { id: item.id, kind: 'dual' }))}
             />
           </Tabs.Panel>
         ) : null}
@@ -210,30 +235,23 @@ function HeaderActions(props: {
   onRename: () => void
 }) {
   const { item } = props
-  const setConfirm = useUiStore((s) => s.setConfirm)
   const completed = item.status === 'completed'
-  const active =
-    item.status === 'queued' || item.status === 'processing' || item.status === 'retrying'
+  const active = isActiveStatus(item.status)
+  // 05 §5.7: only failed or cancelled documents can be processed again.
   const retryable = item.status === 'failed' || item.status === 'cancelled'
 
   async function exportKind(kind: ExportKind) {
     const result = await invoke('documents:export', { id: item.id, kind })
-    if ('cancelled' in result && result.cancelled) return
-    if ('path' in result) {
-      const name = exportName(item, kind)
-      toast.success(`已导出“${name}”`, {
-        timeout: 8000,
-        actionProps: {
-          children: '打开所在文件夹',
-          onPress: () => {
-            void invoke('documents:reveal', {
-              id: item.id,
-              kind: kind === 'bundle' ? 'folder' : kind,
-            })
-          },
-        },
-      })
-    }
+    if (!('path' in result)) return
+    // Name and folder of the file the user actually saved, not the library copy.
+    const path = result.path
+    notify.success(`已导出“${basename(path)}”`, {
+      timeout: 8000,
+      actionProps: {
+        children: '打开所在文件夹',
+        onPress: () => fire(invoke('shell:revealExport', { path })),
+      },
+    })
   }
 
   return (
@@ -241,7 +259,7 @@ function HeaderActions(props: {
       {completed ? (
         <Button
           variant="secondary"
-          onPress={() => void invoke('documents:openExternal', { id: item.id, kind: 'mono' })}
+          onPress={() => fire(invoke('documents:openExternal', { id: item.id, kind: 'mono' }))}
         >
           <ExternalLink size={14} />
           打开
@@ -256,9 +274,11 @@ function HeaderActions(props: {
             <Dropdown.Menu
               onAction={(key) => {
                 const kind = key as ExportKind
-                void exportKind(kind).catch((error: unknown) => {
-                  const message = error instanceof Error ? error.message : String(error)
-                  props.onExportError(`“${exportName(item, kind)}”没有导出：${message}`)
+                exportKind(kind).catch((error: unknown) => {
+                  const err = toDocflowError(error)
+                  // invoke() already toasted an internal error; show it only once.
+                  if (err.user)
+                    props.onExportError(`“${exportName(item, kind)}”没有导出：${err.message}`)
                 })
               }}
             >
@@ -282,27 +302,12 @@ function HeaderActions(props: {
         </Dropdown>
       ) : null}
       {active ? (
-        <Button
-          variant="danger"
-          onPress={() =>
-            setConfirm({
-              title: `取消处理“${item.title}”？`,
-              body: '正在进行的解析、翻译或排版会停止。源文件和已完成的翻译断点会保留，之后可以重新处理。',
-              confirmLabel: '取消处理',
-              cancelLabel: '继续处理',
-              danger: true,
-              onConfirm: async () => {
-                await invoke('documents:cancel', { id: item.id })
-                useUiStore.getState().setConfirm(null)
-              },
-            })
-          }
-        >
+        <Button variant="danger" onPress={() => confirmCancel(item)}>
           取消处理…
         </Button>
       ) : null}
       {retryable ? (
-        <Button variant="primary" onPress={() => void invoke('documents:retry', { id: item.id })}>
+        <Button variant="primary" onPress={() => fire(invoke('documents:retry', { id: item.id }))}>
           重新处理
         </Button>
       ) : null}
@@ -314,21 +319,10 @@ function HeaderActions(props: {
         <Dropdown.Popover placement="bottom end">
           <Dropdown.Menu
             onAction={(key) => {
-              if (key === 'reveal') void invoke('documents:reveal', { id: item.id, kind: 'folder' })
+              if (key === 'reveal')
+                fire(invoke('documents:reveal', { id: item.id, kind: 'folder' }))
               if (key === 'rename') props.onRename()
-              if (key === 'retry') void invoke('documents:retry', { id: item.id })
-              if (key === 'delete') {
-                setConfirm({
-                  title: `删除“${item.title}”？`,
-                  body: '译文、PDF、处理记录和文档库里的源文件副本都会被删除，你最初选择的文件不受影响。此操作无法撤销。',
-                  confirmLabel: '删除',
-                  danger: true,
-                  onConfirm: async () => {
-                    await invoke('documents:delete', { ids: [item.id] })
-                    useUiStore.getState().setConfirm(null)
-                  },
-                })
-              }
+              if (key === 'delete') confirmDelete(item)
             }}
           >
             <Dropdown.Item id="reveal" textValue={props.reveal}>
@@ -337,11 +331,6 @@ function HeaderActions(props: {
             <Dropdown.Item id="rename" textValue="重命名…">
               重命名…
             </Dropdown.Item>
-            {completed || retryable ? (
-              <Dropdown.Item id="retry" textValue="重新处理">
-                重新处理
-              </Dropdown.Item>
-            ) : null}
             {!active ? (
               <Dropdown.Item id="delete" textValue="删除…" variant="danger">
                 删除…
@@ -357,19 +346,24 @@ function HeaderActions(props: {
 function PdfPreview(props: {
   src: string | undefined
   title: string
-  failed: boolean
-  onFailed: () => void
+  /** The document is being deleted: keep the viewer off its files. */
+  unloaded: boolean
   onOpen: () => void
 }) {
-  const src = props.src
-  const onFailed = props.onFailed
-  const [loaded, setLoaded] = useState(false)
+  const { src, unloaded } = props
+  // Load and failure are remembered per src, so each preview (and each new file) gets its own try.
+  const [loadedSrc, setLoadedSrc] = useState<string | null>(null)
+  const [failedSrc, setFailedSrc] = useState<string | null>(null)
+  const waiting = Boolean(src) && !unloaded && loadedSrc !== src && failedSrc !== src
   useEffect(() => {
-    if (!src || loaded) return
-    const timer = setTimeout(() => onFailed(), 5_000)
+    if (!waiting || !src) return
+    const timer = setTimeout(() => setFailedSrc(src), PREVIEW_TIMEOUT_MS)
     return () => clearTimeout(timer)
-  }, [src, loaded, onFailed])
-  if (!src || props.failed) {
+  }, [waiting, src])
+  if (unloaded) {
+    return <iframe className="h-full w-full border-0" src="about:blank" title={props.title} />
+  }
+  if (!src || failedSrc === src) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-3 p-6 text-sm">
         <p>无法在应用内预览，请用默认应用打开。</p>
@@ -382,24 +376,23 @@ function PdfPreview(props: {
       className="h-full w-full border-0"
       src={`${src}#toolbar=1&navpanes=0`}
       title={props.title}
-      onLoad={() => setLoaded(true)}
-      onError={onFailed}
+      onLoad={() => setLoadedSrc(src)}
+      onError={() => setFailedSrc(src)}
     />
   )
 }
 
 function ProcessingPanel(props: { item: DocumentSummary; events: ProcessingEvent[]; now: number }) {
   const { item } = props
-  const latest = props.events.at(-1)
-  const started = item.startedAt ? Date.parse(item.startedAt) : Date.parse(item.createdAt)
-  const elapsed = formatElapsed(props.now - started)
+  const latest = latestEvent(props.events)
+  const elapsed = formatElapsed(elapsedMs(item, props.now, { fromCreated: true }) ?? 0)
   const retryLeft =
     item.status === 'retrying' && item.nextAttemptAt
       ? Math.max(0, Math.ceil((Date.parse(item.nextAttemptAt) - props.now) / 1000))
       : 0
   return (
-    <div className="grid gap-3 border-b border-divider p-3 md:grid-cols-2">
-      <div className="rounded-lg border border-divider p-3">
+    <div className="grid gap-3 border-b border-separator p-3 md:grid-cols-2">
+      <div className="rounded-lg border border-separator p-3">
         <p className="mb-2 text-sm font-medium">处理进度</p>
         <ProgressBar
           value={item.progress}
@@ -421,7 +414,7 @@ function ProcessingPanel(props: { item: DocumentSummary; events: ProcessingEvent
             <Alert.Content>
               <Alert.Title>处理失败</Alert.Title>
               <Alert.Description>{item.failure?.message}</Alert.Description>
-              <Button size="sm" onPress={() => void invoke('documents:retry', { id: item.id })}>
+              <Button size="sm" onPress={() => fire(invoke('documents:retry', { id: item.id }))}>
                 重新处理
               </Button>
             </Alert.Content>
@@ -432,7 +425,7 @@ function ProcessingPanel(props: { item: DocumentSummary; events: ProcessingEvent
             <Alert.Content>
               <Alert.Title>已取消处理</Alert.Title>
               <Alert.Description>{item.failure?.message}</Alert.Description>
-              <Button size="sm" onPress={() => void invoke('documents:retry', { id: item.id })}>
+              <Button size="sm" onPress={() => fire(invoke('documents:retry', { id: item.id }))}>
                 重新处理
               </Button>
             </Alert.Content>
@@ -448,17 +441,12 @@ function ProcessingPanel(props: { item: DocumentSummary; events: ProcessingEvent
           </Alert>
         ) : null}
       </div>
-      <div className="rounded-lg border border-divider p-3">
+      <div className="rounded-lg border border-separator p-3">
         <p className="mb-2 text-sm font-medium">处理阶段</p>
         <ul className="space-y-2 text-sm">
           {STAGES.map((stage) => (
             <li key={stage.id} className="flex items-start gap-2">
-              <StageIcon
-                current={item.stage}
-                progress={item.progress}
-                stage={stage.id}
-                failed={item.status === 'failed'}
-              />
+              <StageIcon state={stageState(item, stage.id)} />
               <div>
                 <div className="font-medium">{stage.name}</div>
                 <div className="text-xs text-foreground/60">
@@ -473,15 +461,19 @@ function ProcessingPanel(props: { item: DocumentSummary; events: ProcessingEvent
   )
 }
 
-function StageIcon(props: { current: Stage; progress: number; stage: Stage; failed: boolean }) {
-  const info = STAGES.find((item) => item.id === props.stage)
-  if (!info) return <Circle size={16} />
-  const done = props.progress > info.to || props.current === 'done'
-  const current = props.progress >= info.from && props.progress <= info.to
-  if (props.failed && current) return <XOctagon size={16} className="text-danger" />
-  if (done) return <CheckCircle2 size={16} className="text-success" />
-  if (current) return <Spinner size="sm" />
-  return <Circle size={16} className="text-foreground/30" />
+function StageIcon(props: { state: StageState }) {
+  switch (props.state) {
+    case 'done':
+      return <CheckCircle2 size={16} className="shrink-0 text-success" />
+    case 'running':
+      return <Spinner size="sm" />
+    case 'failed':
+      return <XOctagon size={16} className="shrink-0 text-danger" />
+    case 'cancelled':
+      return <XCircle size={16} className="shrink-0 text-foreground/50" />
+    case 'waiting':
+      return <Circle size={16} className="shrink-0 text-foreground/30" />
+  }
 }
 
 function EventList(props: {
@@ -494,7 +486,8 @@ function EventList(props: {
     ? sorted.filter((item) => item.level === 'warning' || item.level === 'error')
     : sorted
   const limited = filtered.slice(0, 1000)
-  const first = props.events[0]
+  // `+elapsed` counts from the oldest record (sorted is newest first).
+  const first = sorted.at(-1)
   return (
     <div>
       <div className="mb-3 flex items-center justify-between">
@@ -563,16 +556,13 @@ function InfoDrawer(props: {
 }) {
   const state = useOverlayState({ isOpen: props.isOpen, onOpenChange: props.onOpenChange })
   const { item } = props
-  const elapsed = item.startedAt
-    ? formatElapsed(
-        (item.completedAt ? Date.parse(item.completedAt) : props.now) - Date.parse(item.startedAt),
-      )
-    : '—'
+  const elapsed = elapsedMs(item, props.now)
   return (
     <Drawer state={state}>
       <Drawer.Backdrop isDismissable>
-        <Drawer.Content placement="right" className="w-[360px]">
-          <Drawer.Dialog>
+        {/* Width goes on the panel (Dialog); Content is the full-window positioning layer. */}
+        <Drawer.Content placement="right">
+          <Drawer.Dialog className="w-[360px]">
             <Drawer.CloseTrigger />
             <Drawer.Header>
               <Drawer.Heading>文档信息</Drawer.Heading>
@@ -612,19 +602,21 @@ function InfoDrawer(props: {
                 <p>加入：{new Date(item.createdAt).toLocaleString()}</p>
                 <p>开始：{item.startedAt ? new Date(item.startedAt).toLocaleString() : '—'}</p>
                 <p>完成：{item.completedAt ? new Date(item.completedAt).toLocaleString() : '—'}</p>
-                <p>用时：{elapsed}</p>
+                <p>用时：{elapsed === null ? '—' : formatElapsed(elapsed)}</p>
               </section>
             </Drawer.Body>
             <Drawer.Footer>
               <Button
                 variant="secondary"
-                onPress={() => void invoke('documents:reveal', { id: item.id, kind: 'folder' })}
+                onPress={() => fire(invoke('documents:reveal', { id: item.id, kind: 'folder' }))}
               >
                 {props.reveal}
               </Button>
               <Button
                 isDisabled={!item.files.mono}
-                onPress={() => void invoke('documents:openExternal', { id: item.id, kind: 'mono' })}
+                onPress={() =>
+                  fire(invoke('documents:openExternal', { id: item.id, kind: 'mono' }))
+                }
               >
                 用默认应用打开
               </Button>

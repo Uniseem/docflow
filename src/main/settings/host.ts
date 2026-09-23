@@ -1,5 +1,5 @@
 import { mkdir, readFile } from 'node:fs/promises'
-import { basename, join } from 'node:path'
+import { basename, join, resolve } from 'node:path'
 import { HostState } from '../../shared/types'
 import { writeJsonAtomic } from './atomic-write'
 
@@ -10,6 +10,7 @@ export type HostOptions = {
 
 export class HostStore {
   #value: HostState = {}
+  #writes: Promise<void> = Promise.resolve()
   readonly filePath: string
 
   constructor(
@@ -25,8 +26,13 @@ export class HostStore {
 
   libraryDir(): string {
     const fromEnv = this.options.env?.DOCFLOW_DATA_DIR?.trim()
-    if (fromEnv) return fromEnv
+    if (fromEnv) return resolve(fromEnv)
     return this.#value.libraryDir ?? this.options.fallbackLibraryDir
+  }
+
+  /** The library used when the configured one cannot be opened. */
+  defaultLibraryDir(): string {
+    return this.options.fallbackLibraryDir
   }
 
   async load(): Promise<HostState> {
@@ -40,10 +46,13 @@ export class HostStore {
     return this.#value
   }
 
+  /** Merges and saves; writes are queued so concurrent updates (theme, window) all land. */
   async update(patch: HostState): Promise<HostState> {
     const next = HostState.parse({ ...this.#value, ...patch })
-    await writeJsonAtomic(this.filePath, next)
     this.#value = next
+    const write = this.#writes.then(() => writeJsonAtomic(this.filePath, this.#value))
+    this.#writes = write.catch(() => undefined)
+    await write
     return next
   }
 }

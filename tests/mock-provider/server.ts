@@ -22,7 +22,20 @@ export type MockStats = {
   refused: number
 }
 
+/** Runtime knobs, changed with `POST /config` and restored by `POST /reset`. */
+export type MockConfig = {
+  /** Every chat request waits this long before it is answered (0 = answer at once). */
+  delayMs: number
+  /** Every n-th chat request is answered with 429 (0 = never). */
+  rateLimitEvery: number
+}
+
+export const DEFAULT_MOCK_CONFIG: Readonly<MockConfig> = { delayMs: 0, rateLimitEvery: 9 }
+
+const MAX_DELAY_MS = 600_000
+
 export class MockProviderState {
+  config: MockConfig
   requests: Record<string, number> = {}
   peak: Record<string, number> = {}
   inFlight: Record<string, number> = {}
@@ -34,7 +47,13 @@ export class MockProviderState {
   swapped = 0
   refused = 0
 
+  constructor(private readonly initial: Readonly<MockConfig> = DEFAULT_MOCK_CONFIG) {
+    this.config = { ...initial }
+  }
+
+  /** Clears the counters and restores the config the server was started with. */
   reset(): void {
+    this.config = { ...this.initial }
     this.requests = {}
     this.peak = {}
     this.inFlight = {}
@@ -72,6 +91,31 @@ export class MockProviderState {
   leave(api: string): void {
     this.inFlight[api] = Math.max(0, (this.inFlight[api] ?? 0) - 1)
   }
+
+  configure(patch: Partial<MockConfig>): MockConfig {
+    this.config = { ...this.config, ...patch }
+    return { ...this.config }
+  }
+}
+
+/** Validates a `POST /config` body; unknown keys and out-of-range values are rejected. */
+export function parseConfigPatch(raw: string): Partial<MockConfig> | null {
+  let value: unknown
+  try {
+    value = JSON.parse(raw || '{}')
+  } catch {
+    return null
+  }
+  const record = asRecord(value)
+  if (!record) return null
+  const patch: Partial<MockConfig> = {}
+  for (const [key, item] of Object.entries(record)) {
+    if (key !== 'delayMs' && key !== 'rateLimitEvery') return null
+    if (typeof item !== 'number' || !Number.isInteger(item) || item < 0) return null
+    if (key === 'delayMs' && item > MAX_DELAY_MS) return null
+    patch[key] = item
+  }
+  return patch
 }
 
 export type MockServer = {
@@ -84,13 +128,15 @@ export type MockServer = {
 export type MockProviderOptions = {
   open?: boolean
   host?: string
+  /** Startup values for the runtime config; `POST /reset` returns to these. */
+  config?: Partial<MockConfig>
 }
 
 export function listenMockProvider(
   port = 0,
   options: MockProviderOptions = {},
 ): Promise<MockServer> {
-  const state = new MockProviderState()
+  const state = new MockProviderState({ ...DEFAULT_MOCK_CONFIG, ...options.config })
   const server = http.createServer((req, res) => {
     void handleRequest(req, res, state, options).catch((error: unknown) => {
       if (!res.writableEnded) {
@@ -315,6 +361,21 @@ async function handleRequest(
     sendJson(res, 200, { ok: true })
     return
   }
+  if (method === 'GET' && path === '/config') {
+    sendJson(res, 200, state.config)
+    return
+  }
+  if (method === 'POST' && path === '/config') {
+    const patch = parseConfigPatch(await readBody(req))
+    if (!patch) {
+      sendJson(res, 400, {
+        error: { message: 'expected { delayMs?, rateLimitEvery? } as non-negative integers' },
+      })
+      return
+    }
+    sendJson(res, 200, state.configure(patch))
+    return
+  }
   if (method === 'GET' && path === '/v1/models') {
     if (rejectKey(req, 'openai', options, res)) return
     sendJson(res, 200, {
@@ -367,13 +428,15 @@ async function handleRequest(
   const number = state.enter(api)
   try {
     const raw = await readBody(req)
+    if (!(await pause(state.config.delayMs, res))) return
     if (rejectKey(req, api, options, res)) return
     const key = requestKey(req, api)
     if (key === 'poor-key') {
       sendJson(res, 429, { error: { message: 'insufficient balance' } }, { 'retry-after': '1' })
       return
     }
-    if (number % 9 === 0) {
+    const every = state.config.rateLimitEvery
+    if (every > 0 && number % every === 0) {
       state.rateLimited += 1
       sendJson(
         res,
@@ -462,6 +525,22 @@ async function handleRequest(
   }
 }
 
+/** Waits `ms`; resolves false when the client hung up meanwhile (nothing may be written then). */
+function pause(ms: number, res: http.ServerResponse): Promise<boolean> {
+  if (ms <= 0) return Promise.resolve(true)
+  return new Promise((resolvePause) => {
+    const onClose = () => {
+      clearTimeout(timer)
+      resolvePause(false)
+    }
+    const timer = setTimeout(() => {
+      res.off('close', onClose)
+      resolvePause(true)
+    }, ms)
+    res.once('close', onClose)
+  })
+}
+
 function rejectKey(
   req: http.IncomingMessage,
   api: string,
@@ -481,17 +560,24 @@ function rejectKey(
   return false
 }
 
-export function parseCli(argv: string[]): { port: number; open: boolean } {
+export function parseCli(argv: string[]): { port: number; open: boolean; delayMs: number } {
   const open = argv.includes('--open')
-  const portFlag = argv.findIndex((arg) => arg === '--port')
-  if (portFlag >= 0 && argv[portFlag + 1]) return { port: Number(argv[portFlag + 1]), open }
-  const numeric = argv.find((arg) => /^\d+$/.test(arg))
-  return { port: numeric ? Number(numeric) : DEFAULT_MOCK_PORT, open }
+  const flag = (name: string): string | undefined => {
+    const index = argv.indexOf(name)
+    return index >= 0 ? argv[index + 1] : undefined
+  }
+  const delayText = flag('--delay')
+  const delayMs = delayText && /^\d+$/.test(delayText) ? Number(delayText) : 0
+  const portValue = flag('--port')
+  // A bare number is the port, unless it is the value of --delay.
+  const bare = argv.find((arg, index) => /^\d+$/.test(arg) && argv[index - 1] !== '--delay')
+  const port = portValue ? Number(portValue) : bare ? Number(bare) : DEFAULT_MOCK_PORT
+  return { port, open, delayMs }
 }
 
 export async function main(argv = process.argv.slice(2)): Promise<MockServer> {
-  const { port, open } = parseCli(argv)
-  const server = await listenMockProvider(port, { open })
+  const { port, open, delayMs } = parseCli(argv)
+  const server = await listenMockProvider(port, { open, config: { delayMs } })
   process.stdout.write(`mock providers on ${server.url}\n`)
   return server
 }

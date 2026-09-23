@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, test } from 'vitest'
@@ -11,6 +11,7 @@ import { TranslationPools } from '../translate/pool'
 import { fakeFetch, fakeProvider } from '../translate/fake'
 import type { DialogHost } from '../app/dialogs'
 import {
+  handleAppTakePendingFiles,
   handleDocumentsCancel,
   handleDocumentsCreate,
   handleDocumentsDelete,
@@ -22,6 +23,7 @@ import {
   handleDocumentsRename,
   handleDocumentsReveal,
   handleDocumentsRetry,
+  handleShellRevealExport,
   type HandlerContext,
 } from './handlers'
 
@@ -47,6 +49,7 @@ async function setup() {
     { concurrency: () => 1 },
   )
   const revealed: string[] = []
+  const pending: string[] = []
   const opened: string[] = []
   const removed: string[] = []
   const changed: string[] = []
@@ -91,10 +94,12 @@ async function setup() {
       removed.push(id)
     },
     relaunch: () => undefined,
+    exportedPaths: new Set(),
+    takePendingFiles: () => pending.splice(0),
   }
   const pdf = join(dir, 'paper.pdf')
   await writeFile(pdf, '%PDF-1.4 fixture')
-  return { dir, lib, ctx, pdf, hold, revealed, opened, removed, changed }
+  return { dir, lib, ctx, pdf, hold, revealed, opened, removed, changed, pending }
 }
 
 describe('documents handlers', () => {
@@ -149,6 +154,50 @@ describe('documents handlers', () => {
     const deleted = await handleDocumentsDelete(ctx, { ids: [id] })
     expect(deleted.deleted).toEqual([id])
     expect(removed).toEqual([id])
+    await ctx.scheduler.stop(0)
+  })
+
+  test('revealExport only reveals files exported in this session', async () => {
+    const { ctx, pdf, hold, revealed, dir, lib } = await setup()
+    const created = await handleDocumentsCreate(ctx, { paths: [pdf], translator })
+    const id = created.created[0]!.id
+    await expect.poll(() => hold.has(id)).toBe(true)
+    hold.get(id)?.()
+    await expect.poll(() => lib.require(id).status).toBe('completed')
+    await mkdir(join(dir, 'documents', id, 'output'), { recursive: true })
+    await writeFile(join(dir, 'documents', id, 'output', 'mono.pdf'), '%PDF-1.4 mono')
+    const exported = await handleDocumentsExport(ctx, { id, kind: 'mono' })
+    if (!('path' in exported)) throw new Error('export was cancelled')
+    handleShellRevealExport(ctx, { path: exported.path })
+    expect(revealed).toEqual([exported.path])
+    expect(() => handleShellRevealExport(ctx, { path: join(dir, 'other.pdf') })).toThrow(/找不到/)
+    await rm(exported.path)
+    expect(() => handleShellRevealExport(ctx, { path: exported.path })).toThrow(/移动或删除/)
+    await ctx.scheduler.stop(0)
+  })
+
+  test('openExternal and export report a missing file instead of failing silently', async () => {
+    const { ctx, pdf, hold, lib } = await setup()
+    const created = await handleDocumentsCreate(ctx, { paths: [pdf], translator })
+    const id = created.created[0]!.id
+    await expect.poll(() => hold.has(id)).toBe(true)
+    hold.get(id)?.()
+    await expect.poll(() => lib.require(id).status).toBe('completed')
+    await expect(handleDocumentsOpenExternal(ctx, { id, kind: 'dual' })).rejects.toMatchObject({
+      code: 'not_found',
+      message: expect.stringContaining('双语') as unknown,
+    })
+    await expect(handleDocumentsExport(ctx, { id, kind: 'mono' })).rejects.toMatchObject({
+      code: 'not_found',
+    })
+    await ctx.scheduler.stop(0)
+  })
+
+  test('takePendingFiles hands over the queue once', async () => {
+    const { ctx, pending } = await setup()
+    pending.push('/tmp/a.pdf', '/tmp/b.pdf')
+    expect(handleAppTakePendingFiles(ctx)).toEqual({ paths: ['/tmp/a.pdf', '/tmp/b.pdf'] })
+    expect(handleAppTakePendingFiles(ctx)).toEqual({ paths: [] })
     await ctx.scheduler.stop(0)
   })
 

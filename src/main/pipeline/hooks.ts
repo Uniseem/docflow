@@ -6,7 +6,7 @@ import type { TranslationPools } from '../translate/pool'
 import { fakeProvider } from '../translate/fake'
 import { withMockProviderUrl } from '../../shared/presets'
 import { ERROR_CODES, UserError } from '../../shared/errors'
-import type { ProviderConfig } from '../../shared/types'
+import type { DocumentManifest, ProviderConfig } from '../../shared/types'
 import { analyzeStage } from './stages/analyze'
 import { composeStage } from './stages/compose'
 import { inspectStage } from './stages/inspect'
@@ -21,9 +21,11 @@ export function createPipelineHooks(input: {
   analyze: PdfWorkerHost
   compose: PdfWorkerHost
   env?: NodeJS.Dict<string>
+  onChanged?: (manifest: DocumentManifest) => void
 }): PipelineHooks {
   const env = input.env ?? process.env
   return {
+    ...(input.onChanged ? { onChanged: input.onChanged } : {}),
     inspect: (path, signal) => inspectStage(input.analyze, path, signal),
     analyze: (path, signal) => analyzeStage(input.analyze, path, 1, signal),
     translate: async ({ analysis, manifest, workDir, signal, onProgress }) => {
@@ -40,12 +42,8 @@ export function createPipelineHooks(input: {
         pools: input.pools,
         signal,
         onProgress,
-        onEvent: async (message) => {
-          await input.library.events.append(manifest.id, {
-            stage: 'translate',
-            level: message.includes('失败') || message.includes('重试') ? 'warning' : 'info',
-            message,
-          })
+        onEvent: async (event) => {
+          await input.library.events.append(manifest.id, { stage: 'translate', ...event })
         },
       })
     },

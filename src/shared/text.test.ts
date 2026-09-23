@@ -29,12 +29,28 @@ describe('suggestedNames', () => {
 })
 
 describe('formatBytes', () => {
-  test('formats binary units', () => {
-    expect(formatBytes(0)).toBe('0 B')
-    expect(formatBytes(512)).toBe('512 B')
-    expect(formatBytes(1024)).toBe('1.0 KB')
-    expect(formatBytes(1536)).toBe('1.5 KB')
+  test('uses whole KB below 1 MB', () => {
+    expect(formatBytes(0)).toBe('0 KB')
+    expect(formatBytes(1)).toBe('1 KB')
+    expect(formatBytes(512)).toBe('1 KB')
+    expect(formatBytes(1024)).toBe('1 KB')
+    expect(formatBytes(1536)).toBe('2 KB')
+    expect(formatBytes(900 * 1024)).toBe('900 KB')
+    expect(formatBytes(1023 * 1024)).toBe('1023 KB')
+  })
+
+  test('uses MB with one decimal and GB with two', () => {
+    expect(formatBytes(1024 * 1024 - 100)).toBe('1.0 MB')
     expect(formatBytes(1024 * 1024)).toBe('1.0 MB')
+    expect(formatBytes(2.46 * 1024 * 1024)).toBe('2.5 MB')
+    expect(formatBytes(500 * 1024 * 1024)).toBe('500.0 MB')
+    expect(formatBytes(1024 * 1024 * 1024 - 1000)).toBe('1.00 GB')
+    expect(formatBytes(1.5 * 1024 * 1024 * 1024)).toBe('1.50 GB')
+  })
+
+  test('treats invalid sizes as zero', () => {
+    expect(formatBytes(-1)).toBe('0 KB')
+    expect(formatBytes(Number.NaN)).toBe('0 KB')
   })
 })
 

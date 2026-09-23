@@ -23,7 +23,8 @@
 - 顶栏：macOS 左侧留 80 px 给红绿灯（`titleBarStyle: hiddenInset`），整条 `titlebar-drag`，内部控件 `titlebar-no-drag`。Windows 用系统标题栏，顶栏不留白。
 - 侧栏（`Surface`/`div` + `ListBox`）：四个筛选项，右侧 `Chip size="sm"` 显示计数（进行中为 `accent`，其他 `default`）；底部「设置」按钮（`Button variant="ghost"` + `Settings` 图标）。宽 220 px 固定。
 - 列表与详情用可拖动分隔（不做拖动，固定：列表 `flex-1 min-w-[360px]`，详情 `w-[52%] min-w-[480px]`；窗口 < 1100 px 时详情改为覆盖式 `Drawer` 从右侧滑出）。
-- 键盘：`⌘/Ctrl+N` 新建翻译；`⌘/Ctrl+,` 设置；`⌘/Ctrl+F` 聚焦搜索；`Delete/Backspace` 删除选中；`Esc` 关闭对话框/详情抽屉；`↑↓` 在列表中移动选择。
+- 键盘：`⌘/Ctrl+N` 新建翻译；`⌘/Ctrl+,` 设置；`⌘/Ctrl+F` 聚焦搜索；`Delete/Backspace` 删除选中；`Esc` 关闭对话框/详情抽屉；`↑↓` 在列表中移动选择。macOS 只认 `⌘`，Windows 只认 `Ctrl`（输入框里的 Control-N/F 是移动光标，不能被劫持）。
+- 打开设置（侧栏 `设置`、`⌘/Ctrl+,`、菜单）统一走 `ui.openSettings()`：尚未配置可用的大模型时定位到 `翻译服务`，否则 `通用`。
 - 主题：`<html class="dark" data-theme="dark">` 切换；设置 → 通用 → 外观：跟随系统 / 浅色 / 深色。
 
 ## 6.2 文档库（`views/Library/`）
@@ -35,7 +36,10 @@
 - 进行中：第三行 `ProgressBar size="sm" value={progress}` + 文字 `排队中` / `处理中 · N%` / `等待重试 · N%`，以及当前阶段名（6.4 的阶段名）。
 - 右：`Dropdown` 菜单按钮（`MoreHorizontal`），项：`用默认应用打开`（仅完成）、`在访达中显示`（Windows：`在文件资源管理器中显示`）、分隔、`重新处理`（失败/取消）、`取消处理…`（进行中）、`重命名…`、`删除…`（红）。
 - 选中态：`bg-accent/10`；双击 = 用默认应用打开（完成时）。
-- 列表虚拟化：文档 > 200 时用简单窗口化（只渲染可见区 ±20 行；自己写，不引库）。
+- 顺序：`createdAt` 降序、`id` 降序（`store/documents.ts` 的 `sortDocuments()`，列表与方向键共用）；进度更新不改变行的位置。
+- 行高固定：空闲 56 px，进行中 76 px（多一行进度）。
+- 键盘：列表容器（`data-testid="document-list"`）可用 Tab 聚焦，用 `aria-activedescendant` 指向选中行；`↑↓`、`PageUp/PageDown`、`Home/End` 移动选择；窄窗口下 `Enter`/`Space` 打开详情抽屉。相对时间每分钟刷新。
+- 列表虚拟化：文档 > 200 时用简单窗口化（只渲染可见区 ±20 行；自己写，不引库）；按固定行高计算位置，键盘选中时直接设置 `scrollTop`，让未渲染的行也能滚到可见区。
 
 ### 空状态
 
@@ -45,7 +49,7 @@
 
 ### 拖放
 
-整个窗口是放置目标（`dragover` 时显示全屏半透明浮层 `松开以添加文档`，`Upload` 图标）。放下后：取 `.pdf` 文件路径（用 `webUtils.getPathForFile(file)`，在 preload 里暴露为 `docflow.pathsForFiles(files)`）；非 PDF 的文件用 Toast 警告 `已忽略 N 个非 PDF 文件`；有 PDF 则打开「新建翻译」并预填。macOS `app:openFiles` 推送同样打开。
+整个窗口是放置目标（`dragover` 时显示全屏半透明浮层 `松开以添加文档`，`Upload` 图标；浮层显示期间由它接收拖放事件，拖到 PDF 预览上也能放下；3 秒没有拖动或鼠标移动时自动收起）。放下后：取 `.pdf` 文件路径（用 `webUtils.getPathForFile(file)`，在 preload 里暴露为 `docflow.pathsForFiles(files)`）；非 PDF 的文件用 Toast 警告 `已忽略 N 个非 PDF 文件`；有 PDF 则打开「新建翻译」并预填。macOS `app:openFiles` 推送同样打开。
 
 ### 搜索
 
@@ -55,7 +59,8 @@
 
 - 删除：标题 `删除“<title>”？`（多选 `删除 N 个文档？`），正文 `译文、PDF、处理记录和文档库里的源文件副本都会被删除，你最初选择的文件不受影响。此操作无法撤销。`，按钮 `删除`（danger）/ `取消`。
 - 取消处理：标题 `取消处理“<title>”？`，正文 `正在进行的解析、翻译或排版会停止。源文件和已完成的翻译断点会保留，之后可以重新处理。`，按钮 `取消处理`（danger）/ `继续处理`。
-- 重命名（`Modal`）：标题 `重命名`，`TextField` 标签 `标题`（预填、全选），按钮 `重命名`（primary，空白时禁用）/ `取消`。
+- 重命名（`Modal`）：标题 `重命名`，`TextField` 标签 `标题`（预填、全选），按钮 `重命名`（primary，空白时禁用）/ `取消`；`Enter` 提交（输入法组字时除外）。
+- 确认框执行中（按钮转圈）不能用 Esc、点背景或 `取消` 关闭；每个确认框只清除它自己，不会关掉之后打开的另一个。
 
 ## 6.3 新建翻译（`views/NewTranslation/NewTranslationModal.tsx`）
 
@@ -63,7 +68,7 @@
 
 1. **文件**区：空时 `DropZone`（虚线框，`将文件拖到这里` + `Button variant="secondary"` `选择文件…`）；有文件时列表：`FileText` 图标、文件名、大小（或红色问题文字）、`CloseButton`（`aria-label` `移除这个文件`）；底部 `Button variant="ghost"` `添加文件…`。区下方说明 `只支持带文本层的 PDF；扫描件、加密文件和 Office 文档无法处理。`
 2. **翻译模型**：`Select`，选项按服务商分组（`ListBox.Section` 标题 = 服务商名，项 = 模型名或 id），值 = `providerId/model`；默认 = `settings.defaultTranslator`；无可用模型时显示 `尚未添加` 并禁用提交。说明 `由所选的大模型翻译；速度和费用取决于服务商和模型。`
-3. **标题**：仅当恰好一个文件时显示 `TextField`，占位 `默认使用文件名`，预填文件主名。
+3. **标题**：仅当恰好一个文件时显示 `TextField`，占位 `默认使用文件名`，预填文件主名；用户改动前随文件增删更新。只有用户改过且非空时才作为 `title` 发出，否则由 PDF 元数据标题或文件名决定（05 §5.7）。
 4. 阻塞提示（`Alert variant="warning"`）：`还没有可用的大模型：请在设置的“翻译服务”中添加服务商、填写 API Key 并获取模型。`（带 `打开设置…` 按钮）；`所选的模型已停用或已删除，请换一个模型。`
 5. 提交错误（`Alert variant="danger"`）：`部分文件未能添加`，下面逐行 `<文件名>：<原因>`。
 6. 底部：`取消` / `开始翻译`（一个文件）或 `开始翻译 N 个文件`（primary，`isPending` 时转圈）。`Enter` 提交。
@@ -78,19 +83,20 @@
 
 标题（可双击进入重命名）、`Chip` 状态（`排队中`/`处理中`/`等待重试`/`已完成`/`失败`/`已取消`，颜色 default/accent/warning/success/danger/default）、副标题 `<translator.label> · <N 页> · <大小>`。右侧 `ButtonGroup`：
 
-- 完成：`打开`（`ExternalLink`，默认应用打开中文 PDF）、`导出`（`Dropdown`：`中文 PDF…`、`双语对照 PDF…`（有则显示）、`源文件…`、分隔、`全部文件（ZIP）…`）、`Dropdown` 更多：`在访达中显示`/`在文件资源管理器中显示`、`重命名…`、`重新处理`、`删除…`。
-- 进行中：`取消处理…`、更多：`重命名…`、`在访达中显示`。
-- 失败/取消：`重新处理`（primary）、更多同上 + `删除…`。
-- 右上 `文档信息` 按钮（`Info` 图标）打开 `Drawer`（右侧，宽 360）：分组 `文档`（状态、翻译服务、页数、段落数 `已翻译 X / 待翻译 Y，保留原文 K`、用量 tokens）、`源文件`（文件名、大小、SHA-256 前 16 位 + `Tooltip` 全值，可选中）、`时间`（加入、开始、完成、用时；进行中每秒刷新）、按钮 `在访达中显示`、`用默认应用打开`。
+- 完成：`打开`（`ExternalLink`，默认应用打开中文 PDF）、`导出`（`Dropdown`：`中文 PDF…`、`双语对照 PDF…`（有则显示）、`源文件…`、分隔、`全部文件（ZIP）…`）、`Dropdown` 更多：`在访达中显示`/`在文件资源管理器中显示`、`重命名…`、`删除…`。已完成的文档不提供 `重新处理`（05 §5.7：只有失败或已取消的文档可以重新处理）。
+- 进行中：`取消处理…`、更多：`在访达中显示`、`重命名…`。确认框打开期间文档完成或失败（离开排队/处理/等待重试）时，确认框自动关闭，不会去取消一篇已经结束的文档。
+- 失败/取消：`重新处理`（primary）、更多：`在访达中显示`、`重命名…`、`删除…`。
+- 按钮触发的操作（打开、重新处理、在访达中显示等）失败时，用户错误用 Toast 显示原因（`notifyError`），内部错误只有 6.6 的全局 Toast。
+- 右上 `文档信息` 按钮（`Info` 图标）打开 `Drawer`（右侧，宽 360；宽度写在 `Drawer.Dialog` 上，`Drawer.Content` 是铺满窗口的定位层）：分组 `文档`（状态、翻译服务、页数、段落数 `已翻译 X / 待翻译 Y，保留原文 K`、用量 tokens）、`源文件`（文件名、大小、SHA-256 前 16 位 + `Tooltip` 全值，可选中）、`时间`（加入、开始、完成、用时；进行中每秒刷新，完成、失败、取消后停在 `completedAt`，旧记录没有时用 `updatedAt`）、按钮 `在访达中显示`、`用默认应用打开`。
 
 ### 内容区
 
-`Tabs`：`中文 PDF`、`双语对照`（`settings.pdf.bilingual` 或文件存在时）、`处理记录`。完成时默认 `中文 PDF`；未完成时只有 `处理记录`，并在其上方显示处理面板。
+`Tabs`：`中文 PDF`、`双语对照`（只在双语 PDF 存在时，即 `files.dual`；关闭「同时生成双语对照 PDF」时完成的文档没有这个页签）、`处理记录`。完成时默认 `中文 PDF`；未完成时只有 `处理记录`，并在其上方显示处理面板。
 
-- PDF 页签：`<iframe class="w-full h-full border-0" src={files.mono + '#toolbar=1&navpanes=0'} title="中文 PDF">`。加载失败（`onError` 或 5 s 内无 load）显示 `无法在应用内预览，请用默认应用打开。` + 按钮。删除文档前先把 `src` 设为 `about:blank`。
+- PDF 页签：`<iframe class="w-full h-full border-0" src={files.mono + '#toolbar=1&navpanes=0'} title="中文 PDF">`。加载失败（`onError` 或 5 s 内无 load）显示 `无法在应用内预览，请用默认应用打开。` + 按钮；失败状态由每个预览按自己的 `src` 记录，一个预览失败不影响另一个，`src` 变化时重新尝试。删除文档前先把 `src` 设为 `about:blank`：所有删除入口（详情、列表菜单、`Delete` 键）都调用 `views/Document/actions.ts` 的 `deleteDocuments()`，它先同步提交「删除中」状态让预览换成 `about:blank`，再调用 `documents:delete`（Windows 上 PDF 查看器持有文件句柄会导致删除失败）。
 - 处理面板（未完成时）：
-  - `Card` `处理进度`：`ProgressBar value={progress}`（`progress <= 3` 时 `isIndeterminate`）、`N%`、当前阶段名与最近一条事件、已用时。失败时 `Alert variant="danger"` 标题 `处理失败`（取消：`已取消处理`），正文 = `failure.message`，按钮 `重新处理`。等待重试：`Alert variant="warning"` `等待自动重试（第 n 次），<倒计时> 秒后开始`。
-  - `Card` `处理阶段`：七行，图标 `CheckCircle2`（已完成）/ `Spinner`（进行中）/ `XOctagon`（失败）/ `Circle`（等待）；名称与说明：
+  - `Card` `处理进度`：`ProgressBar value={progress}`（`progress <= 3` 时 `isIndeterminate`）、`N%`、当前阶段名与最近一条事件（按 `seq` 取最新）、已用时（从 `startedAt` 起算，还在排队时从加入时起算；失败、取消后停止走动）。失败时 `Alert variant="danger"` 标题 `处理失败`（取消：`已取消处理`），正文 = `failure.message`，按钮 `重新处理`。等待重试：`Alert variant="warning"` `等待自动重试（第 n 次），<倒计时> 秒后开始`。
+  - `Card` `处理阶段`：七行，图标 `CheckCircle2`（已完成）/ `Spinner`（进行中）/ `XOctagon`（失败）/ `XCircle` 灰（取消）/ `Circle`（等待）。图标由 manifest 的 `stage` 决定，不按进度区间推算：主进程在每个阶段**开始**时写入 `{ stage, progress: 该阶段起点 }`（只改 manifest，不记事件），所以 `stage` 就是正在进行的阶段——它之前的阶段已完成，之后的在等待；失败或取消时，`XOctagon`/`XCircle` 标在停下的那个阶段（例如 Key 无效标在「翻译段落」而不是「分析版面」）。名称与说明：
 
     | 阶段         | 说明                                     | 进度区间 |
     | ------------ | ---------------------------------------- | -------- |
@@ -106,8 +112,8 @@
 
 ### 导出结果
 
-- 成功：`toast.success('已导出“<文件名>”', { action: { label: '打开所在文件夹', onPress } , timeout: 8000 })`。
-- 失败：`AlertDialog` 标题 `导出失败`，正文 `“<文件名>”没有导出：<原因>`。
+- 成功：`notify.success('已导出“<文件名>”', { actionProps: { children: '打开所在文件夹', onPress }, timeout: 8000 })`。`<文件名>` 是实际保存的文件名（保存对话框返回路径的 basename，不是建议名）；`打开所在文件夹` 调用 `shell:revealExport({ path })`，在访达/资源管理器中选中这份导出的文件（主进程只接受本次会话 `documents:export` 写出过的路径），而不是文档库里的副本。
+- 失败：`AlertDialog` 标题 `导出失败`，正文 `“<文件名>”没有导出：<原因>`。写入失败（没有权限、磁盘已满、文件被占用）由主进程转成带原因的用户错误，界面只弹这一次；内部错误只有 6.6 的全局 Toast，不再弹这个对话框。
 - 用户取消保存对话框：无提示。
 
 ## 6.5 设置（`views/Settings/`）
@@ -128,17 +134,18 @@
 
 右侧 `ProviderDetail`（`Form`，字段变更 blur 即保存）：
 
+- 字段失焦时校验，错误显示在字段下方：`请填写名称`、`名称不能超过 64 个字符`、`请填写以 http:// 或 https:// 开头的完整地址`；保存总是基于已保存的配置，一个字段的无效草稿不会影响其他控件的保存。
 - `Switch` `启用`；`TextField` `名称`；`接口类型`（只读文本：OpenAI 兼容 / Anthropic / Gemini / Azure OpenAI）；`TextField` `API 地址`（占位 `https://…/v1`），下方 `Description` `请求地址：<chatUrl 预览>`（用 `src/shared` 里的纯函数计算，模型名用第一个模型或 `<模型>`）。
 - `Card` `API Key`：状态行 `已保存 ••••••••1a2b（共 N 个）` / `本机服务，无需 Key` / `未填写`；`TextField type="password"` 占位 `粘贴 API Key`（已保存时 `输入新的 Key 以替换`）；按钮 `保存`（primary）、`移除`（已保存时）、链接 `获取 API Key`（预设有 keyUrl 时，`shell:openExternal`）。说明 `多个 Key 用英文逗号分隔，请求会轮流使用；某个 Key 失效或余额不足时自动改用其余的。Key 只保存在本机，用系统加密保护。`
-- `Card` `模型`：`Table`（列：模型、操作）；每行 `检查`（`Button size="sm"`，`Tooltip` `用这个模型发送一个测试请求`；结果就地显示 `可用 · 812 ms · “你好，世界。”` 绿 / 错误红）、删除图标。底部 `手动添加…`（`Modal` `添加模型`，`TextField` `模型 ID`，说明 `与服务商文档中的模型名称一致，例如 deepseek-chat。`）、`获取模型列表…`（primary）。
-  - 获取流程：用当前编辑中的地址与 Key（未保存的 Key 也带上）调 `providers:listModels`；空 → Toast `服务商没有返回任何模型，请手动添加模型 ID。`；否则 `Modal` `<服务商> 的模型`（`SearchField` `在 N 个模型中搜索`，`ListBox selectionMode="multiple"`，行主文 id、副文 `name · owner · 上下文 NK`，已在列表中的预选中；底部 `已选择 N 个模型`，`取消` / `确定`）。确定后：列表里的按勾选增删，手动添加的保留；Toast `已添加 N 个、移除 M 个模型。`
+- `Card` `模型`：`Table`（列：模型、操作）；每行 `检查`（`Button size="sm"`，`Tooltip` `用这个模型发送一个测试请求`；结果就地显示 `可用 · 812 ms · “你好，世界。”` 绿 / 错误红）、删除图标。底部 `手动添加…`（`Modal` `添加模型`，`TextField` `模型 ID`，说明 `与服务商文档中的模型名称一致，例如 deepseek-chat。`；错误 `这个模型已在列表中` / `模型 ID 不能超过 256 个字符`；每次打开都是空白）、`获取模型列表…`（primary）。
+  - 获取流程：用当前编辑中的地址与 Key（未保存的 Key 也带上）调 `providers:listModels`；空 → Toast `服务商没有返回任何模型，请手动添加模型 ID。`；否则 `Modal` `<服务商> 的模型`（`SearchField` `在 N 个模型中搜索`，`ListBox selectionMode="multiple"`，行主文 id、副文 `name · owner · 上下文 NK`，已保存且出现在远端列表里的模型预选中；底部 `已选择 N 个模型`，`取消` / `确定`）。确定后：列表里的按勾选增删（去重），手动添加的保留；Toast `已添加 N 个、移除 M 个模型。`
 - `NumberField` `并发请求数`（1–2000，步进 10）。说明 `同时发往这个服务商的请求上限，所有文档共用；默认 100。遇到限流（HTTP 429）会自动减半，恢复后逐步回升。`
 - `TextArea` `附加请求参数（JSON，可选）`（等宽字体）+ `应用` 按钮；非法 JSON 或含禁用字段时 `FieldError` `不是有效的 JSON` / `不能覆盖 model、messages 等字段`。说明 `合并进每个请求，例如 {"temperature": 0.3}，或关闭思考模式的参数。`
 - 自定义服务商 `Modal`：`名称`（占位 `例如 公司网关`）、`接口类型` `Select`（`OpenAI 兼容（最常见）` / `Anthropic` / `Gemini` / `Azure OpenAI`）、`API 地址`。说明 `OpenAI 兼容接口填写到 /v1 为止，程序会在后面加上 /chat/completions。`
 
 ### 网络
 
-`RadioGroup` `代理`：`跟随系统` / `不使用代理` / `自定义`；自定义时 `TextField` `代理地址`（占位 `http://127.0.0.1:7890 或 socks5://127.0.0.1:1080`）+ `应用`。说明 `访问大模型服务商时使用的网络代理。“跟随系统”会读取系统设置中的代理。`
+`RadioGroup` `代理`：`跟随系统` / `不使用代理` / `自定义`；自定义时 `TextField` `代理地址`（占位 `http://127.0.0.1:7890 或 socks5://127.0.0.1:1080`）+ `应用`。选「自定义」本身不保存任何东西；只有按 `应用` 且地址有效才保存（地址为空时 `应用` 禁用，无效时字段错误 `请填写完整的代理地址，例如 http://127.0.0.1:7890`）。说明 `访问大模型服务商时使用的网络代理。“跟随系统”会读取系统设置中的代理。`
 
 ### 高级
 
@@ -152,13 +159,13 @@
 
 ## 6.6 Toast 与全局
 
-- `Toast.Provider` 放在 `App` 根；位置右下；默认 `timeout` 6000。
+- `Toast.Provider` 放在 `App` 根；位置右下；默认 `timeout` 6000。HeroUI 的 `toast` 默认 4 s，所以渲染进程统一用 `lib/notify.ts`：`notify.success/info/warning/danger` 默认 6000 ms（个别场景如导出成功显式传 8000），`notifyError(error, prefix?)` 只提示用户错误（内部错误已由下一条的全局 Toast 提示，避免弹两次）。
 - 全局错误：IPC 返回 `ok:false` 且 `user:false` 时 Toast `发生内部错误，详情见日志`，带 `打开日志` 动作。
 - 主进程不可用（极少见，如 preload 失败）：全屏 `处理引擎未运行` + `重新启动`（`app.relaunch()`）。
 
 ## 6.7 状态管理（zustand）
 
-- `documents` store：`items: Map<id, DocumentSummary>`、`counts`、`filter`、`query`、`selectedId`、`events: Map<id, ProcessingEvent[]>`；订阅 `document:changed/removed/event`；`list()` 在 filter/query 变化时拉取。
+- `documents` store：`items: Map<id, DocumentSummary>`、`counts`、`filter`、`query`、`selectedId`、`events: Map<id, ProcessingEvent[]>`；订阅 `document:changed/removed/event`；`list()` 在 filter/query 变化时拉取。`ensureEvents(id)`：文档详情挂载时调用，每篇文档加载一次处理记录（最新 500 条），与推送事件按 `seq` 合并。
 - `settings` store：`view: SettingsView | null`，`load()`, `update(patch)`，订阅 `settings:changed`。
 - `ui` store：`view`、`theme`、`modals`（新建翻译开关与预填路径）、`toast` 辅助。
 
@@ -166,5 +173,5 @@
 
 - 所有图标按钮有 `aria-label`；对话框首焦点在主要输入或取消按钮；列表可用键盘导航。
 - 文案里的引号统一用 `“”`；数字与中文之间不加空格（沿用 3.x 文案习惯）；时间显示本地时区。
-- 大小格式：`< 1 MB` 用 KB（整数），否则 MB（一位小数），`≥ 1 GB` 用 GB（两位小数）。
+- 大小格式：`< 1 MB` 用 KB（整数，不足 1 KB 显示 `1 KB`，0 字节显示 `0 KB`），否则 MB（一位小数），`≥ 1 GB` 用 GB（两位小数）。
 - 长路径用 `直接显示 + title`，不做中间省略。

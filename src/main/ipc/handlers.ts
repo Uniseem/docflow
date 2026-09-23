@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs'
 import { mkdir } from 'node:fs/promises'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { ERROR_CODES, UserError, isUserError } from '../../shared/errors'
 import { MAX_PROVIDERS } from '../../shared/constants'
 import type { ChannelRequest, ChannelResponse } from '../../shared/ipc'
@@ -43,6 +43,10 @@ export type HandlerContext = {
   sendChanged: (item: ChannelResponse<'documents:get'>) => void
   sendRemoved: (id: string) => void
   relaunch: () => void
+  /** Files written by documents:export in this app session (absolute paths). */
+  exportedPaths: Set<string>
+  /** PDFs the app was asked to open before the renderer subscribed; empties the queue. */
+  takePendingFiles: () => string[]
 }
 
 function running(ctx: HandlerContext): Set<string> {
@@ -181,12 +185,33 @@ export async function handleDocumentsExport(
     })
   }
   const source = ctx.library.pathFor(req.id, req.kind)
-  return saveExport({
+  if (!existsSync(source)) throw new UserError(ERROR_CODES.not_found, MISSING_FILE[req.kind])
+  const result = await saveExport({
     dialog: ctx.dialog,
     defaultPath: names[req.kind],
     sourcePath: source,
     ...(e2ePath ? { e2ePath } : {}),
   })
+  if ('path' in result) ctx.exportedPaths.add(resolve(result.path))
+  return result
+}
+
+const MISSING_FILE: Record<'mono' | 'dual' | 'source' | 'folder', string> = {
+  mono: '中文 PDF 不存在，可能已被删除。请重新处理这篇文档。',
+  dual: '这篇文档没有双语对照 PDF（处理时没有开启「同时生成双语对照 PDF」，或文件已被删除）。',
+  source: '文档库里的源文件副本不存在，请删除这篇文档后重新添加。',
+  folder: '文档文件夹不存在，可能已被删除。',
+}
+
+/** Library file of a document, or a user error saying what is missing. */
+function existingPathFor(
+  ctx: HandlerContext,
+  id: string,
+  kind: 'mono' | 'dual' | 'source' | 'folder',
+): string {
+  const path = ctx.library.pathFor(id, kind)
+  if (!existsSync(path)) throw new UserError(ERROR_CODES.not_found, MISSING_FILE[kind])
+  return path
 }
 
 export function handleDocumentsReveal(
@@ -197,7 +222,7 @@ export function handleDocumentsReveal(
     ctx.reveal(ctx.getLibraryDir())
     return {}
   }
-  ctx.reveal(ctx.library.pathFor(req.id, req.kind ?? 'folder'))
+  ctx.reveal(existingPathFor(ctx, req.id, req.kind ?? 'folder'))
   return {}
 }
 
@@ -205,8 +230,29 @@ export async function handleDocumentsOpenExternal(
   ctx: HandlerContext,
   req: ChannelRequest<'documents:openExternal'>,
 ): Promise<ChannelResponse<'documents:openExternal'>> {
-  await ctx.openPath(ctx.library.pathFor(req.id, req.kind))
+  await ctx.openPath(existingPathFor(ctx, req.id, req.kind))
   return {}
+}
+
+export function handleShellRevealExport(
+  ctx: HandlerContext,
+  req: ChannelRequest<'shell:revealExport'>,
+): ChannelResponse<'shell:revealExport'> {
+  const path = resolve(req.path)
+  if (!ctx.exportedPaths.has(path)) {
+    throw new UserError(ERROR_CODES.not_found, '找不到这个导出的文件。')
+  }
+  if (!existsSync(path)) {
+    throw new UserError(ERROR_CODES.not_found, '导出的文件已被移动或删除。')
+  }
+  ctx.reveal(path)
+  return {}
+}
+
+export function handleAppTakePendingFiles(
+  ctx: HandlerContext,
+): ChannelResponse<'app:takePendingFiles'> {
+  return { paths: ctx.takePendingFiles() }
 }
 
 export function handleAppInfo(ctx: HandlerContext): ChannelResponse<'app:info'> {
@@ -247,7 +293,7 @@ export async function handleSecretsSet(
   req: ChannelRequest<'secrets:set'>,
 ): Promise<ChannelResponse<'secrets:set'>> {
   await ctx.secrets.set(req.providerId, req.value)
-  ctx.pools.resetKeys(req.providerId)
+  ctx.pools.invalidate(req.providerId)
   return view(ctx)
 }
 
@@ -266,6 +312,7 @@ export async function handleProvidersSave(
     list.push(provider)
   }
   await ctx.settings.replaceProviders(list)
+  ctx.pools.invalidate(provider.id)
   ctx.pools.configure(list)
   return view(ctx)
 }
@@ -277,6 +324,7 @@ export async function handleProvidersDelete(
   const next = ctx.settings.snapshot.providers.filter((item) => item.id !== req.id)
   await ctx.settings.replaceProviders(next)
   await ctx.secrets.set(req.id, null).catch(() => undefined)
+  ctx.pools.invalidate(req.id)
   ctx.pools.configure(next)
   return view(ctx)
 }

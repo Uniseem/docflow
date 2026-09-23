@@ -1,6 +1,6 @@
 import { mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { describe, expect, test } from 'vitest'
 import { HostStore, ensureLibraryFolderName } from './host'
 
@@ -15,6 +15,28 @@ describe('HostStore', () => {
     await store.load()
     await store.update({ libraryDir: join(userData, 'host-lib') })
     expect(store.libraryDir()).toBe(join(userData, 'env-lib'))
+  })
+
+  test('a relative DOCFLOW_DATA_DIR resolves to an absolute path', () => {
+    const store = new HostStore(tmpdir(), {
+      fallbackLibraryDir: tmpdir(),
+      env: { DOCFLOW_DATA_DIR: 'relative/lib' },
+    })
+    expect(store.libraryDir()).toBe(resolve('relative/lib'))
+  })
+
+  test('concurrent updates all reach host.json', async () => {
+    const userData = await mkdtemp(join(tmpdir(), 'docflow-host-'))
+    const store = new HostStore(userData, { fallbackLibraryDir: userData, env: {} })
+    await store.load()
+    await Promise.all([
+      store.update({ theme: 'dark' }),
+      store.update({ window: { x: 1, y: 2, width: 1000, height: 700, maximized: false } }),
+    ])
+    const again = new HostStore(userData, { fallbackLibraryDir: userData, env: {} })
+    await again.load()
+    expect(again.snapshot.theme).toBe('dark')
+    expect(again.snapshot.window?.width).toBe(1000)
   })
 
   test('host.json libraryDir beats fallback', async () => {

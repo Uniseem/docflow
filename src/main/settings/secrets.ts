@@ -1,4 +1,4 @@
-import { readFile } from 'node:fs/promises'
+import { readFile, rename } from 'node:fs/promises'
 import { join } from 'node:path'
 import { ERROR_CODES, UserError } from '../../shared/errors'
 import { maskKey } from '../../shared/text'
@@ -17,6 +17,7 @@ export class SecretsStore {
   constructor(
     private readonly libraryDir: string,
     private readonly cryptor: Cryptor,
+    private readonly onWarning?: (message: string) => void,
   ) {
     this.filePath = join(libraryDir, 'secrets.bin')
   }
@@ -50,7 +51,21 @@ export class SecretsStore {
       this.#map = new Map()
       return
     }
-    const parsed = JSON.parse(this.cryptor.decryptString(bytes)) as unknown
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(this.cryptor.decryptString(bytes)) as unknown
+    } catch (error) {
+      // Another machine's or user's keychain, or a damaged file: start without keys rather
+      // than refusing to open the library, and keep the file for a later attempt.
+      const broken = `${this.filePath}.broken-${stamp()}`
+      await rename(this.filePath, broken).catch(() => undefined)
+      const reason = error instanceof Error ? error.message : String(error)
+      this.onWarning?.(
+        `secrets.bin 无法解密（${reason}），已备份为 ${broken}，API Key 需要重新填写`,
+      )
+      this.#map = new Map()
+      return
+    }
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
       this.#map = new Map()
       return
@@ -79,6 +94,10 @@ export function memoryCryptor(): Cryptor {
     encryptString: (plain) => Buffer.from(plain, 'utf8'),
     decryptString: (data) => Buffer.from(data).toString('utf8'),
   }
+}
+
+function stamp(): string {
+  return new Date().toISOString().replaceAll(':', '').replaceAll('.', '')
 }
 
 function isNotFound(error: unknown): boolean {

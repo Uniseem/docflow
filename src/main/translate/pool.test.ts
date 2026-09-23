@@ -181,6 +181,32 @@ describe('ProviderPool', () => {
     expect(reply.text).toBe('ok')
     expect(seen.length).toBe(2)
   })
+
+  test('a local server without a key gets requests with no Authorization header', async () => {
+    const seen: Array<string | null> = []
+    const fetchFn: FetchFn = (_url, init) => {
+      seen.push(new Headers(init?.headers).get('authorization'))
+      return Promise.resolve(okReply('ok'))
+    }
+    const local = { ...baseProvider, baseUrl: 'http://localhost:11434/v1' }
+    const pool = new ProviderPool(local, new KeyRing(''), fetchFn)
+    const reply = await pool.execute(request, new AbortController().signal)
+    expect(reply.text).toBe('ok')
+    expect(seen).toEqual([null])
+  })
+
+  test('a remote provider without a key still fails before sending', async () => {
+    let calls = 0
+    const fetchFn: FetchFn = () => {
+      calls += 1
+      return Promise.resolve(okReply('ok'))
+    }
+    const pool = new ProviderPool(baseProvider, new KeyRing(''), fetchFn)
+    await expect(pool.execute(request, new AbortController().signal)).rejects.toThrow(
+      '未配置 API Key。',
+    )
+    expect(calls).toBe(0)
+  })
 })
 
 describe('TranslationPools', () => {
@@ -206,5 +232,85 @@ describe('TranslationPools', () => {
     pools.configure([{ ...baseProvider, concurrency: 1 }])
     expect(first.stats().configured).toBe(1)
     expect(first.stats().current).toBe(1)
+  })
+
+  test('invalidate drops a provider so the next request reads its keys again', async () => {
+    const keys = new Map<string, string>([
+      ['p', 'old-abcdefghij'],
+      ['q', 'q-abcdefghijkl'],
+    ])
+    const seen: string[] = []
+    const fetchFn: FetchFn = (_url, init) => {
+      seen.push(new Headers(init?.headers).get('authorization') ?? '')
+      return Promise.resolve(okReply())
+    }
+    const pools = new TranslationPools(fetchFn, (id) => keys.get(id))
+    const other = { ...baseProvider, id: 'q' }
+    const first = pools.get(baseProvider)
+    const second = pools.get(other)
+    keys.set('p', 'new-abcdefghij')
+    pools.invalidate('p')
+    expect(pools.get(baseProvider)).not.toBe(first)
+    expect(pools.get(other)).toBe(second)
+    await pools.execute(baseProvider, request, new AbortController().signal)
+    expect(seen.at(-1)).toContain('new-abcdefghij')
+    pools.invalidate()
+    expect(pools.get(other)).not.toBe(second)
+  })
+
+  test('each request uses the caller provider; the shared pool keeps no endpoint', async () => {
+    const urls: string[] = []
+    const fetchFn: FetchFn = (url) => {
+      urls.push(url)
+      return Promise.resolve(okReply())
+    }
+    const pools = new TranslationPools(fetchFn, () => 'k-abcdefghijkl')
+    const old = { ...baseProvider, baseUrl: 'https://old.example.com/v1' }
+    const renewed = { ...baseProvider, baseUrl: 'https://new.example.com/v1' }
+    await pools.execute(renewed, request, new AbortController().signal)
+    await pools.execute(old, request, new AbortController().signal)
+    await pools.execute(renewed, request, new AbortController().signal)
+    expect(urls.map((url) => new URL(url).host)).toEqual([
+      'new.example.com',
+      'old.example.com',
+      'new.example.com',
+    ])
+  })
+})
+
+describe('ProviderPool cancellation', () => {
+  test('a queued request leaves the queue as soon as its document is cancelled', async () => {
+    const hanging = hangFetchParts()
+    const pool = new ProviderPool(
+      { ...baseProvider, concurrency: 1 },
+      new KeyRing('k-abcdefghijkl'),
+      hanging.fetch,
+    )
+    const running = pool.execute(request, new AbortController().signal)
+    await hanging.waitFor(1)
+    const controller = new AbortController()
+    const queued = pool.execute(request, controller.signal)
+    expect(pool.stats().waiting).toBe(1)
+    controller.abort()
+    await expect(queued).rejects.toMatchObject({ code: 'cancelled' })
+    expect(pool.stats().waiting).toBe(0)
+    hanging.release()
+    await running
+    expect(pool.stats().inFlight).toBe(0)
+  })
+
+  test('an in-flight request aborted by its document is a cancellation, not a provider error', async () => {
+    const fetchFn: FetchFn = (_url, init) =>
+      new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => {
+          reject(Object.assign(new Error('aborted'), { name: 'AbortError' }))
+        })
+      })
+    const pool = new ProviderPool(baseProvider, new KeyRing('k-abcdefghijkl'), fetchFn)
+    const controller = new AbortController()
+    const pending = pool.execute(request, controller.signal)
+    controller.abort()
+    await expect(pending).rejects.toMatchObject({ code: 'cancelled' })
+    expect(pool.stats().inFlight).toBe(0)
   })
 })

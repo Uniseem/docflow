@@ -3,7 +3,9 @@ import type { AnalysisResult, TranslatedParagraph } from '../../../shared/pdf-ty
 import type { DocumentManifest, ProviderConfig } from '../../../shared/types'
 import { cacheFingerprint, TranslationCache } from '../../translate/cache'
 import type { TranslationPools } from '../../translate/pool'
-import { translateDocument } from '../../translate/translate-document'
+import { translateDocument, type EventInput } from '../../translate/translate-document'
+
+export type TranslateStageEvent = Pick<EventInput, 'level' | 'message' | 'detail'>
 
 export async function translateStage(input: {
   analysis: AnalysisResult
@@ -13,7 +15,7 @@ export async function translateStage(input: {
   pools: TranslationPools
   signal: AbortSignal
   onProgress: (done: number, total: number) => Promise<void>
-  onEvent: (message: string) => Promise<void>
+  onEvent: (event: TranslateStageEvent) => Promise<void>
 }): Promise<{
   translations: TranslatedParagraph[]
   usage: { input: number; output: number }
@@ -21,7 +23,10 @@ export async function translateStage(input: {
   translated: number
 }> {
   const translatable = input.analysis.paragraphs.filter((para) => para.translatable)
-  await input.onEvent(`开始翻译：${input.manifest.translator.label}，共 ${translatable.length} 段`)
+  await input.onEvent({
+    level: 'info',
+    message: `开始翻译：${input.manifest.translator.label}，共 ${translatable.length} 段`,
+  })
   const cache = new TranslationCache(
     join(input.workDir, 'translation-cache.json'),
     cacheFingerprint(
@@ -45,8 +50,13 @@ export async function translateStage(input: {
         void input.onProgress(done, total)
       },
       onEvent: (event) => {
-        if (event.message.startsWith('已翻译')) return
-        void input.onEvent(event.message)
+        // Progress rows come from onProgress (with the manifest update).
+        if (event.current !== undefined) return
+        void input.onEvent({
+          level: event.level,
+          message: event.message,
+          ...(event.detail ? { detail: event.detail } : {}),
+        })
       },
     })
     const byId = new Map(results.map((row) => [row.id, row]))

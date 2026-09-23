@@ -16,6 +16,16 @@ export const PROVIDER_TYPE_LABELS: Record<ProviderType, string> = {
   gemini: 'Gemini',
 }
 
+// z.url() checks the protocol without throwing: a `.refine(() => new URL(u))` after `.url()`
+// still runs on invalid input in zod 4 and throws a TypeError out of parse().
+/** Absolute http(s) URL (provider API base). Requires `://`, so `127.0.0.1:7890` is rejected. */
+export const HttpUrl = z.url({ protocol: /^https?$/ })
+
+/** Proxy URL: http(s) or socks5(h), written with `://`. */
+export const ProxyUrl = z
+  .url({ protocol: /^(https?|socks5h?)$/ })
+  .refine((u) => /^[a-z][a-z0-9+.-]*:\/\//i.test(u))
+
 export const ModelConfig = z.object({
   id: z
     .string()
@@ -33,10 +43,7 @@ export const ProviderConfig = z
     id: z.string().regex(/^[a-z0-9-_]{1,64}$/),
     name: z.string().min(1).max(64),
     type: ProviderType,
-    baseUrl: z
-      .string()
-      .url()
-      .refine((u) => /^https?:$/.test(new URL(u).protocol)),
+    baseUrl: HttpUrl,
     enabled: z.boolean().default(true),
     models: z.array(ModelConfig).max(MAX_MODELS_PER_PROVIDER),
     concurrency: z.number().int().min(1).max(2000).default(100),
@@ -90,10 +97,7 @@ export const ProxyConfig = z.discriminatedUnion('mode', [
   z.object({ mode: z.literal('direct') }),
   z.object({
     mode: z.literal('custom'),
-    url: z
-      .string()
-      .url()
-      .refine((u) => /^(https?|socks5h?):$/.test(new URL(u).protocol)),
+    url: ProxyUrl,
   }),
 ])
 export type ProxyConfig = z.infer<typeof ProxyConfig>

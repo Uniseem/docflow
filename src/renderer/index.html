@@ -1,12 +1,26 @@
 <!doctype html>
-<html lang="zh-CN" class="light" data-theme="light">
+<html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
     <meta
       http-equiv="Content-Security-Policy"
       content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: docflow:; font-src 'self' data:; frame-src docflow:; connect-src 'self' blob: data:; worker-src 'self' blob:"
     />
+    <meta name="color-scheme" content="light dark" />
     <title>DocFlow</title>
+    <style>
+      /* Until main.tsx sets .light/.dark: follow prefers-color-scheme, which reflects the saved
+         theme (nativeTheme.themeSource), so the first frame is not painted light in dark mode.
+         Colors are HeroUI's --background for each theme. */
+      html:not(.light):not(.dark) body {
+        background: oklch(0.9702 0 0);
+      }
+      @media (prefers-color-scheme: dark) {
+        html:not(.light):not(.dark) body {
+          background: oklch(12% 0.005 285.823);
+        }
+      }
+    </style>
   </head>
   <body>
     <div id="root"></div>

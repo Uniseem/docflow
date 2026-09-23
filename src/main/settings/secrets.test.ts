@@ -1,4 +1,4 @@
-import { mkdtemp, writeFile } from 'node:fs/promises'
+import { mkdtemp, readdir, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, test } from 'vitest'
@@ -40,6 +40,28 @@ describe('SecretsStore', () => {
       code: ERROR_CODES.keychain_unavailable,
       user: true,
     })
+  })
+
+  test('a file this machine cannot decrypt loads as empty and is kept aside', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'docflow-secrets-'))
+    await writeFile(join(dir, 'secrets.bin'), 'encrypted elsewhere')
+    const warnings: string[] = []
+    const store = new SecretsStore(
+      dir,
+      {
+        ...memoryCryptor(),
+        decryptString: () => {
+          throw new Error('bad decrypt')
+        },
+      },
+      (message) => warnings.push(message),
+    )
+    await store.load()
+    expect(store.keyConfigured('deepseek')).toBe(false)
+    expect(warnings[0]).toContain('bad decrypt')
+    const files = await readdir(dir)
+    expect(files.some((name) => name.startsWith('secrets.bin.broken-'))).toBe(true)
+    expect(files).not.toContain('secrets.bin')
   })
 
   test('half-written tmp does not break load', async () => {

@@ -1,26 +1,14 @@
-import type { DocumentManifest, DocumentStatus } from '../../shared/types'
+import type { DocumentManifest } from '../../shared/types'
+import {
+  isActiveStatus,
+  isFailedStatus,
+  matchesFilter,
+  matchesQuery,
+  type LibraryFilter,
+} from '../../shared/library-filter'
 
-export type ListFilter = 'all' | 'active' | 'completed' | 'failed'
-
-const ACTIVE: ReadonlySet<DocumentStatus> = new Set(['queued', 'processing', 'retrying'])
-const FAILED: ReadonlySet<DocumentStatus> = new Set(['failed', 'cancelled'])
-
-export function matchesFilter(status: DocumentStatus, filter: ListFilter): boolean {
-  if (filter === 'all') return true
-  if (filter === 'active') return ACTIVE.has(status)
-  if (filter === 'completed') return status === 'completed'
-  return FAILED.has(status)
-}
-
-export function matchesQuery(manifest: DocumentManifest, query: string | undefined): boolean {
-  const q = query?.trim()
-  if (!q) return true
-  const hay = `${manifest.title}\n${manifest.originalFilename}`.toLowerCase()
-  return q
-    .toLowerCase()
-    .split(/\s+/)
-    .every((word) => hay.includes(word))
-}
+export { matchesFilter, matchesQuery }
+export type ListFilter = LibraryFilter
 
 export class DocumentIndex {
   private readonly map = new Map<string, DocumentManifest>()
@@ -52,9 +40,9 @@ export class DocumentIndex {
     const items = [...this.map.values()].filter((item) => matchesQuery(item, query))
     return {
       all: items.length,
-      active: items.filter((item) => ACTIVE.has(item.status)).length,
+      active: items.filter((item) => isActiveStatus(item.status)).length,
       completed: items.filter((item) => item.status === 'completed').length,
-      failed: items.filter((item) => FAILED.has(item.status)).length,
+      failed: items.filter((item) => isFailedStatus(item.status)).length,
     }
   }
 

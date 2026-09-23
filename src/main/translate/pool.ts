@@ -3,8 +3,9 @@ import {
   RATE_LIMIT_COOLDOWN_MS,
   REQUEST_TIMEOUT_MS,
 } from '../../shared/constants'
+import { ERROR_CODES, UserError } from '../../shared/errors'
 import type { ProviderConfig } from '../../shared/types'
-import { withMockProviderUrl } from '../../shared/presets'
+import { keyOptional, withMockProviderUrl } from '../../shared/presets'
 import { ProviderError } from './errors'
 import type { FetchFn } from './http'
 import { type Clock, KeyRing, degradeCredential, systemClock } from './keys'
@@ -25,6 +26,11 @@ export type PoolStats = {
   waiting: number
 }
 
+/**
+ * Concurrency, adaptive back-off and key rotation for one provider id. The pool keeps no
+ * endpoint config: each request carries the caller's provider snapshot, so two documents
+ * that started with different settings never switch each other's base URL or model list.
+ */
 export class ProviderPool {
   #configured: number
   #current: number
@@ -35,21 +41,19 @@ export class ProviderPool {
   #lastReduceAt = Number.NEGATIVE_INFINITY
   #appVersion: string
   #clock: Clock
+  readonly #initial: ProviderConfig
 
   constructor(
-    private provider: ProviderConfig,
+    provider: ProviderConfig,
     private keys: KeyRing,
     private fetchFn: FetchFn,
     options: { clock?: Clock; appVersion?: string } = {},
   ) {
+    this.#initial = provider
     this.#configured = provider.concurrency
     this.#current = provider.concurrency
     this.#clock = options.clock ?? systemClock
     this.#appVersion = options.appVersion ?? '4.0.0'
-  }
-
-  useProvider(provider: ProviderConfig): void {
-    this.provider = provider
   }
 
   stats(): PoolStats {
@@ -69,33 +73,45 @@ export class ProviderPool {
     this.#wake()
   }
 
-  async execute(request: ChatRequest, signal: AbortSignal): Promise<ChatReply> {
-    await this.#acquire()
+  async execute(
+    request: ChatRequest,
+    signal: AbortSignal,
+    provider: ProviderConfig = this.#initial,
+  ): Promise<ChatReply> {
+    await this.#acquire(signal)
     try {
-      return await this.#dispatch(request, signal)
+      return await this.#dispatch(provider, request, signal)
     } finally {
       this.#release()
     }
   }
 
-  async #dispatch(request: ChatRequest, signal: AbortSignal): Promise<ChatReply> {
+  async #dispatch(
+    provider: ProviderConfig,
+    request: ChatRequest,
+    signal: AbortSignal,
+  ): Promise<ChatReply> {
     const timeout = AbortSignal.timeout(REQUEST_TIMEOUT_MS)
     const combined = AbortSignal.any([signal, timeout])
     const tried = new Set<string>()
+    // Local servers (Ollama, LM Studio, any localhost endpoint) take requests without a key.
+    const keyless = this.keys.size === 0 && keyOptional(provider)
 
     while (!combined.aborted) {
-      const key = this.keys.pick()
-      if (!key) {
-        throw this.keys.size === 0 ? this.keys.missingKeyError() : this.keys.allFailedError()
+      const key = keyless ? undefined : this.keys.pick()
+      if (!keyless) {
+        if (!key) {
+          throw this.keys.size === 0 ? this.keys.missingKeyError() : this.keys.allFailedError()
+        }
+        if (tried.has(key)) {
+          throw degradeCredential(this.keys.allFailedError())
+        }
+        tried.add(key)
       }
-      if (tried.has(key)) {
-        throw degradeCredential(this.keys.allFailedError())
-      }
-      tried.add(key)
 
       try {
         const reply = await postChat(
-          this.provider,
+          provider,
           request.model,
           request.system,
           request.user,
@@ -108,12 +124,14 @@ export class ProviderPool {
         this.#noteSuccess()
         return reply
       } catch (error) {
+        // The caller gave up (document cancelled or app shutting down): not a provider failure.
+        if (signal.aborted) throw cancelledError()
         if (!(error instanceof ProviderError)) throw error
         if (error.kind === 'rateLimited') {
           this.#noteRateLimited()
           throw error
         }
-        if (error.kind === 'credential') {
+        if (error.kind === 'credential' && key) {
           const next = this.keys.noteCredential(key, error.message)
           if (next === 'retry') continue
           throw this.keys.size <= 1 ? error : this.keys.allFailedError()
@@ -122,7 +140,8 @@ export class ProviderPool {
       }
     }
 
-    throw new ProviderError('transient', '翻译请求已取消')
+    if (signal.aborted) throw cancelledError()
+    throw new ProviderError('transient', '翻译请求超时')
   }
 
   #noteRateLimited(): void {
@@ -149,20 +168,37 @@ export class ProviderPool {
     this.#wake()
   }
 
-  async #acquire(): Promise<void> {
+  async #acquire(signal: AbortSignal): Promise<void> {
     while (this.#waiters.length >= POOL_QUEUE_CAPACITY) {
-      await new Promise<void>((resolve) => {
-        this.#queueGate.push(resolve)
-      })
+      await this.#park(this.#queueGate, signal)
     }
+    if (signal.aborted) throw cancelledError()
     if (this.#inFlight < this.#current && this.#waiters.length === 0) {
       this.#inFlight += 1
       return
     }
-    await new Promise<void>((resolve) => {
-      this.#waiters.push(resolve)
-    })
+    // #wake() counts the slot as taken before it resolves a waiter.
+    await this.#park(this.#waiters, signal)
     this.#flushQueueGate()
+  }
+
+  /** Waits in `queue` until woken; leaves the queue at once when `signal` aborts. */
+  #park(queue: Array<() => void>, signal: AbortSignal): Promise<void> {
+    if (signal.aborted) return Promise.reject(cancelledError())
+    return new Promise<void>((resolve, reject) => {
+      const wake = () => {
+        signal.removeEventListener('abort', onAbort)
+        resolve()
+      }
+      const onAbort = () => {
+        const index = queue.indexOf(wake)
+        if (index >= 0) queue.splice(index, 1)
+        this.#flushQueueGate()
+        reject(cancelledError())
+      }
+      signal.addEventListener('abort', onAbort, { once: true })
+      queue.push(wake)
+    })
   }
 
   #release(): void {
@@ -187,6 +223,10 @@ export class ProviderPool {
   }
 }
 
+function cancelledError(): UserError {
+  return new UserError(ERROR_CODES.cancelled)
+}
+
 export class TranslationPools {
   #pools = new Map<string, ProviderPool>()
   #rings = new Map<string, KeyRing>()
@@ -198,13 +238,11 @@ export class TranslationPools {
     private readonly appVersion = '4.0.0',
   ) {}
 
+  /** The pool for `provider.id`, created with the provider's concurrency and saved keys. */
   get(provider: ProviderConfig): ProviderPool {
+    const existing = this.#pools.get(provider.id)
+    if (existing) return existing
     const resolved = withMockProviderUrl(provider, process.env.DOCFLOW_MOCK_PROVIDER_URL)
-    const existing = this.#pools.get(resolved.id)
-    if (existing) {
-      existing.useProvider(resolved)
-      return existing
-    }
     const ring = new KeyRing(this.readRawKey(resolved.id) ?? '', this.clock)
     const pool = new ProviderPool(resolved, ring, this.fetchFn, {
       clock: this.clock,
@@ -215,6 +253,12 @@ export class TranslationPools {
     return pool
   }
 
+  /** Sends one request with the caller's provider snapshot through that provider's pool. */
+  execute(provider: ProviderConfig, request: ChatRequest, signal: AbortSignal): Promise<ChatReply> {
+    const resolved = withMockProviderUrl(provider, process.env.DOCFLOW_MOCK_PROVIDER_URL)
+    return this.get(resolved).execute(request, signal, resolved)
+  }
+
   configure(providers: ProviderConfig[]): void {
     for (const provider of providers) {
       this.get(provider).setConfigured(provider.concurrency)
@@ -223,5 +267,20 @@ export class TranslationPools {
 
   resetKeys(providerId: string): void {
     this.#rings.get(providerId)?.reset(this.readRawKey(providerId) ?? '')
+  }
+
+  /**
+   * Drops the pool and key ring of one provider (all when no id is given) so the next
+   * request re-reads its keys and concurrency. Requests already running finish on the old
+   * pool.
+   */
+  invalidate(providerId?: string): void {
+    if (providerId === undefined) {
+      this.#pools.clear()
+      this.#rings.clear()
+      return
+    }
+    this.#pools.delete(providerId)
+    this.#rings.delete(providerId)
   }
 }

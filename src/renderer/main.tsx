@@ -1,6 +1,7 @@
 import { Component, StrictMode, type ErrorInfo, type ReactNode } from 'react'
 import { createRoot } from 'react-dom/client'
 import App from './App'
+import { applyTheme } from './lib/theme'
 import './globals.css'
 
 // React 19 unmounts the whole root on an uncaught render error, which leaves a blank
@@ -37,6 +38,10 @@ class RootErrorBoundary extends Component<{ children: ReactNode }, { error: Erro
 
 const root = document.getElementById('root')
 if (!root) throw new Error('root element missing')
+
+// The saved theme is already reflected in prefers-color-scheme (see applyTheme); applying it
+// before the first render avoids painting the light theme first.
+applyTheme('system')
 
 createRoot(root).render(
   <StrictMode>

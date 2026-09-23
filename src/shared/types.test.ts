@@ -3,8 +3,10 @@ import { DEFAULT_SYSTEM_PROMPT } from './constants'
 import {
   DocumentManifest,
   HostState,
+  HttpUrl,
   ProcessingEvent,
   ProviderConfig,
+  ProxyConfig,
   Settings,
   defaultSettings,
   translatorLabel,
@@ -50,6 +52,21 @@ describe('ProviderConfig', () => {
     expect(parsed.extraBody).toEqual({
       generationConfig: { thinkingConfig: { thinkingBudget: 0 } },
     })
+  })
+
+  test('reports an address without scheme as a validation error instead of throwing', () => {
+    // zod 4 keeps running refinements after a failed .url(); a `new URL()` in one used to throw.
+    const result = ProviderConfig.safeParse({ ...provider, baseUrl: '127.0.0.1:7890' })
+    expect(result.success).toBe(false)
+    expect(ProviderConfig.safeParse({ ...provider, baseUrl: '' }).success).toBe(false)
+    expect(
+      ProviderConfig.safeParse({ ...provider, baseUrl: 'https:api.example.com' }).success,
+    ).toBe(false)
+  })
+
+  test('accepts http(s) base urls and trims surrounding spaces', () => {
+    expect(HttpUrl.parse(' https://api.deepseek.com/v1 ')).toBe('https://api.deepseek.com/v1')
+    expect(HttpUrl.parse('http://127.0.0.1:11434/v1')).toBe('http://127.0.0.1:11434/v1')
   })
 
   test('rejects duplicate model ids', () => {
@@ -105,6 +122,17 @@ describe('Settings', () => {
     expect(() =>
       Settings.parse({ ...valid, proxy: { mode: 'custom', url: 'ftp://proxy.local' } }),
     ).toThrow()
+  })
+})
+
+describe('ProxyConfig', () => {
+  test('custom proxy address must be a full url', () => {
+    for (const url of ['127.0.0.1:7890', 'http:127.0.0.1:7890', '', 'ftp://proxy.local']) {
+      expect(ProxyConfig.safeParse({ mode: 'custom', url }).success).toBe(false)
+    }
+    for (const url of ['http://127.0.0.1:7890', 'https://proxy.local', 'socks5://127.0.0.1:1080']) {
+      expect(ProxyConfig.safeParse({ mode: 'custom', url }).success).toBe(true)
+    }
   })
 })
 

@@ -48,18 +48,37 @@ export function snippet(text: string, limit = SNIPPET_CHARS): string {
   return trimmed.length <= limit ? trimmed : `${trimmed.slice(0, limit)}…`
 }
 
+/**
+ * Chinese message for a provider failure that ends a document. Only credential errors
+ * (401/402, or a body that says so) blame the API Key; everything else keeps the server's
+ * own reason and says what to try next.
+ */
 export function userFacingProviderError(error: ProviderError): string {
   const status = error.status === undefined ? '' : `（HTTP ${error.status}）`
+  const detail = error.snippet ? `：${error.snippet}` : ''
+  const blob = `${error.message} ${error.snippet}`.toLowerCase()
   if (error.kind === 'credential') {
     if (error.message.includes('API Key')) return error.message
+    if (error.status === 402 || /insufficient|balance|credit|quota/.test(blob)) {
+      return `账户余额不足或 API Key 已欠费${status}。请到服务商后台充值，或在设置中更换 API Key。`
+    }
     return `API Key 无效或已欠费${status}。请在设置中检查密钥。`
   }
-  const blob = `${error.message} ${error.snippet}`.toLowerCase()
   if (error.kind === 'fatal' && /model|模型/.test(blob)) {
-    return `找不到这个模型${status}。请在设置中重新选择。`
+    return `找不到这个模型${status}${detail}。请在设置中重新选择模型。`
   }
-  if (error.kind === 'fatal') return `翻译服务返回了无法恢复的错误${status}。`
-  const detail = error.snippet ? `：${error.snippet}` : ''
+  if (error.status === 403) {
+    return `翻译服务拒绝了请求${status}${detail}。请检查代理设置、所在地区是否受这个服务支持，以及 API Key 是否有权使用这个模型。`
+  }
+  if (error.status === 404) {
+    return `翻译服务返回错误${status}${detail}。请在设置中检查服务地址是否正确。`
+  }
+  if (error.kind === 'fatal') return `翻译服务返回了无法恢复的错误${status}${detail}。`
+  // Network failures and summaries (retries exhausted) carry their own message.
+  if (error.status === undefined) return error.message
+  if (error.kind === 'rateLimited') {
+    return `翻译服务返回错误${status}${detail}。请求过于频繁，请稍后重试或在设置中降低并发数。`
+  }
   return `翻译服务返回错误${status}${detail}`
 }
 
@@ -91,7 +110,9 @@ export function classifyHttpError(input: {
   let kind: ErrorKind
   if (status === 401 || status === 402) kind = 'credential'
   else if (status === 403) {
-    kind = lower.includes('rate') && lower.includes('limit') ? 'rateLimited' : 'credential'
+    // Region blocks, proxies and model permissions also answer 403: only the body can
+    // prove a bad key, otherwise the request is forbidden for good.
+    kind = lower.includes('rate') && lower.includes('limit') ? 'rateLimited' : (fromBody ?? 'fatal')
   } else if (status === 404) kind = 'fatal'
   else if (status === 408 || status === 409 || status === 425 || isTransientStatus(status)) {
     kind = 'transient'
@@ -159,7 +180,7 @@ export function classifyBody(lower: string): ErrorKind | undefined {
 
 export function classifyNetworkError(error: unknown): ProviderError {
   const message = error instanceof Error ? error.message : String(error)
-  return new ProviderError('transient', `翻译服务返回错误：${snippet(message)}`, {
+  return new ProviderError('transient', `无法连接翻译服务：${snippet(message)}`, {
     snippet: snippet(message),
     cause: error,
   })

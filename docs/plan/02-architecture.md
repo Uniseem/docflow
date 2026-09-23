@@ -482,17 +482,19 @@ export default defineConfig({
 
 ```ts
 import { defineConfig } from '@playwright/test'
+
 export default defineConfig({
   testDir: 'tests/e2e',
   timeout: 180_000,
   workers: 1,
   retries: process.env.CI ? 1 : 0,
   reporter: [['list'], ['html', { open: 'never' }]],
+  globalSetup: './tests/e2e/global-setup.ts',
   use: { trace: 'retain-on-failure' },
 })
 ```
 
-E2E 用 `_electron.launch({ args: [mainEntry], env: { DOCFLOW_DATA_DIR, DOCFLOW_MOCK_PROVIDER_URL } })`，在 `globalSetup` 里启动 mock 服务。打包冒烟里用 `--dir` 产物：`executablePath` 指向 `release/<platform>-unpacked/DocFlow(.exe|.app/Contents/MacOS/DocFlow)`。
+`globalSetup` 在 38111 端口启动 mock 服务（08.3）。E2E 一律启动 `electron-builder --dir` 的打包产物（先 `npm run dist:dir`），不用 `args: [mainEntry]` 启动源码：`_electron.launch({ executablePath, env: { DOCFLOW_DATA_DIR, DOCFLOW_MOCK_PROVIDER_URL } })`，`executablePath` 指向 `release/mac-arm64/DocFlow.app/Contents/MacOS/DocFlow`（Intel 为 `release/mac/…`）或 `release/win-unpacked/DocFlow.exe`。启动、临时目录与清理都在 `tests/e2e/helpers.ts` 的 fixture 里（08.5）。
 
 ### `src/renderer/globals.css`
 

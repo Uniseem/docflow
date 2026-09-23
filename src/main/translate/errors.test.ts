@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'vitest'
 import {
+  ProviderError,
   classifyHttpError,
   parseRetryAfter,
   redact,
@@ -11,7 +12,9 @@ describe('classifyHttpError', () => {
   test('status table', () => {
     expect(classifyHttpError({ status: 401, body: '' }).kind).toBe('credential')
     expect(classifyHttpError({ status: 403, body: 'rate limit exceeded' }).kind).toBe('rateLimited')
-    expect(classifyHttpError({ status: 403, body: 'forbidden' }).kind).toBe('credential')
+    // A bare 403 is a region block, proxy or model permission, not proof of a bad key.
+    expect(classifyHttpError({ status: 403, body: 'forbidden' }).kind).toBe('fatal')
+    expect(classifyHttpError({ status: 403, body: 'invalid api key' }).kind).toBe('credential')
     expect(classifyHttpError({ status: 404, body: '' }).kind).toBe('fatal')
     expect(classifyHttpError({ status: 429, body: '' }).kind).toBe('rateLimited')
     expect(classifyHttpError({ status: 429, body: 'insufficient balance' }).kind).toBe('credential')
@@ -32,6 +35,26 @@ describe('classifyHttpError', () => {
     expect(userFacingProviderError(cred)).toContain('API Key')
     const missing = classifyHttpError({ status: 404, body: 'The model does not exist' })
     expect(userFacingProviderError(missing)).toContain('模型')
+  })
+
+  test('only credential errors blame the key; others keep the server reason and a next step', () => {
+    const forbidden = userFacingProviderError(
+      classifyHttpError({ status: 403, body: 'unsupported_country_region_territory' }),
+    )
+    expect(forbidden).not.toContain('API Key 无效')
+    expect(forbidden).toContain('（HTTP 403）：unsupported_country_region_territory')
+    expect(forbidden).toContain('代理')
+    const missingRoute = userFacingProviderError(
+      classifyHttpError({ status: 404, body: '404 page not found' }),
+    )
+    expect(missingRoute).toContain('（HTTP 404）：404 page not found')
+    expect(missingRoute).toContain('服务地址')
+    const busy = userFacingProviderError(classifyHttpError({ status: 503, body: 'overloaded' }))
+    expect(busy).toBe('翻译服务返回错误（HTTP 503）：overloaded')
+    const summary = new ProviderError('transient', '翻译请求多次重试后仍然失败：超时')
+    expect(userFacingProviderError(summary)).toBe(summary.message)
+    const broke = userFacingProviderError(classifyHttpError({ status: 402, body: '' }))
+    expect(broke).toContain('余额')
   })
 
   test('rateLimited defaults Retry-After to 5s and caps at 300s', () => {

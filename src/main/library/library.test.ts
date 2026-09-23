@@ -78,6 +78,47 @@ describe('DocumentLibrary', () => {
     expect(lib.list('all', undefined, new Set()).counts.all).toBe(1)
   })
 
+  test('updates apply in call order and a guarded update skips stale decisions', async () => {
+    const { dir, lib } = await tempLib()
+    const pdf = join(dir, 'paper.pdf')
+    await writeFile(pdf, '%PDF-1.4')
+    const doc = await lib.create({
+      path: pdf,
+      translator,
+      settingsSnapshot: defaultTranslationRuntime(),
+    })
+    const [, skipped] = await Promise.all([
+      lib.update(doc.id, { status: 'processing' }),
+      lib.updateWhen(doc.id, (current) => current.status === 'queued', { status: 'cancelled' }),
+      lib.update(doc.id, { progress: 50 }),
+    ])
+    expect(skipped).toBeUndefined()
+    expect(lib.require(doc.id)).toMatchObject({ status: 'processing', progress: 50 })
+  })
+
+  test('a write still in flight when the document is removed does not revive it', async () => {
+    const { dir, lib } = await tempLib()
+    const pdf = join(dir, 'paper.pdf')
+    await writeFile(pdf, '%PDF-1.4')
+    const doc = await lib.create({
+      path: pdf,
+      translator,
+      settingsSnapshot: defaultTranslationRuntime(),
+    })
+    const late = lib.update(doc.id, { progress: 40 }).then(
+      () => 'written',
+      (error: unknown) => error,
+    )
+    // Let the update pass its checks and start writing before the delete begins.
+    await Promise.resolve()
+    await lib.remove(doc.id)
+    expect(await late).toMatchObject({ code: 'not_found' })
+    expect(lib.index.get(doc.id)).toBeUndefined()
+    const again = new DocumentLibrary()
+    await again.open(dir)
+    expect(again.index.get(doc.id)).toBeUndefined()
+  })
+
   test('export zip contains source and manifest', async () => {
     const { dir, lib } = await tempLib()
     const pdf = join(dir, 'paper.pdf')

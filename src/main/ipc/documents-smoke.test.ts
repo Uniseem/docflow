@@ -102,6 +102,8 @@ describe('documents:create smoke', () => {
       sendChanged: () => undefined,
       sendRemoved: () => undefined,
       relaunch: () => undefined,
+      exportedPaths: new Set(),
+      takePendingFiles: () => [],
     }
     const created = await handleDocumentsCreate(ctx, {
       paths: [join(process.cwd(), 'tests/fixtures/colored-text.pdf')],

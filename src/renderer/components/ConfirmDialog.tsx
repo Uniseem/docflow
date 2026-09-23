@@ -1,5 +1,6 @@
-import { AlertDialog, Button, toast } from '@heroui/react'
+import { AlertDialog, Button } from '@heroui/react'
 import { useState } from 'react'
+import { notifyError } from '../lib/notify'
 
 type ConfirmContent = {
   title: string
@@ -19,6 +20,11 @@ function sameContent(a: ConfirmContent, b: ConfirmContent): boolean {
   )
 }
 
+/**
+ * While `onConfirm` runs the dialog cannot be dismissed (Esc, backdrop, cancel button), so an
+ * action in flight can never be mistaken for a newer confirm. Give each distinct confirm its
+ * own `key` so that the pending state never carries over.
+ */
 export function ConfirmDialog(props: {
   isOpen: boolean
   title: string
@@ -53,9 +59,7 @@ export function ConfirmDialog(props: {
       await props.onConfirm()
     } catch (error) {
       // invoke() already toasts internal errors; user-facing ones are shown here.
-      const err = error as { message?: unknown; user?: unknown }
-      if (err.user === true && typeof err.message === 'string') toast.danger(err.message)
-      else console.error('confirm action failed', error)
+      notifyError(error)
     } finally {
       setRunning(false)
     }
@@ -64,9 +68,12 @@ export function ConfirmDialog(props: {
   return (
     <AlertDialog.Backdrop
       isOpen={props.isOpen}
-      onOpenChange={props.onOpenChange}
-      isDismissable
-      isKeyboardDismissDisabled={false}
+      onOpenChange={(open) => {
+        if (!open && pending) return
+        props.onOpenChange(open)
+      }}
+      isDismissable={!pending}
+      isKeyboardDismissDisabled={pending}
     >
       <AlertDialog.Container size="sm">
         <AlertDialog.Dialog>
@@ -77,7 +84,7 @@ export function ConfirmDialog(props: {
             <p className="text-sm text-muted">{content.body}</p>
           </AlertDialog.Body>
           <AlertDialog.Footer>
-            <Button slot="close" variant="ghost">
+            <Button slot="close" variant="ghost" isDisabled={pending}>
               {content.cancelLabel}
             </Button>
             <Button

@@ -1,10 +1,13 @@
 import { afterEach, describe, expect, test } from 'vitest'
 import {
+  DEFAULT_MOCK_CONFIG,
   listenMockProvider,
   parseCli,
+  parseConfigPatch,
   replyFor,
   MockProviderState,
   MOCK_MARK,
+  type MockConfig,
   type MockServer,
 } from './server'
 
@@ -13,7 +16,12 @@ const KEY = 'test-key'
 async function chat(
   server: MockServer,
   user: string,
-  options: { model?: string; key?: string; api?: 'openai' | 'anthropic' | 'gemini' } = {},
+  options: {
+    model?: string
+    key?: string
+    api?: 'openai' | 'anthropic' | 'gemini'
+    signal?: AbortSignal
+  } = {},
 ): Promise<Response> {
   const model = options.model ?? 'mock-chat'
   const key = options.key ?? KEY
@@ -42,6 +50,7 @@ async function chat(
   }
   return fetch(`${server.url}/v1/chat/completions`, {
     method: 'POST',
+    ...(options.signal ? { signal: options.signal } : {}),
     headers: {
       'content-type': 'application/json',
       authorization: `Bearer ${key}`,
@@ -63,10 +72,25 @@ describe('mock provider', () => {
     server = undefined
   })
 
-  test('parseCli defaults to 38111', () => {
-    expect(parseCli([])).toEqual({ port: 38111, open: false })
-    expect(parseCli(['--port', '9', '--open'])).toEqual({ port: 9, open: true })
-    expect(parseCli(['8765'])).toEqual({ port: 8765, open: false })
+  test('parseCli defaults to 38111 without delay', () => {
+    expect(parseCli([])).toEqual({ port: 38111, open: false, delayMs: 0 })
+    expect(parseCli(['--port', '9', '--open'])).toEqual({ port: 9, open: true, delayMs: 0 })
+    expect(parseCli(['8765'])).toEqual({ port: 8765, open: false, delayMs: 0 })
+    expect(parseCli(['--delay', '250'])).toEqual({ port: 38111, open: false, delayMs: 250 })
+    expect(parseCli(['--delay', '250', '8765'])).toEqual({ port: 8765, open: false, delayMs: 250 })
+    expect(parseCli(['--delay', 'soon'])).toEqual({ port: 38111, open: false, delayMs: 0 })
+  })
+
+  test('parseConfigPatch accepts only known non-negative integers', () => {
+    expect(parseConfigPatch('{"delayMs":300}')).toEqual({ delayMs: 300 })
+    expect(parseConfigPatch('{"rateLimitEvery":0}')).toEqual({ rateLimitEvery: 0 })
+    expect(parseConfigPatch('')).toEqual({})
+    expect(parseConfigPatch('{"delayMs":-1}')).toBeNull()
+    expect(parseConfigPatch('{"delayMs":1.5}')).toBeNull()
+    expect(parseConfigPatch('{"delayMs":"300"}')).toBeNull()
+    expect(parseConfigPatch('{"delay":300}')).toBeNull()
+    expect(parseConfigPatch('[1]')).toBeNull()
+    expect(parseConfigPatch('{')).toBeNull()
   })
 
   test('translates segments and single text', () => {
@@ -195,5 +219,57 @@ describe('mock provider', () => {
       requests: Record<string, number>
     }
     expect(reset.requests).toEqual({})
+  })
+  test('POST /config delays chat replies and POST /reset restores the startup config', async () => {
+    server = await listenMockProvider()
+    const config = async (): Promise<MockConfig> =>
+      (await (await fetch(`${server!.url}/config`)).json()) as MockConfig
+    expect(await config()).toEqual(DEFAULT_MOCK_CONFIG)
+
+    const changed = await fetch(`${server.url}/config`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ delayMs: 200 }),
+    })
+    expect(await changed.json()).toEqual({ ...DEFAULT_MOCK_CONFIG, delayMs: 200 })
+    const started = performance.now()
+    const slow = await chat(server, 'Hello')
+    expect(slow.status).toBe(200)
+    expect(performance.now() - started).toBeGreaterThanOrEqual(190)
+
+    const invalid = await fetch(`${server.url}/config`, {
+      method: 'POST',
+      body: JSON.stringify({ delayMs: -5 }),
+    })
+    expect(invalid.status).toBe(400)
+    expect((await config()).delayMs).toBe(200)
+
+    await fetch(`${server.url}/reset`, { method: 'POST' })
+    expect(await config()).toEqual(DEFAULT_MOCK_CONFIG)
+  })
+
+  test('startup config survives reset; rateLimitEvery 0 never answers 429', async () => {
+    server = await listenMockProvider(0, { config: { rateLimitEvery: 0 } })
+    for (let i = 0; i < 12; i += 1) {
+      expect((await chat(server, `n${i}`)).status).toBe(200)
+    }
+    await fetch(`${server.url}/reset`, { method: 'POST' })
+    const config = (await (await fetch(`${server.url}/config`)).json()) as MockConfig
+    expect(config.rateLimitEvery).toBe(0)
+    expect(server.state.snapshot().rateLimited).toBe(0)
+  })
+
+  test('a client that gives up during the delay leaves the server usable', async () => {
+    server = await listenMockProvider(0, { config: { delayMs: 400 } })
+    const controller = new AbortController()
+    const pending = chat(server, 'Hello', { signal: controller.signal })
+    await expect.poll(() => server!.state.snapshot().inFlight.openai).toBe(1)
+    controller.abort()
+    await expect(pending).rejects.toThrow()
+    await expect.poll(() => server!.state.snapshot().inFlight.openai, { timeout: 2_000 }).toBe(0)
+
+    await fetch(`${server.url}/config`, { method: 'POST', body: JSON.stringify({ delayMs: 0 }) })
+    const ok = await chat(server, 'Again')
+    expect(ok.status).toBe(200)
   })
 })
