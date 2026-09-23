@@ -24,27 +24,27 @@
 
 ### 已完成（第一轮 + 第二轮，共 19 家）
 
-| 文件 | 对应预设 | 新账号并发 | 翻译温度 | 思考 | 首选模型 | 订阅套餐 |
-| --- | --- | --- | --- | --- | --- | --- |
-| [deepseek.md](deepseek.md) | `deepseek` | 100 | 1.3，且必须同时关闭思考 | 默认关闭 | `deepseek-flash` | 无 |
-| [groq.md](groq.md) | `groq` | 1（Developer 档可到 8） | gpt-oss 不传；qwen3.8 非思考用 0.7 | 两系列参数冲突，不能共用一条服务商级 `extraBody` | `openai/gpt-oss-120b` | 无 |
-| [moonshot.md](moonshot.md) | `moonshot` | 1 | 不发送，现役模型温度固定 | 只有 `kimi-k2.6` 能关 | `kimi-k2.6` | Kimi Code 不建议做成预设 |
-| [mimo.md](mimo.md) | 规划里还没有 | 4 | 1.0，且必须同时关闭思考 | 默认关闭 | `mimo-v2.6-flash` | Token Plan 不建议做成预设 |
-| [openai.md](openai.md) | `openai` | 20 | 不传（推理模型拒绝非默认值） | `reasoning_effort: "none"`（Astra 除外） | `gpt-6-luna` | 无 |
-| [anthropic.md](anthropic.md) | `anthropic` | 10 | 不传（新款模型弃用 temperature） | 5 系 Adaptive 常开，不可关 | `claude-haiku-4.5` | 无 |
-| [gemini.md](gemini.md) | `gemini` | 3（Tier 1 后 20） | **不传**（Gemini 3 低温度会 looping） | `thinkingBudget: 0` 尝试关闭 | `gemini-3.1-flash` | 无 |
-| [openrouter.md](openrouter.md) | `openrouter` | 20 | 不传（透传给上游，上游各自为政） | 不做服务商级开关 | 不写死，可用 `openrouter/auto` | 无 |
-| [siliconflow.md](siliconflow.md) | `siliconflow` | 20 | 不做一刀切（上游模型族语义冲突） | 同上 | 不写死（上下线频繁） | 无 |
-| [dashscope.md](dashscope.md) | `dashscope` | 50 | 官方无推荐表；建议不传或 1.0 | 关闭思考省输出费（思考加价） | `qwen-plus` | 无 |
-| [volcengine.md](volcengine.md) | `volcengine` | 10（lite 系可到 50） | 不传或 1.0 | 思考档位 `minimal`（默认 high） | `doubao-seed-2.0-lite` | Coding Plan 不建议做成预设 |
-| [zhipu.md](zhipu.md) | `zhipu` | 5（免费 flash 只能 1） | 不传或 1.0 | 以模型页为准 | `glm-5.3-flash` | Coding Plan 不建议做成预设 |
-| [hunyuan.md](hunyuan.md) | `hunyuan` | 5 | 不传 | 未查实前保持默认 | `hunyuan-translation`（专用翻译模型） | Coding Plan 不建议做成预设 |
-| [stepfun.md](stepfun.md) | `stepfun` | 10 | 不传或 1.0 | `enable_thinking: false`（思维链按输出计费） | `step-3.7-flash` | Step Plan 不建议做成预设 |
-| [lingyi.md](lingyi.md) | ~~`lingyi`~~ **移除** | — | — | — | 平台已关停（2026-09-03 停止 API） | — |
-| [xai.md](xai.md) | `xai` | 10 | 不传 | 选 non-reasoning 模型即无需开关 | `grok-4-fast-non-reasoning` | 无 |
-| [mistral.md](mistral.md) | `mistral` | 3（付费后 10） | 不传（默认 0.7） | 非思考模型为主 | `mistral-small-4` | 无（Le Chat Pro 不含 API） |
-| [azure.md](azure.md) | `azure` | 10 | 不传（除 gpt-6-astra 外都拒绝） | `reasoning_effort: "none"` | `gpt-6-luna` | 无（PTU 另计） |
-| [minimax.md](minimax.md) | 需新增 | 10 | 不传 | M 系为推理模型，开关待查实 | `MiniMax-M3` | **Token Plan 可做成第二个预设**（与 mimo 结论不同） |
+| 文件                             | 对应预设              | 新账号并发              | 翻译温度                              | 思考                                             | 首选模型                              | 订阅套餐                                            |
+| -------------------------------- | --------------------- | ----------------------- | ------------------------------------- | ------------------------------------------------ | ------------------------------------- | --------------------------------------------------- |
+| [deepseek.md](deepseek.md)       | `deepseek`            | 100                     | 1.3，且必须同时关闭思考               | 默认关闭                                         | `deepseek-flash`                      | 无                                                  |
+| [groq.md](groq.md)               | `groq`                | 1（Developer 档可到 8） | gpt-oss 不传；qwen3.8 非思考用 0.7    | 两系列参数冲突，不能共用一条服务商级 `extraBody` | `openai/gpt-oss-120b`                 | 无                                                  |
+| [moonshot.md](moonshot.md)       | `moonshot`            | 1                       | 不发送，现役模型温度固定              | 只有 `kimi-k2.6` 能关                            | `kimi-k2.6`                           | Kimi Code 不建议做成预设                            |
+| [mimo.md](mimo.md)               | 规划里还没有          | 4                       | 1.0，且必须同时关闭思考               | 默认关闭                                         | `mimo-v2.6-flash`                     | Token Plan 不建议做成预设                           |
+| [openai.md](openai.md)           | `openai`              | 20                      | 不传（推理模型拒绝非默认值）          | `reasoning_effort: "none"`（Astra 除外）         | `gpt-6-luna`                          | 无                                                  |
+| [anthropic.md](anthropic.md)     | `anthropic`           | 10                      | 不传（新款模型弃用 temperature）      | 5 系 Adaptive 常开，不可关                       | `claude-haiku-4.5`                    | 无                                                  |
+| [gemini.md](gemini.md)           | `gemini`              | 3（Tier 1 后 20）       | **不传**（Gemini 3 低温度会 looping） | `thinkingBudget: 0` 尝试关闭                     | `gemini-3.1-flash`                    | 无                                                  |
+| [openrouter.md](openrouter.md)   | `openrouter`          | 20                      | 不传（透传给上游，上游各自为政）      | 不做服务商级开关                                 | 不写死，可用 `openrouter/auto`        | 无                                                  |
+| [siliconflow.md](siliconflow.md) | `siliconflow`         | 20                      | 不做一刀切（上游模型族语义冲突）      | 同上                                             | 不写死（上下线频繁）                  | 无                                                  |
+| [dashscope.md](dashscope.md)     | `dashscope`           | 50                      | 官方无推荐表；建议不传或 1.0          | 关闭思考省输出费（思考加价）                     | `qwen-plus`                           | 无                                                  |
+| [volcengine.md](volcengine.md)   | `volcengine`          | 10（lite 系可到 50）    | 不传或 1.0                            | 思考档位 `minimal`（默认 high）                  | `doubao-seed-2.0-lite`                | Coding Plan 不建议做成预设                          |
+| [zhipu.md](zhipu.md)             | `zhipu`               | 5（免费 flash 只能 1）  | 不传或 1.0                            | 以模型页为准                                     | `glm-5.3-flash`                       | Coding Plan 不建议做成预设                          |
+| [hunyuan.md](hunyuan.md)         | `hunyuan`             | 5                       | 不传                                  | 未查实前保持默认                                 | `hunyuan-translation`（专用翻译模型） | Coding Plan 不建议做成预设                          |
+| [stepfun.md](stepfun.md)         | `stepfun`             | 10                      | 不传或 1.0                            | `enable_thinking: false`（思维链按输出计费）     | `step-3.7-flash`                      | Step Plan 不建议做成预设                            |
+| [lingyi.md](lingyi.md)           | ~~`lingyi`~~ **移除** | —                       | —                                     | —                                                | 平台已关停（2026-09-03 停止 API）     | —                                                   |
+| [xai.md](xai.md)                 | `xai`                 | 10                      | 不传                                  | 选 non-reasoning 模型即无需开关                  | `grok-4-fast-non-reasoning`           | 无                                                  |
+| [mistral.md](mistral.md)         | `mistral`             | 3（付费后 10）          | 不传（默认 0.7）                      | 非思考模型为主                                   | `mistral-small-4`                     | 无（Le Chat Pro 不含 API）                          |
+| [azure.md](azure.md)             | `azure`               | 10                      | 不传（除 gpt-6-astra 外都拒绝）       | `reasoning_effort: "none"`                       | `gpt-6-luna`                          | 无（PTU 另计）                                      |
+| [minimax.md](minimax.md)         | 需新增                | 10                      | 不传                                  | M 系为推理模型，开关待查实                       | `MiniMax-M3`                          | **Token Plan 可做成第二个预设**（与 mimo 结论不同） |
 
 ### 对预设清单的净改动（改 `presets.ts` 前确认）
 

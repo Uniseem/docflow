@@ -13,24 +13,24 @@
 
 ### 按量 API（console.cloud.tencent.com/hunyuan）
 
-| 项目 | 内容 |
-| --- | --- |
-| 计费方式 | 资源包（新开通送免费额度，如标准版累计 10 万 token、12 个月有效）+ 后付费（需在控制台手动开通，默认不开，否则会「计费异常提示」）。[1][5] |
-| Base URL | `https://api.hunyuan.cloud.tencent.com/v1`（OpenAI 兼容；规划 4.2 一致）。另有原生 SDK（SecretId/SecretKey）路径。[3] |
-| 鉴权方式 | `Authorization: Bearer ${HUNYUAN_API_KEY}`（sk 开头）；根账号直调可能触发限流，官方建议建 RAM 子账号。[3] |
-| Key 获取页 | https://console.cloud.tencent.com/hunyuan/api-key（规划 4.2 一致）。国际站 Key 需单独开 Hy3 模型权限。[3] |
+| 项目       | 内容                                                                                                                                      |
+| ---------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| 计费方式   | 资源包（新开通送免费额度，如标准版累计 10 万 token、12 个月有效）+ 后付费（需在控制台手动开通，默认不开，否则会「计费异常提示」）。[1][5] |
+| Base URL   | `https://api.hunyuan.cloud.tencent.com/v1`（OpenAI 兼容；规划 4.2 一致）。另有原生 SDK（SecretId/SecretKey）路径。[3]                     |
+| 鉴权方式   | `Authorization: Bearer ${HUNYUAN_API_KEY}`（sk 开头）；根账号直调可能触发限流，官方建议建 RAM 子账号。[3]                                 |
+| Key 获取页 | https://console.cloud.tencent.com/hunyuan/api-key（规划 4.2 一致）。国际站 Key 需单独开 Hy3 模型权限。[3]                                 |
 
 价格（元/百万 tokens，官方计费概述）[1]：
 
-| 模型 | 输入 | 输出 | 备注 |
-| --- | --- | --- | --- |
-| `hunyuan-translation` | 1.2 | 3.6 | **专用翻译模型**，有独立 ChatTranslations API |
-| `hunyuan-translation-lite` | 1.0 | 3.0 | 翻译轻量版 |
-| `hunyuan-a13b` | 0.5 | 2.0 | 轻量主力 |
-| `hunyuan-role-latest` | 2.4 | 9.6 | 角色扮演 |
-| `hunyuan-turbos-vision` / `t1-vision` | 3.0 | 9.0 | 多模态 |
-| `hunyuan-lite` | 免费 | 免费 | 社区口径 256K 上下文，限速较严 |
-| TurboS / T1 档 | 未在抓取中获得 | — | 官方标注**即将下线**，以控制台为准 |
+| 模型                                  | 输入           | 输出 | 备注                                          |
+| ------------------------------------- | -------------- | ---- | --------------------------------------------- |
+| `hunyuan-translation`                 | 1.2            | 3.6  | **专用翻译模型**，有独立 ChatTranslations API |
+| `hunyuan-translation-lite`            | 1.0            | 3.0  | 翻译轻量版                                    |
+| `hunyuan-a13b`                        | 0.5            | 2.0  | 轻量主力                                      |
+| `hunyuan-role-latest`                 | 2.4            | 9.6  | 角色扮演                                      |
+| `hunyuan-turbos-vision` / `t1-vision` | 3.0            | 9.0  | 多模态                                        |
+| `hunyuan-lite`                        | 免费           | 免费 | 社区口径 256K 上下文，限速较严                |
+| TurboS / T1 档                        | 未在抓取中获得 | —    | 官方标注**即将下线**，以控制台为准            |
 
 ### 订阅套餐（Coding Plan）
 
@@ -56,15 +56,15 @@ Coding Plan 见前文。
 
 ## 对 DocFlow 的建议
 
-| 项 | 建议 | 依据 |
-| --- | --- | --- |
-| 显示名 | 腾讯混元 | 规划 4.2 已定 |
-| Base URL | `https://api.hunyuan.cloud.tencent.com/v1`（规划一致） | [3] |
-| Key 获取页 | https://console.cloud.tencent.com/hunyuan/api-key | — |
-| 新账号安全并发数 | **5**。免费/lite 档限速严（QPS 5 量级）；付费档未公开限速，5 起步靠自适应升。 | [3][6] |
-| 翻译请求构造 | 不传温度（官方无推荐表）；思考开关未查实前保持默认。 | — |
-| 首选翻译模型 | **`hunyuan-translation`**（专用翻译模型，¥1.2/¥3.6，性价比与定位都贴合）；通用备选 `hunyuan-a13b`；免费体验用 `hunyuan-lite`。 | [1] |
-| 注意 | `hunyuan-t1` / `hunyuan-turbos-latest` 官方标注即将下线，不要写死。 | [4] |
+| 项               | 建议                                                                                                                           | 依据          |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------ | ------------- |
+| 显示名           | 腾讯混元                                                                                                                       | 规划 4.2 已定 |
+| Base URL         | `https://api.hunyuan.cloud.tencent.com/v1`（规划一致）                                                                         | [3]           |
+| Key 获取页       | https://console.cloud.tencent.com/hunyuan/api-key                                                                              | —             |
+| 新账号安全并发数 | **5**。免费/lite 档限速严（QPS 5 量级）；付费档未公开限速，5 起步靠自适应升。                                                  | [3][6]        |
+| 翻译请求构造     | 不传温度（官方无推荐表）；思考开关未查实前保持默认。                                                                           | —             |
+| 首选翻译模型     | **`hunyuan-translation`**（专用翻译模型，¥1.2/¥3.6，性价比与定位都贴合）；通用备选 `hunyuan-a13b`；免费体验用 `hunyuan-lite`。 | [1]           |
+| 注意             | `hunyuan-t1` / `hunyuan-turbos-latest` 官方标注即将下线，不要写死。                                                            | [4]           |
 
 风险提示：
 

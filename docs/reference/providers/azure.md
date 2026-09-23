@@ -12,12 +12,12 @@
 
 ### 按量 API（Azure AI Foundry）
 
-| 项目 | 内容 |
-| --- | --- |
-| 计费方式 | 按 token，与官方价对齐（区域/汇率差异另计）；配额按**订阅 × 区域 × 模型 × 部署类型**分配，新订阅对新型号常见 TPM=0（需提额）。[1][3] |
-| Base URL | `https://{资源名}.openai.azure.com/openai/v1`（OpenAI 兼容 v1 端点，规划 4.2 一致）；也可走 `…/openai/deployments/{部署名}/chat/completions?api-version=…` 传统路径。[2] |
-| 鉴权方式 | `api-key: ${AZURE_OPENAI_API_KEY}`（规划 4.3 已定，与 OpenAI 的 Bearer 不同）。 |
-| Key 获取页 | https://portal.azure.com（在 Azure OpenAI 资源的「Keys and Endpoint」页；规划 4.2 一致）。[3] |
+| 项目       | 内容                                                                                                                                                                     |
+| ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 计费方式   | 按 token，与官方价对齐（区域/汇率差异另计）；配额按**订阅 × 区域 × 模型 × 部署类型**分配，新订阅对新型号常见 TPM=0（需提额）。[1][3]                                     |
+| Base URL   | `https://{资源名}.openai.azure.com/openai/v1`（OpenAI 兼容 v1 端点，规划 4.2 一致）；也可走 `…/openai/deployments/{部署名}/chat/completions?api-version=…` 传统路径。[2] |
+| 鉴权方式   | `api-key: ${AZURE_OPENAI_API_KEY}`（规划 4.3 已定，与 OpenAI 的 Bearer 不同）。                                                                                          |
+| Key 获取页 | https://portal.azure.com（在 Azure OpenAI 资源的「Keys and Endpoint」页；规划 4.2 一致）。[3]                                                                            |
 
 ### 订阅套餐
 
@@ -44,15 +44,15 @@
 
 ## 对 DocFlow 的建议
 
-| 项 | 建议 | 依据 |
-| --- | --- | --- |
-| 显示名 | Azure OpenAI | 规划 4.2 已定 |
-| Base URL | `https://{资源名}.openai.azure.com/openai/v1`（规划一致；注意azure 类型走 `api-key` 头而非 Bearer） | [2] |
-| Key 获取页 | https://portal.azure.com | [3] |
-| 新账号安全并发数 | **10**。默认档 333 RPM 的模型 10 并发绰绰有余；且新订阅可能 TPM=0，先把配额问题解决再谈并发。 | [1][3] |
-| 翻译请求构造 | 推理模型不传 temperature（除 gpt-6-astra 外都拒绝）；`reasoning_effort: "none"`（Sol/Luna 支持）关闭思考。 | [2] |
-| 首选翻译模型 | **`gpt-6-luna`**（Azure 上 Global Standard 1,000 RPM / 1M TPM，成本最低）。 | [1] |
-| 界面提示 | Base URL 里的 `{资源名}` 占位要在设置里替换成用户自己的资源名；建议在预设说明里写清楚。 | — |
+| 项               | 建议                                                                                                       | 依据          |
+| ---------------- | ---------------------------------------------------------------------------------------------------------- | ------------- |
+| 显示名           | Azure OpenAI                                                                                               | 规划 4.2 已定 |
+| Base URL         | `https://{资源名}.openai.azure.com/openai/v1`（规划一致；注意azure 类型走 `api-key` 头而非 Bearer）        | [2]           |
+| Key 获取页       | https://portal.azure.com                                                                                   | [3]           |
+| 新账号安全并发数 | **10**。默认档 333 RPM 的模型 10 并发绰绰有余；且新订阅可能 TPM=0，先把配额问题解决再谈并发。              | [1][3]        |
+| 翻译请求构造     | 推理模型不传 temperature（除 gpt-6-astra 外都拒绝）；`reasoning_effort: "none"`（Sol/Luna 支持）关闭思考。 | [2]           |
+| 首选翻译模型     | **`gpt-6-luna`**（Azure 上 Global Standard 1,000 RPM / 1M TPM，成本最低）。                                | [1]           |
+| 界面提示         | Base URL 里的 `{资源名}` 占位要在设置里替换成用户自己的资源名；建议在预设说明里写清楚。                    | —             |
 
 风险提示：
 

@@ -12,24 +12,24 @@
 
 ### 按量 API（Claude Platform）
 
-| 项目 | 内容 |
-| --- | --- |
-| 计费方式 | 按 token 计费；缓存写（5 分钟 1.25 倍、1 小时 2 倍）与缓存读（命中 0.1~0.25 倍）另计；Batch 5 折；Fast 模式（Opus 5.5 / Opus 5 / Opus 4.8，2 倍价）；Priority Tier 按容量承诺计价。[2] |
-| Base URL | `https://api.anthropic.com`，Messages API 为 `POST /v1/messages`，模型列表 `GET /v1/models`。[4] |
-| 鉴权方式 | `x-api-key: ${ANTHROPIC_API_KEY}` + `anthropic-version: 2023-06-01`。[4] |
-| Key 获取页 | https://console.anthropic.com/settings/keys [4] |
-| 使用限制 | 商用允许（服务条款面向开发者应用）；有 Usage Policy 通用条款，未查到针对翻译类应用的专门限制。[5] |
+| 项目       | 内容                                                                                                                                                                                   |
+| ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 计费方式   | 按 token 计费；缓存写（5 分钟 1.25 倍、1 小时 2 倍）与缓存读（命中 0.1~0.25 倍）另计；Batch 5 折；Fast 模式（Opus 5.5 / Opus 5 / Opus 4.8，2 倍价）；Priority Tier 按容量承诺计价。[2] |
+| Base URL   | `https://api.anthropic.com`，Messages API 为 `POST /v1/messages`，模型列表 `GET /v1/models`。[4]                                                                                       |
+| 鉴权方式   | `x-api-key: ${ANTHROPIC_API_KEY}` + `anthropic-version: 2023-06-01`。[4]                                                                                                               |
+| Key 获取页 | https://console.anthropic.com/settings/keys [4]                                                                                                                                        |
+| 使用限制   | 商用允许（服务条款面向开发者应用）；有 Usage Policy 通用条款，未查到针对翻译类应用的专门限制。[5]                                                                                      |
 
 价格（每百万 tokens，输入 / 输出）[2]：
 
-| 模型 | 输入 | 缓存写 5m | 缓存写 1h | 缓存读 | 输出 |
-| --- | --- | --- | --- | --- | --- |
-| `claude-fable-5.1` / `claude-fable-5` | $10.00 | $12.50 | $20.00 | $0.25 / $1.00 | $50.00 |
-| `claude-opus-5.5` | $4.00 | $5.00 | $8.00 | $0.20 | $20.00 |
-| `claude-opus-5` / `claude-opus-4.8` | $5.00 | $6.25 | $10.00 | $0.50 | $25.00 |
-| `claude-sonnet-5` | $2.00 | $2.50 | $4.00 | $0.20 | $10.00 |
-| `claude-sonnet-4.6` / `4.5` | $3.00 | $3.75 | $6.00 | $0.30 | $15.00 |
-| `claude-haiku-4.5` | $1.00 | $1.25 | $2.00 | $0.10 | $5.00 |
+| 模型                                  | 输入   | 缓存写 5m | 缓存写 1h | 缓存读        | 输出   |
+| ------------------------------------- | ------ | --------- | --------- | ------------- | ------ |
+| `claude-fable-5.1` / `claude-fable-5` | $10.00 | $12.50    | $20.00    | $0.25 / $1.00 | $50.00 |
+| `claude-opus-5.5`                     | $4.00  | $5.00     | $8.00     | $0.20         | $20.00 |
+| `claude-opus-5` / `claude-opus-4.8`   | $5.00  | $6.25     | $10.00    | $0.50         | $25.00 |
+| `claude-sonnet-5`                     | $2.00  | $2.50     | $4.00     | $0.20         | $10.00 |
+| `claude-sonnet-4.6` / `4.5`           | $3.00  | $3.75     | $6.00     | $0.30         | $15.00 |
+| `claude-haiku-4.5`                    | $1.00  | $1.25     | $2.00     | $0.10         | $5.00  |
 
 ### 订阅套餐
 
@@ -37,12 +37,12 @@
 
 ## 模型
 
-| 模型 ID | 类型 | 上下文 | 最大输出 | temperature | 思考 | 来源 |
-| --- | --- | --- | --- | --- | --- | --- |
-| `claude-fable-5.1` | 混合，思考 Adaptive（常开），默认 effort `high` | 1M | 128K | 见下 | 不可关（Adaptive always on） | [1] |
-| `claude-opus-5.5` | 同上，默认 effort `high`；支持 Fast 模式 | 1M | 128K | 见下 | 同上 | [1][2] |
-| `claude-opus-5` / `claude-sonnet-5` | 同上 | 1M | 128K | 见下 | 同上 | [1] |
-| `claude-haiku-4.5` | 最快档；「Thinking: Extended」 | 200K | 64K | 见下 | 官方页未给开关细节 | [1] |
+| 模型 ID                             | 类型                                            | 上下文 | 最大输出 | temperature | 思考                         | 来源   |
+| ----------------------------------- | ----------------------------------------------- | ------ | -------- | ----------- | ---------------------------- | ------ |
+| `claude-fable-5.1`                  | 混合，思考 Adaptive（常开），默认 effort `high` | 1M     | 128K     | 见下        | 不可关（Adaptive always on） | [1]    |
+| `claude-opus-5.5`                   | 同上，默认 effort `high`；支持 Fast 模式        | 1M     | 128K     | 见下        | 同上                         | [1][2] |
+| `claude-opus-5` / `claude-sonnet-5` | 同上                                            | 1M     | 128K     | 见下        | 同上                         | [1]    |
+| `claude-haiku-4.5`                  | 最快档；「Thinking: Extended」                  | 200K   | 64K      | 见下        | 官方页未给开关细节           | [1]    |
 
 - **temperature**：官方 API 参考原文：「Amount of randomness injected into the response. Defaults to 1.0. Ranges from 0.0 to 1.0. Use temperature closer to 0.0 for analytical / multiple choice, and closer to 1.0 for creative and generative tasks. Note that even with temperature of 0.0, the results will not be fully deterministic.」官方同时建议只动 temperature、不要同时改 top_p。[4]
 - **新款模型的弃用情况（非官方渠道，需实测确认）**：社区与第三方库报告 `claude-opus-4.7` 起对 temperature 整个弃用（传值报 400「`temperature` is deprecated for this model」），Opus 4.6 之后的模型 top_p 弃用（<0.99 报 400）；`claude-sonnet-5` 的思考类型默认为 `adaptive`。截至查证日官方文档尚未把这些写入参数页，DocFlow 应**默认不发送 temperature**。[7][8]
@@ -55,15 +55,16 @@
 - **档位**：组织自动分档（Console 的 Rate limits 页可见自己档位）。新组织可能先在 **Evaluation 档**（低于下表的标准限值，随使用历史自动提升）；标准档分 Start / Build / Scale 三档，Scale 以上可联系销售。[2][3]
 - **标准限值（按模型，官方表）**[3]：
 
-  | 模型 | RPM | ITPM（不计缓存读） | OTPM |
-  | --- | --- | --- | --- |
-  | `claude-fable-5.x` | 1,000 | 500,000 | 100,000 |
-  | `claude-opus-5` / `claude-opus-4.x` | 1,000 | 2,000,000 | 400,000 |
-  | `claude-sonnet-5` / `claude-sonnet-4.x` | 1,000 | 2,000,000 | 400,000 |
-  | `claude-haiku-4.5` | 1,000 | 2,000,000 | 400,000 |
-  | `claude-haiku-3.5`（退役） | 1,000 | 100,000 | 20,000 |
+  | 模型                                    | RPM   | ITPM（不计缓存读） | OTPM    |
+  | --------------------------------------- | ----- | ------------------ | ------- |
+  | `claude-fable-5.x`                      | 1,000 | 500,000            | 100,000 |
+  | `claude-opus-5` / `claude-opus-4.x`     | 1,000 | 2,000,000          | 400,000 |
+  | `claude-sonnet-5` / `claude-sonnet-4.x` | 1,000 | 2,000,000          | 400,000 |
+  | `claude-haiku-4.5`                      | 1,000 | 2,000,000          | 400,000 |
+  | `claude-haiku-3.5`（退役）              | 1,000 | 100,000            | 20,000  |
 
   限流按模型分别计算，可同时打满多个模型；ITPM 不计缓存读，实际吞吐可远高于表面值。
+
 - **响应头**：`retry-after`（秒）、`anthropic-ratelimit-requests-limit/remaining/reset`、`anthropic-ratelimit-input-tokens-*`、`anthropic-ratelimit-output-tokens-*`（RFC 3339 reset 时间）；Priority Tier 另有 `anthropic-priority-*` 头。spend cap 触发的 429 不带 `retry-after`。[3]
 - **令牌桶**：限流是连续补充的令牌桶，不是固定窗口重置；60 RPM 可能按 1 RPS 平滑执行。[3]
 

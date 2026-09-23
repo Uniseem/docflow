@@ -58,7 +58,7 @@ export const TranslationRuntime = z.object({
 
 | id          | 名称                  | type      | baseUrl                                             | keyUrl                                            | keyOptional |
 | ----------- | --------------------- | --------- | --------------------------------------------------- | ------------------------------------------------- | ----------- |
-| deepseek    | DeepSeek              | openai    | `https://api.deepseek.com/v1`                       | https://platform.deepseek.com/api_keys            |             |
+| deepseek    | DeepSeek              | openai    | `https://api.deepseek.com`                          | https://platform.deepseek.com/api_keys            |             |
 | openai      | OpenAI                | openai    | `https://api.openai.com/v1`                         | https://platform.openai.com/api-keys              |             |
 | anthropic   | Anthropic（Claude）   | anthropic | `https://api.anthropic.com`                         | https://console.anthropic.com/settings/keys       |             |
 | gemini      | Google Gemini         | gemini    | `https://generativelanguage.googleapis.com`         | https://aistudio.google.com/apikey                |             |
@@ -70,7 +70,7 @@ export const TranslationRuntime = z.object({
 | zhipu       | 智谱 AI               | openai    | `https://open.bigmodel.cn/api/paas/v4`              | https://open.bigmodel.cn/usercenter/apikeys       |             |
 | hunyuan     | 腾讯混元              | openai    | `https://api.hunyuan.cloud.tencent.com/v1`          | https://console.cloud.tencent.com/hunyuan/api-key |             |
 | stepfun     | 阶跃星辰              | openai    | `https://api.stepfun.com/v1`                        | https://platform.stepfun.com/interface-key        |             |
-| lingyi      | 零一万物              | openai    | `https://api.lingyiwanwu.com/v1`                    | https://platform.lingyiwanwu.com/apikeys          |             |
+| minimax     | MiniMax               | openai    | `https://api.minimaxi.com/v1`                       | https://platform.minimaxi.com                     |             |
 | xai         | xAI（Grok）           | openai    | `https://api.x.ai/v1`                               | https://console.x.ai                              |             |
 | groq        | Groq                  | openai    | `https://api.groq.com/openai/v1`                    | https://console.groq.com/keys                     |             |
 | mistral     | Mistral AI            | openai    | `https://api.mistral.ai/v1`                         | https://console.mistral.ai/api-keys               |             |
@@ -79,7 +79,7 @@ export const TranslationRuntime = z.object({
 | lmstudio    | LM Studio（本机）     | openai    | `http://localhost:1234/v1`                          | —                                                 | ✓           |
 | custom      | 自定义（OpenAI 兼容） | openai    | ``                                                  | —                                                 |             |
 
-界面分组：国内服务 = deepseek, siliconflow, dashscope, volcengine, moonshot, zhipu, hunyuan, stepfun, lingyi；国际服务 = openai, anthropic, gemini, openrouter, xai, groq, mistral, azure；本机模型 = ollama, lmstudio；最后「自定义服务商…」。
+界面分组：国内服务 = deepseek, siliconflow, dashscope, volcengine, moonshot, zhipu, hunyuan, stepfun, minimax；国际服务 = openai, anthropic, gemini, openrouter, xai, groq, mistral, azure；本机模型 = ollama, lmstudio；最后「自定义服务商…」。
 
 `keyOptional(provider)` = 预设标记为可选，或 host ∈ {localhost, 127.0.0.1, ::1, [::1]}。预设不带默认模型，模型始终由「获取模型列表」或手动添加得到。新增服务商 id 冲突时加 `-2`、`-3` 后缀。
 
@@ -107,6 +107,8 @@ URL：
 ```
 
 `extraBody` 深合并进请求体（对象递归合并，数组与标量覆盖），例如 `{"generationConfig":{"thinkingConfig":{"thinkingBudget":0}}}` 会保留我们的 `maxOutputTokens`。
+
+温度策略：默认不传 `temperature`，用各服务商模型自身的默认值；需要固定温度的服务商（如 DeepSeek 官方翻译建议 1.3）由用户在 extraBody 里自行配置，代码不写死。
 
 超时：`AbortSignal.timeout(900_000)`（单次翻译请求 15 分钟，与 3.x 一致），连接失败/中止归为 `transient`。`fetch` 通过 `http.ts` 注入：生产 `net.fetch`，测试传入 Node `fetch`。
 

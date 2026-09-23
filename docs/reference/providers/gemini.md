@@ -12,13 +12,13 @@
 
 ### 按量 API（Google AI Studio）
 
-| 项目 | 内容 |
-| --- | --- |
-| 计费方式 | 按 token 计费；Batch API 5 折；Context Caching 按缓存 token 低价计；Search Grounding 每月 5,000 次免费后 $14/千次。Free tier 免费但**数据会被用于改进 Google 产品**，付费档不受此条款。[3][4] |
-| Base URL | `https://generativelanguage.googleapis.com`，Gemini 格式 `POST /v1beta/models/{model}:generateContent`、`GET /v1beta/models`。[1][6] |
-| 鉴权方式 | `x-goog-api-key: ${GEMINI_API_KEY}`（DocFlow 规划 4.3 已定）。[6] |
-| Key 获取页 | https://aistudio.google.com/apikey [6] |
-| 使用限制 | 未查到针对翻译类应用的专门限制；Free tier 有可用区域限制。付费档「数据不用于训练」，适合处理用户文档。[4] |
+| 项目       | 内容                                                                                                                                                                                          |
+| ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 计费方式   | 按 token 计费；Batch API 5 折；Context Caching 按缓存 token 低价计；Search Grounding 每月 5,000 次免费后 $14/千次。Free tier 免费但**数据会被用于改进 Google 产品**，付费档不受此条款。[3][4] |
+| Base URL   | `https://generativelanguage.googleapis.com`，Gemini 格式 `POST /v1beta/models/{model}:generateContent`、`GET /v1beta/models`。[1][6]                                                          |
+| 鉴权方式   | `x-goog-api-key: ${GEMINI_API_KEY}`（DocFlow 规划 4.3 已定）。[6]                                                                                                                             |
+| Key 获取页 | https://aistudio.google.com/apikey [6]                                                                                                                                                        |
+| 使用限制   | 未查到针对翻译类应用的专门限制；Free tier 有可用区域限制。付费档「数据不用于训练」，适合处理用户文档。[4]                                                                                     |
 
 价格：定价页按模型列出（含免费档开关）；本次未能完整抓取每个模型的现价，引用时以 [3] 为准 → 各模型具体价格**未查到完整数值**，改预设前需人工核对定价页。
 
@@ -28,11 +28,11 @@
 
 ## 模型
 
-| 模型 ID | 类型 | 上下文 | 最大输出 | temperature | 思考开关 | 来源 |
-| --- | --- | --- | --- | --- | --- | --- |
-| `gemini-3-pro-preview` | 思考默认开（`thinking_level`） | 1M | 64K | 官方迁移建议：**移除显式 temperature，用默认值 1.0**（低温度在 Gemini 3 上可能导致 looping / 性能下降） | `thinking_level: "high"` 简化提示词；`thinking_budget` 兼容但不建议同用 | [1][2] |
-| `gemini-3.1-flash` | 快速版，思考可配 | ≥131K | 未查到 | 同上 | 同上 | [2][3] |
-| `gemini-2.5-flash` / `gemini-2.5-flash-lite` | 上一代主力 | 1M | 64K | 默认 1.0 | `thinkingConfig: {"thinkingBudget": 0}` 关闭思考（DocFlow 规划 4.3 的 extraBody 示例就是这个） | [1][6] |
+| 模型 ID                                      | 类型                           | 上下文 | 最大输出 | temperature                                                                                             | 思考开关                                                                                       | 来源   |
+| -------------------------------------------- | ------------------------------ | ------ | -------- | ------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- | ------ |
+| `gemini-3-pro-preview`                       | 思考默认开（`thinking_level`） | 1M     | 64K      | 官方迁移建议：**移除显式 temperature，用默认值 1.0**（低温度在 Gemini 3 上可能导致 looping / 性能下降） | `thinking_level: "high"` 简化提示词；`thinking_budget` 兼容但不建议同用                        | [1][2] |
+| `gemini-3.1-flash`                           | 快速版，思考可配               | ≥131K  | 未查到   | 同上                                                                                                    | 同上                                                                                           | [2][3] |
+| `gemini-2.5-flash` / `gemini-2.5-flash-lite` | 上一代主力                     | 1M     | 64K      | 默认 1.0                                                                                                | `thinkingConfig: {"thinkingBudget": 0}` 关闭思考（DocFlow 规划 4.3 的 extraBody 示例就是这个） | [1][6] |
 
 - 官方迁移文档原文要点：「If your existing code explicitly sets temperature (especially to low values for deterministic outputs), we recommend removing this parameter and using the Gemini 3 default of 1.0」；「try Gemini 3 with `thinking_level: "high"` and simplified prompts」。[1]
 
@@ -51,15 +51,15 @@
 
 ## 对 DocFlow 的建议
 
-| 项 | 建议 | 依据 |
-| --- | --- | --- |
-| 显示名 | Google Gemini | 规划 4.2 已定 |
-| Base URL | `https://generativelanguage.googleapis.com`（规划一致） | [6] |
-| Key 获取页 | https://aistudio.google.com/apikey | [6] |
-| 新账号安全并发数 | **3**（免费档 10 RPM 量级，并发 3 已能打满）；关联计费升 Tier 1 后可调到 20 | [5][7] |
-| 翻译请求构造 | **不传 temperature**（Gemini 3 官方建议移除）；用 `thinkingConfig.thinkingBudget: 0` 尝试关闭思考（2.5 系确定有效；3.x 若忽略该参数也无害——extraBody 深合并已兼容此写法） | [1][6] |
-| 首选翻译模型 | **`gemini-3.1-flash`**（速度与质量平衡）；低成本大批量用 `gemini-3.1-flash-lite` / `gemini-2.5-flash-lite` | [2][3] |
-| maxOutputTokens | 不设置（默认到模型上限内自适应）；3 Pro 上限 64K | [2] |
+| 项               | 建议                                                                                                                                                                      | 依据          |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------- |
+| 显示名           | Google Gemini                                                                                                                                                             | 规划 4.2 已定 |
+| Base URL         | `https://generativelanguage.googleapis.com`（规划一致）                                                                                                                   | [6]           |
+| Key 获取页       | https://aistudio.google.com/apikey                                                                                                                                        | [6]           |
+| 新账号安全并发数 | **3**（免费档 10 RPM 量级，并发 3 已能打满）；关联计费升 Tier 1 后可调到 20                                                                                               | [5][7]        |
+| 翻译请求构造     | **不传 temperature**（Gemini 3 官方建议移除）；用 `thinkingConfig.thinkingBudget: 0` 尝试关闭思考（2.5 系确定有效；3.x 若忽略该参数也无害——extraBody 深合并已兼容此写法） | [1][6]        |
+| 首选翻译模型     | **`gemini-3.1-flash`**（速度与质量平衡）；低成本大批量用 `gemini-3.1-flash-lite` / `gemini-2.5-flash-lite`                                                                | [2][3]        |
+| maxOutputTokens  | 不设置（默认到模型上限内自适应）；3 Pro 上限 64K                                                                                                                          | [2]           |
 
 风险提示：
 
