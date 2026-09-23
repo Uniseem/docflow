@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest'
-import { dockBadge, notifyIfBackground, overallProgress } from './notifications'
+import { dockBadge, notifyIfBackground, overallProgress, windowFocused } from './notifications'
 
 describe('notifications', () => {
   test('only notifies completed/failed when the window is in the background', () => {
@@ -12,6 +12,17 @@ describe('notifications', () => {
     expect(
       notifyIfBackground({ enabled: false, focused: false, status: 'failed', title: 'C' }),
     ).toBeNull()
+  })
+
+  test('no window (closed on macOS) counts as background', () => {
+    const window = (focused: boolean, destroyed = false) => ({
+      isFocused: () => focused,
+      isDestroyed: () => destroyed,
+    })
+    expect(windowFocused(null)).toBe(false)
+    expect(windowFocused(window(true, true))).toBe(false)
+    expect(windowFocused(window(false))).toBe(false)
+    expect(windowFocused(window(true))).toBe(true)
   })
 
   test('badge and taskbar progress', () => {

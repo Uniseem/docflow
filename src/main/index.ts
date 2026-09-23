@@ -174,6 +174,16 @@ if (!gotLock) {
     .then(async () => {
       const current = new AppSession(app.getPath('userData'), process.env)
       current.getWindow = () => mainWindow
+      // Notification click: on macOS the window may have been closed while the app kept running.
+      current.showWindow = () => {
+        if (!mainWindow) {
+          createWindow()
+          return
+        }
+        if (mainWindow.isMinimized()) mainWindow.restore()
+        mainWindow.show()
+        mainWindow.focus()
+      }
       await current.boot()
       session = current
       installApplicationMenu({

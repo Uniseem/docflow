@@ -34,6 +34,21 @@ export class ProviderError extends Error {
   }
 }
 
+/**
+ * `submit()` used up its attempts on a retryable error: the provider is unavailable, so the
+ * document fails retryably (the scheduler tries again later) instead of the retry ladder
+ * grinding through every paragraph and keeping the originals.
+ */
+export class RetriesExhaustedError extends ProviderError {
+  constructor(last: ProviderError | undefined) {
+    super('transient', `翻译请求多次重试后仍然失败：${last?.message ?? '未知错误'}`, {
+      snippet: last?.snippet ?? '',
+      ...(last === undefined ? {} : { cause: last }),
+    })
+    this.name = 'RetriesExhaustedError'
+  }
+}
+
 export function redact(text: string, keys: readonly string[]): string {
   let out = text
   for (const key of keys) {
@@ -124,6 +139,8 @@ export function classifyHttpError(input: {
   } else if (status === 413) kind = 'oversized'
   else if (status === 400 || status === 422) kind = fromBody ?? 'rejected'
   else if (status >= 400 && status < 500) kind = 'rejected'
+  // A 2xx carrying an error object (some gateways): only its content says what went wrong.
+  else if (status >= 200 && status < 300) kind = fromBody ?? 'transient'
   else kind = 'transient'
 
   const statusPart = `（HTTP ${status}）`
@@ -178,10 +195,35 @@ export function classifyBody(lower: string): ErrorKind | undefined {
   return undefined
 }
 
+/**
+ * An `error` object inside an HTTP 200 body. Gateways that embed the real status (`code: 401`,
+ * Gemini style) are classified as that status; otherwise the error text decides.
+ */
+export function classifyErrorObject(error: Record<string, unknown>): ProviderError {
+  const embedded = [error.code, error.status].find(
+    (value): value is number => typeof value === 'number' && value >= 400 && value < 600,
+  )
+  return classifyHttpError({ status: embedded ?? 200, body: JSON.stringify(error) })
+}
+
+/**
+ * A request that never got an HTTP answer (DNS, refused connection, TLS, proxy, timeout).
+ * The message is for the user; the technical reason stays in `snippet`.
+ */
 export function classifyNetworkError(error: unknown): ProviderError {
-  const message = error instanceof Error ? error.message : String(error)
-  return new ProviderError('transient', `无法连接翻译服务：${snippet(message)}`, {
-    snippet: snippet(message),
-    cause: error,
-  })
+  const reason = snippet(networkReason(error))
+  const name = error instanceof Error ? error.name : ''
+  const message =
+    name === 'TimeoutError' || name === 'AbortError'
+      ? '翻译请求超时，请检查网络或代理设置后重试。'
+      : `无法连接翻译服务${reason ? `（${reason}）` : ''}，请检查网络或代理设置，以及服务地址是否正确。`
+  return new ProviderError('transient', message, { snippet: reason, cause: error })
+}
+
+/** Node's fetch hides the useful part (`ECONNREFUSED …`) in `cause`. */
+function networkReason(error: unknown): string {
+  if (!(error instanceof Error)) return String(error)
+  const cause: unknown = error.cause
+  if (cause instanceof Error && cause.message) return cause.message
+  return error.message
 }

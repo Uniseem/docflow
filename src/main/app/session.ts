@@ -21,7 +21,7 @@ import type { PushChannelName } from '../../shared/ipc'
 import type { DocumentManifest } from '../../shared/types'
 import type { DialogHost } from './dialogs'
 import { handleDocflowRequest } from './protocol'
-import { dockBadge, notifyIfBackground, overallProgress } from './notifications'
+import { dockBadge, notifyIfBackground, overallProgress, windowFocused } from './notifications'
 import { toSessionProxy } from './proxy'
 import { DocumentLibrary } from '../library/library'
 import { Scheduler } from '../jobs/scheduler'
@@ -126,6 +126,13 @@ export class AppSession {
   }
 
   getWindow: () => BrowserWindow | null = () => null
+
+  /** Shows and focuses the main window; index.ts replaces it to reopen a closed one. */
+  showWindow: () => void = () => {
+    const window = this.getWindow()
+    window?.show()
+    window?.focus()
+  }
 
   /**
    * Opens the configured library. When it can't be opened (unplugged drive, no permission,
@@ -320,17 +327,13 @@ export class AppSession {
     if (previous && previous !== manifest.status) {
       const note = notifyIfBackground({
         enabled: this.settings.snapshot.notifications,
-        focused: this.getWindow()?.isFocused() ?? true,
+        focused: windowFocused(this.getWindow()),
         status: manifest.status,
         title: manifest.title,
       })
       if (note && Notification.isSupported() && this.env.DOCFLOW_HIDE_WINDOW !== '1') {
         const notification = new Notification({ title: note.title, body: note.body })
-        notification.on('click', () => {
-          const window = this.getWindow()
-          window?.show()
-          window?.focus()
-        })
+        notification.on('click', () => this.showWindow())
         notification.show()
       }
     }

@@ -1,7 +1,8 @@
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, rm, truncate, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, test } from 'vitest'
+import { MAX_PDF_BYTES } from '../../shared/constants'
 import { UserError } from '../../shared/errors'
 import { DocumentLibrary } from '../library/library'
 import { Scheduler } from '../jobs/scheduler'
@@ -176,6 +177,19 @@ describe('documents handlers', () => {
     await ctx.scheduler.stop(0)
   })
 
+  test('revealExport also reveals an exported bundle', async () => {
+    const { ctx, pdf, hold, revealed } = await setup()
+    const created = await handleDocumentsCreate(ctx, { paths: [pdf], translator })
+    const id = created.created[0]!.id
+    await expect.poll(() => hold.has(id)).toBe(true)
+    hold.get(id)?.()
+    const zipped = await handleDocumentsExport(ctx, { id, kind: 'bundle' })
+    if (!('path' in zipped)) throw new Error('export was cancelled')
+    handleShellRevealExport(ctx, { path: zipped.path })
+    expect(revealed).toEqual([zipped.path])
+    await ctx.scheduler.stop(0)
+  })
+
   test('openExternal and export report a missing file instead of failing silently', async () => {
     const { ctx, pdf, hold, lib } = await setup()
     const created = await handleDocumentsCreate(ctx, { paths: [pdf], translator })
@@ -209,6 +223,23 @@ describe('documents handlers', () => {
     })
     expect(result.created).toHaveLength(0)
     expect(result.failed[0]?.message).toBeTruthy()
+    await ctx.scheduler.stop(0)
+  })
+
+  test('create rejects empty and oversized PDFs', async () => {
+    const { ctx, dir } = await setup()
+    const empty = join(dir, 'empty.pdf')
+    await writeFile(empty, '')
+    const huge = join(dir, 'huge.pdf')
+    await writeFile(huge, '')
+    // Sparse file: reports the size without writing 500 MB.
+    await truncate(huge, MAX_PDF_BYTES + 1)
+    const result = await handleDocumentsCreate(ctx, { paths: [empty, huge], translator })
+    expect(result.created).toHaveLength(0)
+    expect(result.failed).toEqual([
+      { path: empty, message: '文件是空的（0 字节），请选择其他 PDF。' },
+      { path: huge, message: '文件太大，请选择小于 500 MB 的 PDF。' },
+    ])
     await ctx.scheduler.stop(0)
   })
 })

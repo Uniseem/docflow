@@ -183,7 +183,7 @@ export const VerifyResult = z.object({
 
 `src/main/pdf/inspect.ts`，在 analyze worker 里执行。
 
-1. pdf.js 统一由 `src/main/pdf/pdfjs.ts` 加载：Node 下必须用 `pdfjs-dist/legacy/build/pdf.mjs`（普通构建的 `getDocument` 会失败，见 worklog 2026-09-22-m2-pdf）；加载前先 `import './dom-matrix'`，用纯 JS 的 2D 仿射矩阵补上 `globalThis.DOMMatrix`，不让 pdf.js 去取可选原生依赖 `@napi-rs/canvas`（[ADR-0010](../adr/0010-exclude-pdfjs-native-canvas.md)）。`getDocument({ data, useSystemFonts: false, disableFontFace: true, verbosity: 0, standardFontDataUrl, cMapUrl, cMapPacked: true, fontExtraProperties: true })`；`standardFontDataUrl`、`cMapUrl` 是 `require.resolve('pdfjs-dist/package.json')` 所在目录下 `standard_fonts/`、`cmaps/` 的 `file://` URL，末尾带 `/`（打包后读的是 app.asar 里那份；electron-builder 另复制到 `Resources/pdfjs/` 的一份目前没有被读取，见 worklog 2026-09-23-m5-fixes）。
+1. pdf.js 统一由 `src/main/pdf/pdfjs.ts` 加载：Node 下必须用 `pdfjs-dist/legacy/build/pdf.mjs`（普通构建的 `getDocument` 会失败，见 worklog 2026-09-22-m2-pdf）；加载前先 `import './dom-matrix'`，用纯 JS 的 2D 仿射矩阵补上 `globalThis.DOMMatrix`，不让 pdf.js 去取可选原生依赖 `@napi-rs/canvas`（[ADR-0010](../adr/0010-exclude-pdfjs-native-canvas.md)）。`getDocument({ data, useSystemFonts: false, disableFontFace: true, verbosity: 0, standardFontDataUrl, cMapUrl, cMapPacked: true, fontExtraProperties: true })`；`standardFontDataUrl`、`cMapUrl` 是 `require.resolve('pdfjs-dist/package.json')` 所在目录下 `standard_fonts/`、`cmaps/` 的 `file://` URL，末尾带 `/`（打包后读的是 app.asar 里那份；2026-09-24 起 electron-builder 不再另外复制一份到 `Resources/pdfjs/`，那份从未被读取）。
 2. 先看文件前 5 字节，不是 `%PDF-` → `pdf_invalid`（不交给 pdf.js）。打开失败的映射（`src/shared/errors.ts`，均为永久错误）：`PasswordException` → `pdf_encrypted`；`InvalidPDFException` → `pdf_invalid`；其他 → `pdf_open`。
 3. `numPages === 0` → `pdf_empty`；`> MAX_PAGES (600)` → `pdf_too_long`。
 4. 每页 `getViewport({ scale: 1, rotation: 0 })` 取 MediaBox 宽高与 `rotate`；宽或高 < 50 或 > 14400 pt → `page_geometry`。
@@ -361,12 +361,12 @@ x += w0 × size + spacing                             // 文字空间累加，�
 
 多于 `expected` 时按同样的基线距离只留最近的 `expected` 个。一致性校验（防止分析与改写坐标不一致）：最终数量 ≠ `expected` → warning（`page`, `code: 'op_mismatch'`）；`|删除数 − expected| / expected > PAGE_SKIP_MISMATCH_RATIO (10%)` 的页整页放弃改写（warning `page_skipped`，该页内容流与表单都不动），不让错误扩散。（原规划不等时按 `opSeq` 首字形坐标逐个匹配找差异；walker 与 pdf.js 的算子计数在复杂页上仍会差几个，改成按行框取、按基线就近补齐或裁掉后，真实论文不再整页放弃，见 [ADR-0015](../adr/0015-deletion-set-by-geometry.md)、worklog 2026-09-22-m3-compose。）
 
-**新内容流** = 原字节去掉删除集合各 `tokenRange`（合并重叠后）的字节区间，其余原样拼接（不重新序列化其他任何 token）。表单流同理，各自写回各自的流对象（`context.assign(ref, context.flateStream(bytes, dict))`；保留原字典除 `Length`、`Filter`、`DecodeParms` 外的键，重新压缩用 `FlateDecode`）。页面则把改写后的内容作为一个新的 Flate 流，替换整个 `/Contents`（§3.12.6）。对于因 shared 或深度而没进入的表单，不动。
+**新内容流** = 原字节去掉删除集合各 `tokenRange`（合并重叠后）的字节区间，其余原样拼接（不重新序列化其他任何 token）。表单流同理，各自写回各自的流对象（`context.assign(ref, context.flateStream(bytes, dict))`；保留原字典除 `Length`、`Filter`、`DecodeParms` 外的键，重新压缩用 `FlateDecode`）。页面则把改写后的内容作为一个新的 Flate 流，替换整个 `/Contents`（§3.12.6）。对于因 shared 或深度而没进入的表单，不动；formPath 是 shared 表单或其下嵌套表单（如 shared `3` 下的 `3/1`）的段落，compose 一律按 `kept` 处理（walker 不进入这些表单，删不掉原文）。
 
 ### 3.12.4 字体资源
 
-- 中文字体：`doc.registerFontkit(fontkit)`（`@cantoo/fontkit`）；`regular = await doc.embedFont(regularBytes, { subset: true })`，`bold` 只在全文有「可翻译、加粗、译文未保留原文」的段落时嵌入；`embedFont` 失败回退 `subset: false` 并 warning `font_subset_fallback`；再失败 → `font_embed_failed`（永久）。为每个改写的页面 `page.node.setFontDictionary('DFcjk', regular.ref)`（嵌入了加粗字体时再挂 `DFcjkb`）。
-- 原字体（公式重绘用，`compose/fonts.ts` 的 `mapOriginalFonts`）：取本页所有段落公式片段里每个 `(formPath, opSeq)` 的第一个字形，找同 `formPath`、起点与该字形原点距离 ≤ `OP_MATCH_TOLERANCE (0.5)` pt 的 `TextOp`，用它的 `fontName` 在该层 `/Font` 字典（没有再找页面图里任何同名资源）取到字体 ref，为 `fontKey → (ref, 资源名)` 投一票，取票数最多的；没有票的 `fontKey` 再用名字匹配（`fontMap[fontKey].family` 去掉子集前缀后，与页面及已进入表单 `/Font` 字典里去掉子集前缀的 `/BaseFont` 或资源名比较）；仍找不到 → 用到该字体的公式片段所在段落 `kept`（warning `font_unmapped`）。把用到的原字体以 `DFo<n>`（每页从 1 编号）的名字加入**页面**的 `/Font` 字典（值是原字体的 ref，来自表单的也一样）——所有新指令都追加在页面级内容流末尾，用页面用户空间坐标。
+- 中文字体：`doc.registerFontkit(fontkit)`（`@cantoo/fontkit`）；`regular = await doc.embedFont(regularBytes, { subset: true })`，`bold` 只在全文有「可翻译、加粗、译文未保留原文」的段落时嵌入；`embedFont` 失败回退 `subset: false` 并 warning `font_subset_fallback`；再失败 → `font_embed_failed`（永久）。为每个改写的页面在其 `/Font` 字典挂 `DFcjk`（嵌入了加粗字体时再挂 `DFcjkb`）；挂载前先把页面的 `/Resources` 与 `/Font` 浅拷贝成该页自己的字典（`compose/resources.ts` 的 `mountFonts`），因为 pdf-lib 的 `normalize()` 不拷贝多页共用或从页树继承的资源字典，否则后一页的同名别名会覆盖前一页的。
+- 原字体（公式重绘用，`compose/fonts.ts` 的 `mapOriginalFonts`）：取本页所有段落公式片段里每个 `(formPath, opSeq)` 的第一个字形，找同 `formPath`、起点与该字形原点距离 ≤ `OP_MATCH_TOLERANCE (0.5)` pt 的 `TextOp`，用它的 `fontName` 在该层 `/Font` 字典（没有再找页面图里任何同名资源）取到字体 ref，为 `fontKey → (ref, 资源名)` 投一票，取票数最多的；没有票的 `fontKey` 再用名字匹配（`fontMap[fontKey].family` 去掉子集前缀后，与页面及已进入表单 `/Font` 字典里去掉子集前缀的 `/BaseFont` 或资源名比较）；仍找不到 → 用到该字体的公式片段所在段落 `kept`（warning `font_unmapped`）。把用到的原字体以 `DFo<n>`（每页从 1 编号，页面字典已独立，不会跨页冲突）的名字加入**页面**的 `/Font` 字典（值是原字体的 ref，来自表单的也一样）——所有新指令都追加在页面级内容流末尾，用页面用户空间坐标。
 
 ### 3.12.5 译文排版（`layout.ts`，纯函数）
 
@@ -400,7 +400,7 @@ ET
 
 - 中文：`hex = font.encodeText(str).toString()`（pdf-lib 返回 `PDFHexString`），宽度 `font.widthOfTextAtSize(str, size)`。加粗段落（且已嵌入加粗字体）用 `DFcjkb`。
 - 公式片段重绘（pdf2zh `converter.py` 第 C 部分 `for vch in var[vid]` 的等价）：目标片段左端 `X`（排版给出的 token 位置）、基线 `Y = 行基线 + run.baselineOffset × fontScale`；片段内字形先分组，每组首字形 `g0` 的新原点 = `(X + (g0.x − first.x) × fontScale, Y + (g0.y − first.y) × fontScale)`；`Tm = [g0.trm[0..3] × fontScale, 新原点]`（保留原 trm 的字号/缩放/斜切/上下标字号，所以 `Tf` 字号写 1）；颜色 `g0.color`；编码：`code` 按 `codeBytes` 写成大端大写十六进制（1 字节 2 位，2 字节 4 位，3/4 字节同理）；一组内合并「同 `fontKey`、同 trm 前 4 项、同颜色（容差 1e-3），且在原文里 `prev.x + prev.adv` 与下一字形 `x` 相差 ≤ 0.05 pt、`y` 相差 ≤ 0.05 pt」的连续字形，否则另起一组（各自带 Tm）。`fontScale = 最终字号 / p.size`。
-- 失败处理与顺序：每页「排版本页全部段落（单段异常 → 该段 `kept`，warning `layout_failed`）→ 映射原字体（失败 → 该段 `kept`，warning `font_unmapped`）→ 确定删除集合 → 挂字体、删指令（表单流此时即写回）→ 生成追加指令 → 写页面内容流」。被 `kept` 的段落不进删除集合，指令原样保留。生成追加指令（编码）是整页一个 try/catch：异常 → 本页全部目标段落记 warning `encode_failed`，页面内容流不写回。
+- 失败处理与顺序：每页「排版本页全部段落（单段异常 → 该段 `kept`，warning `layout_failed`）→ 映射原字体（失败 → 该段 `kept`，warning `font_unmapped`）→ 确定删除集合 → 生成追加指令 → 写回表单流、挂字体、写页面内容流」。被 `kept` 的段落不进删除集合，指令原样保留。生成追加指令（编码）是整页一个 try/catch：异常 → 本页全部目标段落记 warning `encode_failed`，本页什么都不写回（表单流、字体、页面内容流都保持原样，整页要么全改要么不改）。追加指令里每段开头设段落颜色；公式片段按字形原色重绘后，其后的译文 token 前重新设回段落颜色。
 
 ### 3.12.7 保存与双语
 
@@ -419,7 +419,7 @@ ET
 3. 有 `dual.pdf` 时：`numPages !== 2 × pages` → `verify_failed`；每对页（原文页、中文页）的尺寸与 `mono.pdf` 对应页差 > 1 pt 的计入 `sizeMismatches`（只计数，不判失败；不与源文件比较）。
 4. `mono.pdf` ≤ 1 KiB → `verify_failed`。
 
-`verify_failed` 可重试。
+`verify_failed` 可重试。失败文案 = `生成的 PDF 未通过校验（<原因>），稍后自动重试。`，原因为中文，例如 `中文 PDF 有 3 页，原文有 4 页`、`第 1、3 页写入译文后没有中文`、`双语 PDF 有 5 页，应为 6 页`、`中文 PDF 不足 1 KiB`。
 
 ## 3.14 worker 协议、超时与错误码
 
@@ -444,7 +444,7 @@ type WorkerResponse =
   | { id: number; progress: { current: number; total: number } } // 已声明；worker 目前不发，主进程忽略
 ```
 
-`AppSession` 为 analyze、compose 各建一个 `PdfWorkerHost`，所有文档共用；线程在第一个请求时启动，连续的阶段复用同一线程，最后一个请求结束 `WORKER_IDLE_MS (15 s)` 后终止，把 pdf.js 缓存与中文字体占用的堆还给系统（本章原写每个文档任务独占 worker、任务结束 terminate；现状与原因见 [ADR-0014](../adr/0014-pdf-workers-exit-when-idle.md)、02 章 §2.1）。同一线程里的多个请求并发处理。取消 = `terminate()` 该线程（`cancelled`）。超时由主进程计时：`inspect 60 s`、`analyze max(120 s, pages × 3 s)`、`compose max(120 s, pages × 2 s)`、`verify 120 s`；超时 → terminate → `<kind>_timeout`（可重试）。线程被终止或意外退出时，其上所有未完成请求以 `worker_crashed`（可重试）结束；线程抛出未捕获异常时原样拒绝，按内部错误处理（永久）。可重试错误由调度器按 `RETRY_BASE_SECONDS (20) × 次数` 秒退避重试，共 `MAX_ATTEMPTS (3)` 次，第 3 次仍失败 → `failed`（文案不变；规划中的「提示到 GitHub 提交问题并附文件」尚未实现）。worker 内所有异常带 `stack` 回传并写日志（3.x 的教训：不要隐藏原始异常；现状：worker 回传了 `stack`，但 `PdfWorkerHost` 收到后没有写日志）；非 `UserError` 的异常以 `code: 'internal'` 回传。
+`AppSession` 为 analyze、compose 各建一个 `PdfWorkerHost`，所有文档共用；线程在第一个请求时启动，连续的阶段复用同一线程，最后一个请求结束 `WORKER_IDLE_MS (15 s)` 后终止，把 pdf.js 缓存与中文字体占用的堆还给系统（本章原写每个文档任务独占 worker、任务结束 terminate；现状与原因见 [ADR-0014](../adr/0014-pdf-workers-exit-when-idle.md)、02 章 §2.1）。同一线程里的多个请求并发处理。取消 = `terminate()` 该线程（`cancelled`）。超时由主进程计时：`inspect 60 s`、`analyze max(120 s, pages × 3 s)`、`compose max(120 s, pages × 2 s)`、`verify 120 s`；超时 → terminate → `<kind>_timeout`（可重试）。因取消或超时 terminate 线程时，同一线程上其他文档的请求没有被取消：它们在新线程上从头重发、重新计时，不会失败。线程意外退出时（或 `kill()`，例如退出应用），其上所有未完成请求以 `worker_crashed`（可重试）结束；线程抛出未捕获异常时原样拒绝，按内部错误处理（永久）。可重试错误由调度器按 `RETRY_BASE_SECONDS (20) × 次数` 秒退避重试，共 `MAX_ATTEMPTS (3)` 次，第 3 次仍失败 → `failed`（文案不变；规划中的「提示到 GitHub 提交问题并附文件」尚未实现）。worker 内所有异常带 `stack` 回传，`PdfWorkerHost` 收到失败回复时把 code 与 `stack` 写进主进程日志（`internal` 记 error，其余记 warn；3.x 的教训：不要隐藏原始异常）；非 `UserError` 的异常以 `code: 'internal'` 回传，主进程把它还原成带原 `stack` 的普通 `Error`（不是 `UserError`），调度器按内部错误处理：永久失败，提示 `处理时发生内部错误，详情见日志。`，原始英文信息只进事件 detail 与日志。
 
 错误码表（`src/shared/errors.ts`）：
 
@@ -464,7 +464,7 @@ type WorkerResponse =
 | `worker_crashed`                                                             | 可重试 | 处理进程意外退出，稍后自动重试。                                   |
 | `mostly_untranslated`                                                        | 永久   | 有部分内容无法翻译，已停止处理。请换一个翻译服务或模型后重新处理。 |
 
-compose 的 warning code（进处理记录，不中断）：`op_mismatch`、`page_skipped`、`font_unmapped`、`overflow`、`layout_failed`、`encode_failed`、`font_subset_fallback`。`overflow`、`layout_failed`、`page_skipped`、`font_unmapped` 在处理记录里转成中文（`pipeline/run.ts` 的 `composeWarningMessage`），其余直接写 warning 自带的 `message`。
+compose 的 warning code（进处理记录，不中断）：`op_mismatch`、`page_skipped`、`font_unmapped`、`overflow`、`layout_failed`、`encode_failed`、`font_subset_fallback`。全部在处理记录里转成中文（`pipeline/run.ts` 的 `composeWarningEvent`，文案见 05 章 §5.5），段落写成本页第几段而不是内部 id；未知 code 用通用中文文案，warning 自带的英文 `message` 只进 detail。
 
 ## 3.15 调试工具
 

@@ -25,9 +25,14 @@ export function mergeExtraBody(
 }
 
 export function authHeaders(type: ProviderType, key: string | undefined): Record<string, string> {
+  // The Messages API rejects requests without a version header, keyed or not.
+  if (type === 'anthropic') {
+    return key
+      ? { 'x-api-key': key, 'anthropic-version': '2023-06-01' }
+      : { 'anthropic-version': '2023-06-01' }
+  }
   if (!key) return {}
   if (type === 'azure') return { 'api-key': key }
-  if (type === 'anthropic') return { 'x-api-key': key, 'anthropic-version': '2023-06-01' }
   if (type === 'gemini') return { 'x-goog-api-key': key }
   return { Authorization: `Bearer ${key}` }
 }

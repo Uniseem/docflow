@@ -17,6 +17,8 @@ export function pointInRect(x: number, y: number, rect: Rect): boolean {
   return x >= rect[0] && x <= rect[2] && y >= rect[1] && y <= rect[3]
 }
 
+export { inSharedForm } from '../form-path'
+
 export function spliceRanges(bytes: Uint8Array, ranges: Array<[number, number]>): Uint8Array {
   if (ranges.length === 0) return bytes
   const merged = mergeRanges(ranges.filter(([a, b]) => b > a))

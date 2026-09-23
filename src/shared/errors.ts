@@ -18,6 +18,7 @@ export const ERROR_CODES = {
   cancelled: 'cancelled',
   keychain_unavailable: 'keychain_unavailable',
   models_unsupported: 'models_unsupported',
+  models_failed: 'models_failed',
   not_found: 'not_found',
   internal: 'internal',
 } as const
@@ -62,6 +63,7 @@ export const ERROR_MESSAGES: Record<string, string> = {
   cancelled: '已取消处理',
   keychain_unavailable: '这台电脑的系统钥匙串不可用，无法安全保存 API Key。',
   models_unsupported: '服务商不支持获取模型列表，请手动添加模型 ID。',
+  models_failed: '获取模型列表失败，请检查服务地址、API Key 与网络后重试。',
   not_found: '找不到这个文档。',
   internal: INTERNAL_MESSAGE,
 }

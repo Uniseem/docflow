@@ -1,8 +1,6 @@
 import { Alert, Button, CloseButton, Label, Modal, TextField, Input } from '@heroui/react'
 import { FileText } from 'lucide-react'
 import { useState } from 'react'
-import { MAX_PDF_BYTES } from '../../../shared/constants'
-import { formatBytes } from '../../../shared/text'
 import { invoke } from '../../api/invoke'
 import { TranslatorSelect } from '../../components/TranslatorSelect'
 import { basename, fileStem } from '../../lib/labels'
@@ -12,7 +10,9 @@ import { useDocumentsStore } from '../../store/documents'
 import { useSettingsStore } from '../../store/settings'
 import { useUiStore } from '../../store/ui'
 
-type PendingFile = { path: string; size?: number; problem?: string }
+// The sandboxed renderer can't read file sizes; main rejects empty and oversized PDFs at
+// documents:create, and those failures show in the 「部分文件未能添加」 alert.
+type PendingFile = { path: string; problem?: string }
 
 export function NewTranslationModal() {
   const open = useUiStore((s) => s.newTranslationOpen)
@@ -149,11 +149,7 @@ export function NewTranslationModal() {
                         <span className="min-w-0 flex-1 truncate" title={file.path}>
                           {basename(file.path)}
                         </span>
-                        {file.problem ? (
-                          <span className="text-danger">{file.problem}</span>
-                        ) : file.size != null ? (
-                          <span className="text-foreground/60">{formatBytes(file.size)}</span>
-                        ) : null}
+                        {file.problem ? <span className="text-danger">{file.problem}</span> : null}
                         <CloseButton
                           aria-label="移除这个文件"
                           onPress={() =>
@@ -258,16 +254,11 @@ function mergePaths(current: PendingFile[], paths: readonly string[]): PendingFi
     if (!path) continue
     if (current.some((item) => item.path === path) || added.some((item) => item.path === path))
       continue
-    added.push(validateFile({ path }))
+    added.push(validateFile(path))
   }
   return added.length === 0 ? current : [...current, ...added]
 }
 
-function validateFile(input: { path: string; size?: number }): PendingFile {
-  const file: PendingFile = { path: input.path }
-  if (input.size !== undefined) file.size = input.size
-  if (!input.path.toLowerCase().endsWith('.pdf')) file.problem = '只支持 .pdf 文件'
-  else if (input.size === 0) file.problem = '文件为空'
-  else if (input.size !== undefined && input.size > MAX_PDF_BYTES) file.problem = '文件超过 500 MB'
-  return file
+function validateFile(path: string): PendingFile {
+  return path.toLowerCase().endsWith('.pdf') ? { path } : { path, problem: '只支持 .pdf 文件' }
 }

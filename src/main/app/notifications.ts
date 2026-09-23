@@ -12,6 +12,16 @@ export function notifyIfBackground(input: {
   return null
 }
 
+/**
+ * Whether the user is looking at the app. No window (macOS keeps running after the last
+ * window closes) or a destroyed one counts as background, so the notification still goes out.
+ */
+export function windowFocused(
+  window: { isDestroyed(): boolean; isFocused(): boolean } | null,
+): boolean {
+  return window !== null && !window.isDestroyed() && window.isFocused()
+}
+
 export function dockBadge(activeCount: number): string {
   return activeCount > 0 ? String(activeCount) : ''
 }

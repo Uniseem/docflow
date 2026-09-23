@@ -41,7 +41,7 @@
 
 移植自 3.x `engine/tests/mock_providers.py`。`npm run mock:provider` 或 `tsx tests/mock-provider/server.ts --port 38111 [--delay <ms>] [--open]`（默认端口 38111，也接受裸数字作端口；默认只监听 `127.0.0.1`）；测试里用 `listenMockProvider(port, { open?, config? })`（端口 0 为随机端口）。提供：
 
-- `POST /v1/chat/completions`（OpenAI）、`GET /v1/models`（`mock-chat`、`mock-model`、`mock-reasoner`）；`POST /anthropic/v1/messages`（缺 `max_tokens` 或 `anthropic-version: 2023-06-01` 时 400）、`GET /anthropic/v1/models`（分两页：`claude-mock`，`after_id=claude-mock` 时 `claude-mock-2`）；`POST /gemini/v1beta/models/:model:generateContent`、`GET /gemini/v1beta/models`（`models/gemini-mock` 支持 `generateContent`，`models/embed-mock` 只支持 `embedContent`，用来测过滤）。没有 Azure 专用接口：Azure 类型会被指到 `<mock>/v1`，但 mock 不读 Azure 的 `api-key` 头，不开 `--open` 时一律 401。应用通过 `DOCFLOW_MOCK_PROVIDER_URL` 把服务商地址换成 mock（`shared/presets.ts` 的 `mockBaseUrl`：OpenAI 兼容与 Azure → `<mock>/v1`，Anthropic → `<mock>/anthropic`，Gemini → `<mock>/gemini`）。
+- `POST /v1/chat/completions`（OpenAI）、`GET /v1/models`（`mock-chat`、`mock-model`、`mock-reasoner`）；`POST /anthropic/v1/messages`（缺 `max_tokens` 或 `anthropic-version: 2023-06-01` 时 400）、`GET /anthropic/v1/models`（分两页：`claude-mock`，`after_id=claude-mock` 时 `claude-mock-2`）；`POST /gemini/v1beta/models/:model:generateContent`、`GET /gemini/v1beta/models`（`models/gemini-mock` 支持 `generateContent`，`models/embed-mock` 只支持 `embedContent`，用来测过滤）。没有 Azure 专用接口：Azure 类型会被指到 `<mock>/v1`，OpenAI 接口的 Key 先取 `Authorization: Bearer`，没有时取 Azure 的 `api-key` 头（与 `translate/request.ts` 的 `authHeaders` 一致）。应用通过 `DOCFLOW_MOCK_PROVIDER_URL` 把服务商地址换成 mock（`shared/presets.ts` 的 `mockBaseUrl`：OpenAI 兼容与 Azure → `<mock>/v1`，Anthropic → `<mock>/anthropic`，Gemini → `<mock>/gemini`）。
 - 鉴权：OpenAI 读 `Authorization: Bearer`，Anthropic 读 `x-api-key`，Gemini 读 `x-goog-api-key`；没有 Key 时 401（`--open` / `open: true` 时放行），模型列表接口同样检查。
 - 默认行为：把每个 `<segment>` 原样返回，正文 = 原文 + `〔测试译文〕`，占位符原样保留；单段请求返回 `原文〔测试译文〕`（空白原文不加标记）。
 - 故障注入（按用户消息里的触发词、Key、模型或计数）：
@@ -54,7 +54,7 @@
   - 含 `REFUSE_ME` → 整个请求空回复 + `finish_reason: content_filter`（Anthropic `stop_reason: refusal`，Gemini `promptFeedback.blockReason: SAFETY`）；
   - 模型 `mock-reasoner` → 回复前加一段 `<think>…</think>`（只在 OpenAI 接口）；
   - Key 等于 `bad-key` → 401（按各接口的错误格式）；Key 等于 `poor-key` → 429 + `insufficient balance`（`Retry-After: 1`）；
-  - 模型 `missing-model` → 404（`model_not_found`）；OpenAI 与 Anthropic 接口只接受 `mock-chat`、`mock-model`、`mock-reasoner`，其他模型也 404。
+  - 模型 `missing-model` → 404（`model_not_found`）；OpenAI 接口只接受 `mock-chat`、`mock-model`、`mock-reasoner`，Anthropic 接口另外接受它列出的 `claude-mock`、`claude-mock-2`，其他模型也 404。
 - 延迟：每个对话请求读完正文后先等 `delayMs` 再做鉴权与回复（默认 0，上限 600000）。客户端在等待期间断开（取消、退出应用）时不再回写，服务不受影响。
 - `GET /config` / `POST /config`（JSON `{ delayMs?, rateLimitEvery? }`，非负整数，`delayMs` ≤ 600000，未知字段或类型不对返回 400）读取或修改上面两个运行时参数；启动值来自 `--delay` 或 `listenMockProvider(port, { config })`，默认 `{ delayMs: 0, rateLimitEvery: 9 }`。
 - `GET /stats` 返回每种接口的请求计数、当前与峰值并发（`requests`/`inFlight`/`peak`，测试并发池），以及各故障的触发次数（`rateLimited`、`truncated`、`dropped`、`damaged`、`lostMarkers`、`swapped`、`refused`）。

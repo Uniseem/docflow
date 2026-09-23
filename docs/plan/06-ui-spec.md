@@ -78,7 +78,7 @@
 5. 提交错误（`Alert status="danger"`）：`部分文件未能添加`，下面逐行 `<文件名>：<原因>`。整个请求被拒绝时（例如模型刚被删除），所有文件都列出同一个原因。
 6. 底部：`取消`（ghost）/ `开始翻译`（一个文件）或 `开始翻译 N 个文件`（primary，`isPending` 时转圈；没有文件、有问题文件或模型不可用时禁用）。`Enter` 提交（输入法组字时除外）。
 
-文件校验：加入列表时渲染进程只能检查扩展名，不是 `.pdf` 的显示 `只支持 .pdf 文件` 并阻止提交；沙箱里拿不到文件大小，所以列表不显示大小，代码里的 `文件为空`、`文件超过 500 MB` 两个分支目前不会触发（[M5 E2E worklog](../worklog/2026-09-23-m5-e2e.md)）。读不到、不是文件、超过 500 MB 由主进程在 `documents:create` 时逐个拒绝（`无法读取这个文件。`、`请选择 PDF 文件。`、`文件太大，请选择小于 500 MB 的 PDF。`，其他异常 `无法添加这个文件。`），显示在第 5 项里。去重按路径（不区分文件来源）。
+文件校验：加入列表时渲染进程只能检查扩展名，不是 `.pdf` 的显示 `只支持 .pdf 文件` 并阻止提交；沙箱里拿不到文件大小，所以列表不显示大小，渲染进程也不做大小检查（原先的 `文件为空`、`文件超过 500 MB` 两个分支永远不会触发，已删除，见 [M5 E2E worklog](../worklog/2026-09-23-m5-e2e.md)）。读不到、不是文件、0 字节、超过 500 MB 由主进程在 `documents:create` 时逐个拒绝（`无法读取这个文件。`、`请选择 PDF 文件。`、`文件是空的（0 字节），请选择其他 PDF。`、`文件太大，请选择小于 500 MB 的 PDF。`，其他异常 `无法添加这个文件。`），显示在第 5 项里。去重按路径（不区分文件来源）。
 
 提交：`documents:create` 一次传所有路径。只要有成功的：Toast `已添加 N 个文档`、把筛选切到 `全部文档`（若当前是已完成/失败）、把新文档并入列表并选中第一个。全部成功 → 关闭；部分失败 → 列表只留下失败的文件并显示第 5 项的错误。
 
@@ -172,7 +172,7 @@
 - `Toast.Provider` 在 `App` 根部与界面并列单独渲染 `<Toast.Provider placement="bottom end" />`（右下），不能把界面包在里面：HeroUI 3 的 `Toast.Provider` 是 toast 区域，`children` 是每条 toast 的渲染模板，没有 toast 时什么都不渲染，包住界面会让窗口整片空白（[M5 E2E worklog](../worklog/2026-09-23-m5-e2e.md)）。HeroUI 的 `toast` 默认 4 s，所以渲染进程统一用 `lib/notify.ts`：`notify.success/info/warning/danger` 默认 6000 ms（个别场景如导出成功显式传 8000），`notifyError(error, prefix?)` 只提示用户错误（内部错误已由下一条的全局 Toast 提示，避免弹两次）。
 - 全局错误：主进程返回 `ok:false` 时 preload 以普通对象 `IpcFailure { code, message, user }` reject（contextBridge 复制 `Error` 会丢掉 `code`/`user`），`api/errors.ts` 的 `toDocflowError` 还原成 Error；`api/invoke.ts` 遇到 `user:false` 时 Toast `发生内部错误，详情见日志`，带 `打开日志` 动作（`shell:openLogs`）。
 - 渲染错误：`main.tsx` 的根错误边界显示 `界面出现错误，请重新加载。`、错误信息（可选中）与 `重新加载` 按钮（`location.reload()`），不再整窗变白。
-- 主进程不可用（极少见，如 preload 失败，`window.docflow` 不存在）：全屏 `处理引擎未运行` + `重新启动`。按钮在 `window.docflow` 存在时调 `app:relaunch`，否则重新加载页面；由于只有 `window.docflow` 缺失时才会出现这个画面，实际执行的是重新加载。
+- 主进程不可用（极少见：preload 失败，`window.docflow` 不存在；或桥接在但启动时 `app:info` 没有应答）：全屏 `处理引擎未运行` + `重新启动`。按钮在 `window.docflow` 存在时调 `app:relaunch`（`lib/relaunch.ts`；调用失败时退回重新加载），否则重新加载页面（重新运行 preload）。
 
 ## 6.7 状态管理（zustand）
 

@@ -1,5 +1,6 @@
 import { PDF } from '../../../shared/pdf-constants'
 import type { FormulaRun, Paragraph, Rect } from '../../../shared/pdf-types'
+import { inSharedForm } from '../form-path'
 import { bodySizeOf } from './columns'
 import type { Lined } from './formula'
 import { joinLineTexts, normalizeParagraphText } from './normalize'
@@ -310,7 +311,13 @@ export function mergeParagraphs(
     let reason: string | undefined
     if (draft.formulaLine) reason = 'display_math'
     else {
-      reason = skipReason(para, imageRects, pageRotate, sharedPaths.has(formPath), bodySize)
+      reason = skipReason(
+        para,
+        imageRects,
+        pageRotate,
+        inSharedForm(formPath, sharedPaths),
+        bodySize,
+      )
       const colWidth = Math.max(1, columnWidth.get(draft.lines[0]!.column) ?? colRight - colLeft)
       if (reason === undefined && shortFragment(para, colWidth)) fragments.add(para)
       if (para.lines.some((_, i) => draft.lines[i]?.rotated)) reason = reason ?? 'rotated'

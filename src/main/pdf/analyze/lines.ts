@@ -1,5 +1,6 @@
 import { PDF } from '../../../shared/pdf-constants'
 import type { Glyph, Rect } from '../../../shared/pdf-types'
+import { inSharedForm } from '../form-path'
 
 export type RawLine = {
   page: number
@@ -38,7 +39,11 @@ function lineBox(glyphs: Glyph[]): { x0: number; x1: number; y0: number; y1: num
 
 export function mergeLines(glyphs: readonly Glyph[], sharedPaths: ReadonlySet<string>): RawLine[] {
   const usable = glyphs.filter(
-    (g) => !g.vertical && g.renderMode !== 3 && g.renderMode !== 7 && !sharedPaths.has(g.formPath),
+    (g) =>
+      !g.vertical &&
+      g.renderMode !== 3 &&
+      g.renderMode !== 7 &&
+      !inSharedForm(g.formPath, sharedPaths),
   )
   const lines: RawLine[] = []
   const open: RawLine[] = []

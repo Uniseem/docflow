@@ -106,7 +106,9 @@ export class TranslationCache {
       await writeJsonAtomic(this.#path, payload)
       this.#dirty = 0
     } catch (error) {
-      this.#onWarning(`翻译缓存写入失败：${error instanceof Error ? error.message : String(error)}`)
+      this.#onWarning(
+        `翻译缓存写入失败（不影响翻译结果）：${error instanceof Error ? error.message : String(error)}`,
+      )
     }
   }
 }

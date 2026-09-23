@@ -1,7 +1,10 @@
 import { describe, expect, test } from 'vitest'
-import { encodeCharCode, colorOp, groupFormulaGlyphs, emitTextRun } from './emit'
-import { spliceRanges, shouldSkipPage, deletionSet } from './rewrite'
-import type { Glyph } from '../../../shared/pdf-types'
+import { encodeCharCode, colorOp, groupFormulaGlyphs, emitTextRun, emitPageOps } from './emit'
+import type { MappedFont } from './fonts'
+import type { LayoutResult } from './layout'
+import { spliceRanges, shouldSkipPage, deletionSet, inSharedForm } from './rewrite'
+import type { Glyph, Paragraph } from '../../../shared/pdf-types'
+import { PDFRef } from '@cantoo/pdf-lib'
 import type { TextOp } from './content-walker'
 
 function glyph(partial: Partial<Glyph>): Glyph {
@@ -58,6 +61,60 @@ describe('emit encoding', () => {
   test('Tj hex uses pdf-lib style brackets', () => {
     expect(emitTextRun('DFcjk', 10, 72, 700, '<ABCD>')).toContain('<ABCD> Tj')
   })
+
+  test('restores the paragraph colour after a coloured formula run', () => {
+    const red = glyph({ color: [1, 0, 0], code: 0x78 })
+    const para: Paragraph = {
+      id: '0-0',
+      page: 0,
+      bbox: [72, 690, 300, 710],
+      lines: [{ bbox: [72, 690, 300, 710], baseline: 700, opSeqs: [0] }],
+      size: 10,
+      lineHeight: 12,
+      bold: false,
+      align: 'left',
+      color: [0, 0, 0],
+      role: 'body',
+      text: '令 {v0} 为',
+      runs: [
+        { id: 0, glyphs: [red], bbox: [72, 698, 78, 708], baselineOffset: 0, width: 6, text: 'x' },
+      ],
+      formPath: '',
+      translatable: true,
+    }
+    const layout: LayoutResult = {
+      lines: [
+        {
+          baseline: 700,
+          width: 30,
+          tokens: [
+            { kind: 'text', text: '令', x: 72, width: 10 },
+            { kind: 'formula', id: 0, x: 82, width: 6 },
+            { kind: 'text', text: '为', x: 88, width: 10 },
+          ],
+        },
+      ],
+      fontSize: 10,
+      lineHeight: 12,
+      overflow: false,
+      fontScale: 1,
+    }
+    const aliases = new Map<string, MappedFont>([
+      ['g_d0_f1', { fontKey: 'g_d0_f1', resourceName: 'F1', ref: PDFRef.of(9), alias: 'DFo1' }],
+    ])
+    const out = emitPageOps(
+      [para],
+      new Map([[para.id, layout]]),
+      (text) => `<${Buffer.from(text).toString('hex')}>`,
+      aliases,
+      () => 'DFcjk',
+    )
+    const afterFormula = out.slice(out.indexOf('<78> Tj'))
+    const black = afterFormula.indexOf('0.000 0.000 0.000 rg')
+    const nextText = afterFormula.indexOf('/DFcjk')
+    expect(black).toBeGreaterThan(0)
+    expect(black).toBeLessThan(nextText)
+  })
 })
 
 describe('rewrite', () => {
@@ -68,6 +125,16 @@ describe('rewrite', () => {
       [8, 11],
     ])
     expect(Buffer.from(out).toString()).toBe('AAA  ')
+  })
+
+  test('treats forms nested in a shared form as shared', () => {
+    const shared = new Set(['3'])
+    expect(inSharedForm('3', shared)).toBe(true)
+    expect(inSharedForm('3/1', shared)).toBe(true)
+    expect(inSharedForm('3/1/2', shared)).toBe(true)
+    expect(inSharedForm('31', shared)).toBe(false)
+    expect(inSharedForm('1/3', shared)).toBe(false)
+    expect(inSharedForm('', shared)).toBe(false)
   })
 
   test('skips a page when mismatch exceeds 10%', () => {

@@ -60,7 +60,9 @@ function tokenPattern(token: string): RegExp {
       return `${char}${gap()}`
     })
     .join('')
-  return new RegExp(`\`*\\s*${body}\\s*\`*`, 'gi')
+  // Whitespace is only eaten inside a backtick wrapper: spaces around a bare marker belong to
+  // the sentence, and dropping them would glue formulas to words in English-like output.
+  return new RegExp(`(?:\`+\\s*)?${body}(?:\\s*\`+)?`, 'gi')
 }
 
 function markerDigits(token: string): string {

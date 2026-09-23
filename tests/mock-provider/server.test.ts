@@ -220,6 +220,28 @@ describe('mock provider', () => {
     }
     expect(reset.requests).toEqual({})
   })
+  test('listed Anthropic models chat; Azure authenticates with the api-key header', async () => {
+    server = await listenMockProvider()
+    for (const model of ['claude-mock', 'claude-mock-2']) {
+      expect((await chat(server, 'Hi', { api: 'anthropic', model })).status).toBe(200)
+    }
+    expect((await chat(server, 'Hi', { api: 'anthropic', model: 'missing-model' })).status).toBe(
+      404,
+    )
+
+    const azure = (key: string) =>
+      fetch(`${server!.url}/v1/chat/completions`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'api-key': key },
+        body: JSON.stringify({ model: 'mock-chat', messages: [{ role: 'user', content: 'Hi' }] }),
+      })
+    expect((await azure(KEY)).status).toBe(200)
+    expect((await azure('bad-key')).status).toBe(401)
+    expect((await azure('poor-key')).status).toBe(429)
+    const models = await fetch(`${server.url}/v1/models`, { headers: { 'api-key': KEY } })
+    expect(models.status).toBe(200)
+  })
+
   test('POST /config delays chat replies and POST /reset restores the startup config', async () => {
     server = await listenMockProvider()
     const config = async (): Promise<MockConfig> =>

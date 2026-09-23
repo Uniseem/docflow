@@ -104,6 +104,9 @@ export class DocumentLibrary {
       throw new UserError(ERROR_CODES.pdf_open, '无法读取这个文件。')
     })
     if (!info.isFile()) throw new UserError(ERROR_CODES.pdf_invalid, '请选择 PDF 文件。')
+    if (info.size === 0) {
+      throw new UserError(ERROR_CODES.pdf_invalid, '文件是空的（0 字节），请选择其他 PDF。')
+    }
     if (info.size > MAX_PDF_BYTES) {
       throw new UserError(ERROR_CODES.pdf_invalid, '文件太大，请选择小于 500 MB 的 PDF。')
     }

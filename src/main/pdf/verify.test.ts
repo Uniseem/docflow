@@ -40,4 +40,19 @@ describe('verifyPdf', () => {
     expect(verified.translatedPagesWithoutCjk).toEqual([])
     expect(verified.sizeMismatches).toBe(0)
   })
+
+  test('a failed check explains itself in Chinese and stays retryable', async () => {
+    const sourcePath = join(process.cwd(), 'tests/fixtures/single-column.pdf')
+    const failure = verifyPdf({ monoPath: sourcePath, dualPath: null, pages: 4, writtenPages: [] })
+    await expect(failure).rejects.toMatchObject({
+      code: 'verify_failed',
+      permanent: false,
+      message: '生成的 PDF 未通过校验（中文 PDF 有 3 页，原文有 4 页），稍后自动重试。',
+    })
+    await expect(
+      verifyPdf({ monoPath: sourcePath, dualPath: null, pages: 3, writtenPages: [0, 2] }),
+    ).rejects.toMatchObject({
+      message: '生成的 PDF 未通过校验（第 1、3 页写入译文后没有中文），稍后自动重试。',
+    })
+  })
 })

@@ -220,6 +220,20 @@ export function writePageContents(page: PDFPage, bytes: Uint8Array): void {
   page.node.set(PDFName.of('Contents'), ref)
 }
 
-export function mountFont(page: PDFPage, name: string, ref: PDFRef): void {
-  page.node.setFontDictionary(PDFName.of(name), ref)
+/**
+ * Adds fonts to the page's own /Font dictionary. pdf-lib's `normalize()` does not copy a
+ * /Resources (or /Font) dict that is shared between pages or inherited from the page tree,
+ * so without this copy per-page aliases such as `DFo1` would overwrite each other.
+ */
+export function mountFonts(page: PDFPage, fonts: ReadonlyArray<readonly [string, PDFRef]>): void {
+  const { context } = page.doc
+  page.node.normalize()
+  const resources = page.node.Resources() ?? context.obj({})
+  const ownResources = resources.clone(context)
+  const ownFonts = (resources.lookupMaybe(PDFName.of('Font'), PDFDict) ?? context.obj({})).clone(
+    context,
+  )
+  for (const [name, ref] of fonts) ownFonts.set(PDFName.of(name), ref)
+  ownResources.set(PDFName.of('Font'), ownFonts)
+  page.node.set(PDFName.of('Resources'), ownResources)
 }

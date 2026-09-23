@@ -15,10 +15,7 @@ export async function verifyPdf(input: {
   )
   try {
     if (mono.numPages !== input.pages) {
-      throw new UserError(
-        ERROR_CODES.verify_failed,
-        `mono pages ${mono.numPages} != ${input.pages}`,
-      )
+      throw verifyFailed(`中文 PDF 有 ${mono.numPages} 页，原文有 ${input.pages} 页`)
     }
     const monoSizes: Array<[number, number]> = []
     const translatedPagesWithoutCjk: number[] = []
@@ -35,7 +32,8 @@ export async function verifyPdf(input: {
       page.cleanup()
     }
     if (translatedPagesWithoutCjk.length > 0) {
-      throw new UserError(ERROR_CODES.verify_failed)
+      const pages = translatedPagesWithoutCjk.map((i) => i + 1).join('、')
+      throw verifyFailed(`第 ${pages} 页写入译文后没有中文`)
     }
 
     let dualPages: number | null = null
@@ -47,10 +45,7 @@ export async function verifyPdf(input: {
       try {
         dualPages = dual.numPages
         if (dual.numPages !== input.pages * 2) {
-          throw new UserError(
-            ERROR_CODES.verify_failed,
-            `dual pages ${dual.numPages} != ${input.pages * 2}`,
-          )
+          throw verifyFailed(`双语 PDF 有 ${dual.numPages} 页，应为 ${input.pages * 2} 页`)
         }
         for (let i = 0; i < input.pages; i += 1) {
           const origPage = await dual.getPage(i * 2 + 1)
@@ -70,7 +65,7 @@ export async function verifyPdf(input: {
 
     const { stat } = await import('node:fs/promises')
     if ((await stat(input.monoPath)).size <= 1024) {
-      throw new UserError(ERROR_CODES.verify_failed, 'mono pdf too small')
+      throw verifyFailed('中文 PDF 不足 1 KiB')
     }
 
     return VerifyResult.parse({
@@ -82,4 +77,12 @@ export async function verifyPdf(input: {
   } finally {
     await mono.cleanup()
   }
+}
+
+/** The reason is shown to the user, so it is Chinese; the result stays retryable. */
+function verifyFailed(reason: string): UserError {
+  return new UserError(
+    ERROR_CODES.verify_failed,
+    `生成的 PDF 未通过校验（${reason}），稍后自动重试。`,
+  )
 }

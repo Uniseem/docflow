@@ -7,7 +7,12 @@ export const DEFAULT_MOCK_PORT = 38_111
 const TRUNCATE_ABOVE = 3_000
 const SEGMENT_RE = /<segment\s+id\s*=\s*["']?([^"'>\s]+)["']?\s*>([\s\S]*?)<\/segment\s*>/gi
 const MARKER_RE = /DOCFLOWKEEP\d{6}TOKEN/g
-const CHAT_MODELS = new Set(['mock-chat', 'mock-model', 'mock-reasoner'])
+const OPENAI_MODELS = ['mock-chat', 'mock-model', 'mock-reasoner']
+/** Models each chat API accepts: everything its `/models` endpoint lists (Gemini accepts any). */
+const CHAT_MODELS: Record<'openai' | 'anthropic', ReadonlySet<string>> = {
+  openai: new Set(OPENAI_MODELS),
+  anthropic: new Set([...OPENAI_MODELS, 'claude-mock', 'claude-mock-2']),
+}
 
 export type MockStats = {
   requests: Record<string, number>
@@ -205,7 +210,9 @@ function apiOf(path: string): 'openai' | 'anthropic' | 'gemini' {
 function requestKey(req: http.IncomingMessage, api: string): string {
   if (api === 'anthropic') return header(req, 'x-api-key')
   if (api === 'gemini') return header(req, 'x-goog-api-key')
-  return header(req, 'authorization').replace(/^Bearer\s+/i, '')
+  // OpenAI-compatible sends `Authorization: Bearer`; Azure OpenAI sends `api-key`.
+  const bearer = header(req, 'authorization').replace(/^Bearer\s+/i, '')
+  return bearer || header(req, 'api-key')
 }
 
 function header(req: http.IncomingMessage, name: string): string {
@@ -448,7 +455,7 @@ async function handleRequest(
     }
     const body = asRecord(JSON.parse(raw || '{}') as unknown) ?? {}
     const model = modelOf(api, path, body)
-    if (model === 'missing-model' || (api !== 'gemini' && model && !CHAT_MODELS.has(model))) {
+    if (model === 'missing-model' || (api !== 'gemini' && model && !CHAT_MODELS[api].has(model))) {
       sendJson(res, 404, {
         error: { message: 'The model does not exist', code: 'model_not_found' },
       })

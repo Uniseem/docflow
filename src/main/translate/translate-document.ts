@@ -20,7 +20,7 @@ import {
   type Segment,
 } from './batch'
 import type { TranslationCache } from './cache'
-import { ProviderError } from './errors'
+import { ProviderError, RetriesExhaustedError } from './errors'
 import { protectTexts } from './protect'
 import type { TranslationPools } from './pool'
 import { checkReply, type ReplyCheck } from './validate'
@@ -68,6 +68,16 @@ function throwIfAborted(signal: AbortSignal): void {
   if (signal.aborted) throw new UserError(ERROR_CODES.cancelled)
 }
 
+/**
+ * Errors the retry ladder must pass up instead of keeping the original text: cancellation and
+ * the rejected streak (`UserError`), a bad key or model, and a provider that stayed
+ * unavailable through every `submit()` attempt.
+ */
+function endsDocument(error: unknown): boolean {
+  if (error instanceof UserError || error instanceof RetriesExhaustedError) return true
+  return error instanceof ProviderError && (error.kind === 'fatal' || error.kind === 'credential')
+}
+
 export async function translateDocument(input: {
   segments: Segment[]
   provider: ProviderConfig
@@ -89,8 +99,11 @@ export async function translateDocument(input: {
   const totalChars = input.segments.reduce((sum, segment) => sum + charCount(segment.text), 0)
   const usage = { input: 0, output: 0 }
   const indexOf = new Map(input.segments.map((segment, index) => [segment.id, index + 1]))
+  // The first error that ends the document also stops the batches still running.
+  const stop = new AbortController()
   const ctx: TranslateContext = {
     ...input,
+    signal: AbortSignal.any([input.signal, stop.signal]),
     usage,
     rejected: 0,
     notices: 0,
@@ -102,11 +115,12 @@ export async function translateDocument(input: {
   const translated = new Map<string, TranslatedParagraph>()
   const limit = createLimit(input.runtime.perDocumentConcurrency)
   let done = 0
+  let failure: { error: unknown } | undefined
 
   await Promise.all(
     batches.map((batch) =>
       limit(async () => {
-        throwIfAborted(input.signal)
+        throwIfAborted(ctx.signal)
         const results = await translateBatch(batch, ctx)
         for (const result of results) {
           translated.set(result.id, result)
@@ -120,9 +134,17 @@ export async function translateDocument(input: {
             total,
           })
         }
+      }).catch((error: unknown) => {
+        failure ??= { error }
+        stop.abort()
+        throw error
       }),
     ),
-  )
+  ).catch(() => {
+    // The batches stopped by `stop` reject with a cancellation: report the error that ended
+    // the document.
+    throw failure?.error
+  })
 
   const results: TranslatedParagraph[] = input.segments.map((segment) => {
     const parts = [...translated.entries()]
@@ -210,10 +232,7 @@ async function translateBatch(
     }
     return done
   } catch (error) {
-    if (error instanceof UserError) throw error
-    if (error instanceof ProviderError && (error.kind === 'fatal' || error.kind === 'credential')) {
-      throw error
-    }
+    if (endsDocument(error)) throw error
     const limit = createLimit(REPAIR_PARALLELISM)
     const repaired = await Promise.all(
       pending.map((member) => limit(() => translateSegment(member, ctx))),
@@ -304,9 +323,7 @@ async function translateSegment(
       if (check?.kind === 'empty') continue
       break
     } catch (error) {
-      if (error instanceof UserError) throw error
-      if (error instanceof ProviderError && (error.kind === 'fatal' || error.kind === 'credential'))
-        throw error
+      if (endsDocument(error)) throw error
       break
     }
   }
@@ -423,7 +440,7 @@ async function translateIsolatedChunk(
       })
       if (check.ok) return check.text
     } catch (error) {
-      if (error instanceof UserError) throw error
+      if (endsDocument(error)) throw error
     }
     if (charCount(text) > MIN_FRAGMENT_CHARS) {
       const halves = smartSplit(text, Math.ceil(charCount(text) / 2))
@@ -494,6 +511,10 @@ async function submit(
         }
         throw providerError
       }
+      // oversized / refused / output will not change on a resend: the caller's ladder
+      // (split, isolate) handles them without waiting.
+      if (!providerError.retryable) throw providerError
+      if (attempt === SUBMIT_ATTEMPTS) break
       const backoff = Math.min(2 ** (attempt - 1), 32) * 1000
       const wait = Math.max(providerError.retryAfterMs ?? backoff, backoff / 2) + ctx.jitterMs()
       ctx.notices += 1
@@ -502,16 +523,13 @@ async function submit(
           stage: 'translate',
           level: 'warning',
           message: `翻译请求失败（${providerError.message}），${Math.ceil(wait / 1000)} 秒后重试`,
+          ...(providerError.snippet ? { detail: providerError.snippet } : {}),
         })
       }
-      if (attempt === SUBMIT_ATTEMPTS) break
       await abortable(ctx.delay(wait, ctx.signal), ctx.signal)
     }
   }
-  throw new ProviderError(
-    'transient',
-    `翻译请求多次重试后仍然失败：${lastError?.message ?? '未知错误'}`,
-  )
+  throw new RetriesExhaustedError(lastError)
 }
 
 /** Settles with `promise`, or rejects with a cancellation as soon as `signal` aborts. */

@@ -1,5 +1,6 @@
-# 持续集成：每次推送和 PR 都跑类型检查、lint、单元测试，并在三个平台各做一次
-# 打包冒烟（不上传安装包）。在 package.json 出现之前整个工作流自动跳过。
+# 持续集成：推送 main、PR 与手动触发时，先在 ubuntu 上跑 npm run check（类型检查、lint、
+# 单元测试）；通过后在 Windows 与 macOS 上各打一次目录包（electron-builder --dir）并跑
+# Playwright E2E。只做冒烟，不上传安装包，也不上传测试报告。
 name: CI
 
 on:

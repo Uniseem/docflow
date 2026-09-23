@@ -16,12 +16,12 @@ import { embedCjkFonts, mapOriginalFonts } from './fonts'
 import { layoutParagraph } from './layout'
 import {
   loadPageGraph,
-  mountFont,
+  mountFonts,
   noteFormPath,
   rewriteStream,
   writePageContents,
 } from './resources'
-import { deletionSet, shouldSkipPage, spliceRanges, type Warning } from './rewrite'
+import { deletionSet, inSharedForm, shouldSkipPage, spliceRanges, type Warning } from './rewrite'
 
 export type ComposeOutput = ComposeResult & { writtenPages: number[] }
 
@@ -72,7 +72,8 @@ export async function composePdf(input: ComposeRequest): Promise<ComposeOutput> 
 
     for (const para of pageParas) {
       const tr = translations.get(para.id)
-      if (!para.translatable || tr?.kept) {
+      // Text nested inside a shared form is drawn on other pages too and is never walked.
+      if (!para.translatable || tr?.kept || inSharedForm(para.formPath, shared)) {
         kept.add(para.id)
         paragraphsKept += 1
         continue
@@ -147,27 +148,6 @@ export async function composePdf(input: ComposeRequest): Promise<ComposeOutput> 
       continue
     }
 
-    mountFont(page, 'DFcjk', regular.ref)
-    if (bold) mountFont(page, 'DFcjkb', bold.ref)
-    for (const mapped of aliases.values()) mountFont(page, mapped.alias, mapped.ref)
-
-    const byPath = new Map<string, Array<[number, number]>>()
-    for (const op of deleted) {
-      const list = byPath.get(op.formPath) ?? []
-      list.push(op.tokenRange)
-      byPath.set(op.formPath, list)
-    }
-    let pageBytes = graph.content
-    for (const [path, ranges] of byPath) {
-      if (!path) {
-        pageBytes = spliceRanges(graph.content, ranges)
-        continue
-      }
-      const form = graph.formByPath.get(path)
-      if (!form || shared.has(path)) continue
-      rewriteStream(doc, form, spliceRanges(form.content, ranges))
-    }
-
     const encode = (text: string, isBold: boolean) => {
       const font = isBold && bold ? bold : regular
       return font.encodeText(text).toString()
@@ -189,6 +169,28 @@ export async function composePdf(input: ComposeRequest): Promise<ComposeOutput> 
       continue
     }
 
+    // Commit only after emitting succeeded, so a failed page keeps its forms and fonts intact.
+    const byPath = new Map<string, Array<[number, number]>>()
+    for (const op of deleted) {
+      const list = byPath.get(op.formPath) ?? []
+      list.push(op.tokenRange)
+      byPath.set(op.formPath, list)
+    }
+    let pageBytes = graph.content
+    for (const [path, ranges] of byPath) {
+      if (!path) {
+        pageBytes = spliceRanges(graph.content, ranges)
+        continue
+      }
+      const form = graph.formByPath.get(path)
+      if (!form || inSharedForm(path, shared)) continue
+      rewriteStream(doc, form, spliceRanges(form.content, ranges))
+    }
+    mountFonts(page, [
+      ['DFcjk', regular.ref],
+      ...(bold ? [['DFcjkb', bold.ref] as const] : []),
+      ...[...aliases.values()].map((mapped) => [mapped.alias, mapped.ref] as const),
+    ])
     writePageContents(page, wrapPageContent(pageBytes, appended))
     paragraphsWritten += targets.length
     opsRemoved += deleted.length

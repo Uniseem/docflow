@@ -44,6 +44,12 @@ describe('protect + validate', () => {
   test('repairs damaged markers and rejects count/order changes', () => {
     const token = 'DOCFLOWKEEP000001TOKEN'
     expect(normalizeMarkers('`DOCFLOW KEEP 0 0 0 0 0 1 TOKEN`', [token])).toBe(token)
+    expect(normalizeMarkers('` DOCFLOWKEEP000001TOKEN `', [token])).toBe(token)
+    // Spaces around a marker belong to the sentence: formulas must not glue to words.
+    expect(normalizeMarkers('use DOCFLOW KEEP 000001 TOKEN here', [token])).toBe(
+      `use ${token} here`,
+    )
+    expect(normalizeMarkers('where `DOCFLOWKEEP000001TOKEN` is', [token])).toBe(`where ${token} is`)
     expect(() => normalizeMarkers('hello', [token])).toThrow(/数量不匹配/)
     expect(() => normalizeMarkers('DOCFLOWKEEP000009TOKEN', [token])).toThrow(/编号发生变化/)
     const source = 'a {v1} b {v2}'

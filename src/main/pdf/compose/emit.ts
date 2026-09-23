@@ -103,10 +103,20 @@ export function emitPageOps(
   for (const para of paragraphs) {
     const layout = layouts.get(para.id)
     if (!layout) continue
-    parts.push(colorOp(para.color))
+    const paraColor = colorOp(para.color)
+    parts.push(paraColor)
+    // Formula runs switch to their own glyph colours; text after them must switch back.
+    let colorDirty = false
     for (const line of layout.lines) {
-      for (const token of line.tokens)
-        parts.push(emitToken(token, para, layout, line.baseline, encode, aliases, cjkName))
+      for (const token of line.tokens) {
+        if (token.kind === 'text' && token.text && colorDirty) {
+          parts.push(paraColor)
+          colorDirty = false
+        }
+        const chunk = emitToken(token, para, layout, line.baseline, encode, aliases, cjkName)
+        if (token.kind === 'formula' && chunk) colorDirty = true
+        parts.push(chunk)
+      }
     }
   }
   parts.push('ET')

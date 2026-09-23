@@ -208,11 +208,7 @@ export async function runPipeline(
     signal,
   })
   for (const warning of composed.warnings) {
-    await emit({
-      stage: 'compose',
-      level: 'warning',
-      message: composeWarningMessage(warning),
-    })
+    await emit({ stage: 'compose', level: 'warning', ...composeWarningEvent(warning, analysis) })
   }
   await emit(
     {
@@ -300,16 +296,37 @@ async function withCheckpoint<T>(path: string, sha: string, produce: () => Promi
   return data
 }
 
-function composeWarningMessage(warning: ComposeResult['warnings'][number]): string {
-  const page = (warning.page ?? 0) + 1
-  if (warning.code === 'overflow')
-    return `第 ${page} 页第 ${warning.paragraphId ?? ''} 段译文超出原段落范围`
-  if (warning.code === 'layout_failed')
-    return `第 ${page} 页第 ${warning.paragraphId ?? ''} 段排版失败，已保留原文`
-  if (warning.code === 'page_skipped') return `第 ${page} 页有文字指令无法对应到段落，已跳过该页`
-  if (warning.code === 'font_unmapped')
-    return `第 ${page} 页第 ${warning.paragraphId ?? ''} 段的公式字体无法映射，已保留原文`
-  return warning.message
+/** Processing-record text for a compose warning; unknown codes keep their text as `detail`. */
+export function composeWarningEvent(
+  warning: ComposeResult['warnings'][number],
+  analysis: Pick<AnalysisResult, 'paragraphs'>,
+): { message: string; detail?: string } {
+  const page = `第 ${(warning.page ?? 0) + 1} 页`
+  // Paragraph ids (`2-5`) are internal; users get the paragraph's position on its page.
+  const onPage = analysis.paragraphs.filter((para) => para.page === warning.page)
+  const index = onPage.findIndex((para) => para.id === warning.paragraphId)
+  const paragraph = index >= 0 ? `${page}第 ${index + 1} 段` : `${page}有一段`
+  switch (warning.code) {
+    case 'overflow':
+      return { message: `${paragraph}译文超出原段落范围` }
+    case 'layout_failed':
+      return { message: `${paragraph}排版失败，已保留原文` }
+    case 'font_unmapped':
+      return { message: `${paragraph}的公式字体无法映射，已保留原文` }
+    case 'encode_failed':
+      return { message: `${paragraph}译文无法用内置字体写入，该页未写入译文` }
+    case 'page_skipped':
+      return { message: `${page}有文字指令无法对应到段落，已跳过该页` }
+    case 'op_mismatch':
+      return { message: `${page}删除的原文指令数与预期不一致，请检查该页译文是否与原文重叠` }
+    case 'font_subset_fallback':
+      return { message: '中文字体子集嵌入失败，已改为嵌入完整字体，文件会大一些' }
+    default:
+      return {
+        message: warning.page === undefined ? '生成 PDF 时出现警告' : `${page}生成时出现警告`,
+        detail: `${warning.code}: ${warning.message}`,
+      }
+  }
 }
 
 function throwIfAborted(signal: AbortSignal): void {

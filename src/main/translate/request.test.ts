@@ -72,3 +72,18 @@ test('buildRequest omits auth when key is empty', () => {
   expect(headers.Authorization).toBeUndefined()
   expect(headers['User-Agent']).toBe('DocFlow/4.0.0')
 })
+
+test('anthropic always sends anthropic-version, even without a key', () => {
+  const { init } = buildRequest(
+    base({ type: 'anthropic', baseUrl: 'http://localhost:8080' }),
+    'm',
+    'sys',
+    'user',
+    undefined,
+    '4.0.0',
+    undefined,
+  )
+  const headers = init.headers as Record<string, string>
+  expect(headers['anthropic-version']).toBe('2023-06-01')
+  expect(headers['x-api-key']).toBeUndefined()
+})

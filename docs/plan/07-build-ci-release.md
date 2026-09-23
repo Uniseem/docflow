@@ -19,10 +19,6 @@ extraResources:
   - from: resources/fonts
     to: fonts
     filter: ['*.otf']
-  - from: node_modules/pdfjs-dist/standard_fonts
-    to: pdfjs/standard_fonts
-  - from: node_modules/pdfjs-dist/cmaps
-    to: pdfjs/cmaps
   - from: THIRD_PARTY_NOTICES.md
     to: THIRD_PARTY_NOTICES.md
   - from: LICENSE
@@ -78,7 +74,7 @@ nsis:
 publish: null
 ```
 
-主进程读取资源路径：字体为 `app.isPackaged ? join(process.resourcesPath, 'fonts') : join(app.getAppPath(), 'resources/fonts')`（`AppSession` 算好后传给 `createPipelineHooks({ fontsDir })`，再交给 `src/main/pipeline/run.ts` 的 `bundledFonts(root)`；单测与脚本不传，默认 `<cwd>/resources/fonts`。2026-09-24 前按 `process.resourcesPath` 是否存在判断，未打包的 Electron 也有这个值，`npm run dev` 下找不到字体）。pdf.js 的 `standardFontDataUrl`/`cMapUrl` 在开发与打包后都用 `require.resolve('pdfjs-dist/package.json')` 定位 `node_modules/pdfjs-dist/{standard_fonts,cmaps}`（打包后在 `app.asar` 里，`src/main/pdf/pdfjs.ts`），并转成以 `/` 结尾的 `file:` URL（pdf.js 要求）。因此 extraResources 里的 `pdfjs/` 两个目录目前没有被读取，与 asar 里的是重复的（worklog 2026-09-23-m5-fixes）。
+主进程读取资源路径：字体为 `app.isPackaged ? join(process.resourcesPath, 'fonts') : join(app.getAppPath(), 'resources/fonts')`（`AppSession` 算好后传给 `createPipelineHooks({ fontsDir })`，再交给 `src/main/pipeline/run.ts` 的 `bundledFonts(root)`；单测与脚本不传，默认 `<cwd>/resources/fonts`。2026-09-24 前按 `process.resourcesPath` 是否存在判断，未打包的 Electron 也有这个值，`npm run dev` 下找不到字体）。pdf.js 的 `standardFontDataUrl`/`cMapUrl` 在开发与打包后都用 `require.resolve('pdfjs-dist/package.json')` 定位 `node_modules/pdfjs-dist/{standard_fonts,cmaps}`（打包后在 `app.asar` 里，`src/main/pdf/pdfjs.ts`），并转成以 `/` 结尾的 `file:` URL（pdf.js 要求）。因此 extraResources 不再复制 `pdfjs/{standard_fonts,cmaps}`（原先那份没有被读取，与 asar 里的重复，约 2.4 MB；2026-09-24 删除，见 worklog 2026-09-23-m5-fixes）。
 
 E2E 启动的是 `electron-builder --dir` 产物，改渲染进程或主进程后必须重新 `npm run dist:dir`，否则测的是旧代码。
 
@@ -88,7 +84,7 @@ E2E 启动的是 `electron-builder --dir` 产物，改渲染进程或主进程�
 
 ## 7.3 第三方许可
 
-`scripts/third-party-notices.mjs`（在 `npm run build` 前由 `prebuild` 钩子执行）：读取 `package.json` 的 `dependencies` 与 `package-lock.json` 里所有非 dev 的顶层包，汇总每个包的 `license` 与 `LICENSE` 文件内容到 `THIRD_PARTY_NOTICES.md`（生成物，已 gitignore）；开头固定一段：Electron（MIT）、Chromium（BSD）、Node.js（MIT）、pdf.js（Apache-2.0）、pdf-lib/@cantoo（MIT）、fontkit（MIT）、Noto Sans SC（OFL-1.1）。渲染进程的 devDependencies 也要列入（它们被打进 bundle）——脚本按 `src/renderer` 的 import 图无法精确得到，所以读手工维护的 `scripts/bundled-deps.json` 数组（现为 react、react-dom、@heroui/react、@heroui/styles、tailwindcss、zustand、lucide-react、clsx）；渲染进程新增依赖时要同步加进去。
+`scripts/third-party-notices.mjs`（在 `npm run build` 前由 `prebuild` 钩子执行）：读取 `package.json` 的 `dependencies` 与 `package-lock.json` 里所有非 dev 的顶层包，汇总每个包的 `license` 与 `LICENSE` 文件内容到 `THIRD_PARTY_NOTICES.md`（生成物，已 gitignore）；不随应用分发的包不列：`electron-builder.yml` 排除的 `@napi-rs/*`（ADR-0010），以及 lock 里标为 optional 且本机没装的平台二进制包；开头固定一段：Electron（MIT）、Chromium（BSD）、Node.js（MIT）、pdf.js（Apache-2.0）、pdf-lib/@cantoo（MIT）、fontkit（MIT）、Noto Sans SC（OFL-1.1）。渲染进程的 devDependencies 也要列入（它们被打进 bundle）——脚本按 `src/renderer` 的 import 图无法精确得到，所以读手工维护的 `scripts/bundled-deps.json` 数组（现为 react、react-dom、@heroui/react、@heroui/styles、tailwindcss、zustand、lucide-react、clsx）；渲染进程新增依赖时要同步加进去。
 
 ## 7.4 CI（`.github/workflows/ci.yml`，已在仓库中）
 
@@ -101,7 +97,7 @@ E2E 启动的是 `electron-builder --dir` 产物，改渲染进程或主进程�
 ## 7.5 发布（`.github/workflows/release.yml`，已在仓库中）
 
 1. 本地：更新 `CHANGELOG.md`（Unreleased → 版本），`npm version 4.0.0 --no-git-tag-version`，提交 `chore: 发布 4.0.0`，`git tag v4.0.0`，`git push origin main v4.0.0`。
-2. 工作流：`build` job 两台 runner 并行打包（Windows x64：windows-latest，`--win --x64`；macOS：一台 macos-15（arm64）runner 上 `--mac --arm64 --x64`）。每台依次 `npm ci` → 校验标签 == `package.json` 版本 → `npm run check` → `npm run build` → `npx electron-builder <参数> --publish never`，把 `release/DocFlow-*.{exe,dmg,pkg,zip}` 上传为工件 `installers-<OS>`（保留 7 天，缺文件即失败）；`publish` job（ubuntu-latest）合并工件、`sha256sum` 生成 `SHA256SUMS.txt`、用 `.github/release-notes.md`（`__VERSION__` 替换）`gh release create --verify-tag` 建 Release。工作流也能手动触发（`workflow_dispatch`），但标签校验与 `--verify-tag` 要求所选 ref 是 `v*` 标签。
+2. 工作流：`build` job 两台 runner 并行打包（Windows x64：windows-latest，`--win --x64`；macOS：一台 macos-15（arm64）runner 上 `--mac --arm64 --x64`）。每台依次 `npm ci` → 校验标签 == `package.json` 版本 → `npm run check` → `npm run build` → `npx electron-builder <参数> --publish never`，把 `release/DocFlow-*.{exe,dmg,pkg,zip}` 上传为工件 `installers-<OS>`（保留 7 天，缺文件即失败）；`publish` job（ubuntu-latest）合并工件、`sha256sum` 生成 `SHA256SUMS.txt`、用 `.github/release-notes.md`（`__VERSION__` 替换）`gh release create --verify-tag` 建 Release。工作流也能手动触发（`workflow_dispatch`）：选 `v*` 标签时与推送标签完全一样；选分支时跳过标签校验、不跑 `publish` job，只打包并上传工件（用来演练打包）。标签校验步骤与 `publish` job 都以 `startsWith(github.ref, 'refs/tags/v')` 为条件，发布只由 `v*` 标签触发。
 3. 产物名：`DocFlow-4.0.0-win-x64-setup.exe`、`DocFlow-4.0.0-macos-arm64.pkg/.dmg/.zip`、`DocFlow-4.0.0-macos-x64.pkg/.dmg/.zip`、`SHA256SUMS.txt`。
 4. 先用 `v4.0.0-beta.1` 演练一次：版本号含 `-` 时 publish 步骤自动给 `gh release create` 加 `--prerelease`。
 

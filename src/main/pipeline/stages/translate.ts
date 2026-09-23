@@ -27,6 +27,9 @@ export async function translateStage(input: {
     level: 'info',
     message: `开始翻译：${input.manifest.translator.label}，共 ${translatable.length} 段`,
   })
+  // A cache that cannot be written only costs a re-translation after a retry: log it once
+  // (the flush timer would repeat it every few seconds) and keep translating.
+  let cacheWarned = false
   const cache = new TranslationCache(
     join(input.workDir, 'translation-cache.json'),
     cacheFingerprint(
@@ -34,6 +37,11 @@ export async function translateStage(input: {
       input.manifest.translator.model,
       input.manifest.settingsSnapshot,
     ),
+    (message) => {
+      if (cacheWarned) return
+      cacheWarned = true
+      void input.onEvent({ level: 'warning', message }).catch(() => undefined)
+    },
   )
   await cache.load()
   cache.start()

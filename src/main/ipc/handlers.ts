@@ -177,12 +177,14 @@ export async function handleDocumentsExport(
   const e2ePath = ctx.env.DOCFLOW_E2E_SAVE_PATH
   if (req.kind === 'bundle') {
     const bytes = await exportBundle(ctx.library.dir, ctx.library.require(req.id))
-    return saveExport({
+    const saved = await saveExport({
       dialog: ctx.dialog,
       defaultPath: names.bundle,
       bytes,
       ...(e2ePath ? { e2ePath } : {}),
     })
+    if ('path' in saved) ctx.exportedPaths.add(resolve(saved.path))
+    return saved
   }
   const source = ctx.library.pathFor(req.id, req.kind)
   if (!existsSync(source)) throw new UserError(ERROR_CODES.not_found, MISSING_FILE[req.kind])

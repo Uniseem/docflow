@@ -97,7 +97,7 @@ URL：
 - models：openai/azure → `${base}/models`；anthropic → `${base}/v1/models`（base 已含 `/v1` 时不重复）；gemini → `${base}/v1beta/models`（base 已含 `/v1beta` 时不重复）。
 - `base` 去掉尾部所有 `/`。`chatUrl`、`modelsUrl` 定义在 `src/shared/provider-url.ts`，`request.ts` 与 `providers.ts` 重新导出。
 
-头：`Content-Type: application/json`，`Accept: application/json`，`User-Agent: DocFlow/<version>`（`app.getVersion()`）；鉴权：openai → `Authorization: Bearer <key>`；azure → `api-key: <key>`；anthropic → `x-api-key: <key>` + `anthropic-version: 2023-06-01`；gemini → `x-goog-api-key: <key>`。Key 为空时不加鉴权头（`authHeaders()` 返回空对象，anthropic 的 `anthropic-version` 也一起省略）。
+头：`Content-Type: application/json`，`Accept: application/json`，`User-Agent: DocFlow/<version>`（`app.getVersion()`）；鉴权：openai → `Authorization: Bearer <key>`；azure → `api-key: <key>`；anthropic → `x-api-key: <key>` + `anthropic-version: 2023-06-01`；gemini → `x-goog-api-key: <key>`。Key 为空时不加鉴权头（`authHeaders()` 不返回 Key 头）；anthropic 的 `anthropic-version` 与 Key 无关、总是发送（Messages API 缺它会报错，本机或自定义的 Anthropic 兼容服务无 Key 时也一样）。
 
 体：
 
@@ -114,13 +114,13 @@ URL：
 
 温度策略：默认不传 `temperature`，用各服务商模型自身的默认值；需要固定温度的服务商（如 DeepSeek 官方翻译建议 1.3）由用户在 extraBody 里自行配置，代码不写死。（`buildRequest` 与 `ModelConfig` 都没有温度字段；2026 年主流模型多为推理模型，对非默认温度报 400 或忽略，见 [ADR-0011](../adr/0011-provider-presets-follow-research.md)、worklog 2026-09-23-presets 与 `docs/reference/providers/README.md`。）
 
-超时：`REQUEST_TIMEOUT_MS = 900_000`（15 分钟，与 3.x 一致）。`buildRequest` 自带 `AbortSignal.timeout(900_000)`，但翻译请求的 signal 会被池替换为 `AbortSignal.any([调用方 signal, AbortSignal.timeout(REQUEST_TIMEOUT_MS)])`，在拿到槽位后开始计时，同一请求内换 Key 重发（4.7）共用这 15 分钟。`postChat()` 把名为 `AbortError` 的异常转成 transient `无法连接翻译服务：<原因>`；其他非 `ProviderError` 异常（如 `fetch failed`、正文不是 JSON）原样抛出，由 `submit()` 包成 `ProviderError('transient', String(error))`。
+超时：`REQUEST_TIMEOUT_MS = 900_000`（15 分钟，与 3.x 一致）。`buildRequest` 自带 `AbortSignal.timeout(900_000)`，但翻译请求的 signal 会被池替换为 `AbortSignal.any([调用方 signal, AbortSignal.timeout(REQUEST_TIMEOUT_MS)])`，在拿到槽位后开始计时，同一请求内换 Key 重发（4.7）共用这 15 分钟。`postChat()`、`checkModel()` 与 `listModels()` 共用 `send()`：`fetch` 或读正文时抛出的任何异常（`fetch failed`、DNS、TLS、代理、超时）都由 `classifyNetworkError()` 转成 transient，message 是中文并说明下一步——超时（`TimeoutError`/`AbortError`）为 `翻译请求超时，请检查网络或代理设置后重试。`，其他为 `无法连接翻译服务（<原因>），请检查网络或代理设置，以及服务地址是否正确。`（原因优先取 `error.cause.message`，如 `connect ECONNREFUSED …`，同时放进 `snippet`）；不再把英文的 `TypeError: fetch failed` 直接给用户看。2xx 正文不是 JSON → transient `翻译服务返回的内容无法解析：<snippet>。请检查服务地址是否正确。`。
 
 `fetch` 通过 `http.ts` 的 `createFetch(fetchFn?)` 注入：`DOCFLOW_FAKE_PROVIDERS=1` 时返回假 fetch（4.13），否则用传入的函数（生产传 `net.fetch`），都没有时退回 Node 全局 `fetch`。
 
 ## 4.4 响应解析（`response.ts`）
 
-`postChat()` 先检查 HTTP 200 但正文含 `error` 对象的情况（某些网关）→ `classifyHttpError({ status: 200, body: JSON.stringify(error) })`；200 不在 4.5 的状态表里，结果恒为 transient（正文不参与分类）。`checkModel` 没有这一步：`parseChatResponse()` 遇到 `error` 对象抛普通 `Error`，最终显示为 `无法连接翻译服务：<error.message>`。
+`postChat()` 与 `checkModel()` 先检查 HTTP 200 但正文含 `error` 对象的情况（某些网关）→ `classifyErrorObject(error)`：`error.code` 或 `error.status` 是 400–599 的数字时按那个状态分类（Gemini 风格的 `{ code: 401, … }`），否则按 4.5 的正文规则分类（`invalid_api_key` → credential、`model_not_found` → fatal …），正文无结论才是 transient。所以 200 里的「Key 无效」不会被当作暂时故障反复重试；`checkModel` 也显示这条分类后的 message，而不是「无法连接」。
 
 ```ts
 type Finish = 'complete' | 'truncated' | 'refused'
@@ -153,7 +153,7 @@ class ProviderError extends Error {
 retryable = kind === 'transient' || kind === 'rateLimited'
 ```
 
-按 HTTP 状态：401/402 → credential；403 → 正文同时含 `rate` 与 `limit` → rateLimited，否则按正文分类，正文不能证明是 Key 的问题时 → fatal（地区限制、代理拦截、Key 无权使用该模型都会回 403，不能一律说成 Key 无效）；404 → fatal；408/409/425/500/502/503/504/520–529 → transient；429 → rateLimited（正文含 `insufficient` 或 `exceeded your current quota` → credential）；413 → oversized；400/422 → 按正文分类；其他 4xx → rejected；其余状态（含 501、505 等未列出的 5xx，以及 4.4 的 200）→ transient；网络错误/中止 → transient（见 4.3）。403、404 不再一律当作 Key 无效，是 M5 复查第 10 条的改动（worklog 2026-09-23-m5-fixes）。
+按 HTTP 状态：401/402 → credential；403 → 正文同时含 `rate` 与 `limit` → rateLimited，否则按正文分类，正文不能证明是 Key 的问题时 → fatal（地区限制、代理拦截、Key 无权使用该模型都会回 403，不能一律说成 Key 无效）；404 → fatal；408/409/425/500/502/503/504/520–529 → transient；429 → rateLimited（正文含 `insufficient` 或 `exceeded your current quota` → credential）；413 → oversized；400/422 → 按正文分类；其他 4xx → rejected；2xx（4.4 的 200 + `error` 对象）→ 按正文分类，无结论时 transient；其余状态（含 501、505 等未列出的 5xx）→ transient；网络错误/中止 → transient（见 4.3）。403、404 不再一律当作 Key 无效，是 M5 复查第 10 条的改动（worklog 2026-09-23-m5-fixes）。
 
 按正文（小写匹配，`classifyBody()`，按顺序取第一条）：`context length|context_length|maximum context|too many tokens|token limit|max_tokens|input is too long|prompt is too long` → oversized；`content_filter|content filter|safety|sensitive|violat|inappropriate|blocked` → refused；`invalid api key|invalid_api_key|incorrect api key|authentication|unauthorized|api key not valid|permission denied` → credential；`model not found|does not exist|no such model|unknown model|not supported model|model_not_found` → fatal；`rate limit|rate_limit|too many requests|quota exceeded|throttl` → rateLimited；`insufficient` 且含 `balance|quota|credit` → credential；否则无结论（400/422 → rejected，403 → fatal）。
 
@@ -172,14 +172,14 @@ retryable = kind === 'transient' || kind === 'rateLimited'
 | 其他 403（不论种类）                                                                                   | `翻译服务拒绝了请求（HTTP 403）：<snippet>。请检查代理设置、所在地区是否受这个服务支持，以及 API Key 是否有权使用这个模型。` |
 | 其他 404                                                                                               | `翻译服务返回错误（HTTP 404）：<snippet>。请在设置中检查服务地址是否正确。`                                                  |
 | 其他 fatal                                                                                             | `翻译服务返回了无法恢复的错误（HTTP n）：<snippet>。`                                                                        |
-| 没有 HTTP 状态（网络错误、重试用尽）                                                                   | 错误自身的 message，例如 `无法连接翻译服务：<原因>`、`翻译请求多次重试后仍然失败：<原因>`                                    |
+| 没有 HTTP 状态（网络错误、重试用尽）                                                                   | 错误自身的 message，例如 `无法连接翻译服务（<原因>），请检查…`、`翻译请求多次重试后仍然失败：<原因>`                         |
 | rateLimited                                                                                            | `翻译服务返回错误（HTTP n）：<snippet>。请求过于频繁，请稍后重试或在设置中降低并发数。`                                      |
 | 其他                                                                                                   | `翻译服务返回错误（HTTP n）：<snippet>`                                                                                      |
 
 ## 4.6 模型列表与检查（`providers.ts`）
 
-- `listModels(endpoint)`：最多 20 页。anthropic：`?limit=1000&after_id=<last>` 直到 `has_more=false`；gemini：`?pageSize=1000&pageToken=<next>`；openai：单页。解析：openai 读 `data[] | models[] | 根数组` 的 `id|name`、`owned_by`、`context_length`；anthropic 读 `data[].{id, display_name}`；gemini 读 `models[]` 中 `supportedGenerationMethods` 含 `generateContent` 的，id 去 `models/` 前缀，`displayName`、`inputTokenLimit`。去重、按 id 不区分大小写排序。请求头只有 `Accept` 与鉴权头。404/405 → 用户错误 `服务商不支持获取模型列表，请手动添加模型 ID。`；其他非 2xx 抛 `HttpStatusError('HTTP n')`，网络错误原样抛出，两者都不是 `UserError`，界面只显示通用的 `发生内部错误，详情见日志`。每页超时 45 s（`LIST_MODELS_TIMEOUT_MS`）。
-- `checkModel(endpoint, model)`：system `你是翻译引擎。把用户输入翻译成简体中文，只输出译文。`，user `Hello, world.`，anthropic 时 `max_tokens: 256`。成功 = 文本非空或 finish=truncated，返回 `{ ok: true, latencyMs, reply: snippet(text.trim(), 80) }`，设置页显示 `可用 · <n> ms · “<reply>”`。失败返回 `{ ok: false, message }`：HTTP 错误的 message 直接取 `classifyHttpError()`（`翻译服务返回错误（HTTP n）：<snippet>`，不经 `userFacingProviderError()`），空回复为 `译文为空`，其他异常为 `无法连接翻译服务：<原因>`。超时 90 s（`CHECK_MODEL_TIMEOUT_MS`）。
+- `listModels(endpoint)`：最多 20 页。anthropic：`?limit=1000&after_id=<last>` 直到 `has_more=false`；gemini：`?pageSize=1000&pageToken=<next>`；openai：单页。解析：openai 读 `data[] | models[] | 根数组` 的 `id|name`、`owned_by`、`context_length`；anthropic 读 `data[].{id, display_name}`；gemini 读 `models[]` 中 `supportedGenerationMethods` 含 `generateContent` 的，id 去 `models/` 前缀，`displayName`、`inputTokenLimit`。去重、按 id 不区分大小写排序。请求头只有 `Accept` 与鉴权头。404/405 → 用户错误 `服务商不支持获取模型列表，请手动添加模型 ID。`；其他非 2xx 与网络错误都转成 `UserError('models_failed', …)`，界面直接显示：credential（401/402 或正文说明 Key 有问题）→ `服务商拒绝了这个 API Key（HTTP n）。请检查 API Key 是否正确、是否已欠费。`；网络错误 → `获取模型列表失败：<4.3 的网络错误 message>`；其他 → `获取模型列表失败（HTTP n）：<snippet>。请检查服务地址与 API Key，或手动添加模型 ID。`；正文不是 JSON → `服务商返回的模型列表无法解析。请检查服务地址是否正确，或手动添加模型 ID。`。每页超时 45 s（`LIST_MODELS_TIMEOUT_MS`）。
+- `checkModel(endpoint, model)`：system `你是翻译引擎。把用户输入翻译成简体中文，只输出译文。`，user `Hello, world.`，anthropic 时 `max_tokens: 256`。成功 = 文本非空或 finish=truncated，返回 `{ ok: true, latencyMs, reply: snippet(text.trim(), 80) }`，设置页显示 `可用 · <n> ms · “<reply>”`。失败返回 `{ ok: false, message }`：HTTP 错误的 message 直接取 `classifyHttpError()`（`翻译服务返回错误（HTTP n）：<snippet>`，不经 `userFacingProviderError()`），空回复为 `译文为空`，200 里的 `error` 对象按 4.4 分类后取 message，网络错误为 4.3 的中文 message。超时 90 s（`CHECK_MODEL_TIMEOUT_MS`）。
 - 两者的 Key 取请求里带的，没有时取该服务商已保存的 Key。
 
 ## 4.7 密钥（`keys.ts` + `settings/secrets.ts`）
@@ -260,7 +260,7 @@ PDF 模式下（`protectTexts()`，每次请求对该请求的全部成员一起
 
 `normalizeMarkers(text, tokens)`——占位符损坏修复：
 
-1. 对每个期望 token 构造容错正则：不区分大小写，允许字符之间夹杂 `` ` ``、空格、`\t`、`_`、`-`，`KEEP` 后允许 `:`；即 `` `DOCFLOW KEEP 0 0 0 0 0 0 TOKEN` `` 能复原为 `DOCFLOWKEEP000000TOKEN`。正则两侧还会吞掉相邻的反引号与空白，所以 `使用 DOCFLOWKEEP000000TOKEN 方法` 会变成 `使用DOCFLOWKEEP000000TOKEN方法`。
+1. 对每个期望 token 构造容错正则：不区分大小写，允许字符之间夹杂 `` ` ``、空格、`\t`、`_`、`-`，`KEEP` 后允许 `:`；即 `` `DOCFLOW KEEP 0 0 0 0 0 0 TOKEN` `` 能复原为 `DOCFLOWKEEP000000TOKEN`。正则两侧只吞掉包裹用的反引号（以及反引号与标记之间的空白），标记外侧的空白原样保留：`use DOCFLOWKEEP000000TOKEN here` 不变，``where `DOCFLOWKEEP000000TOKEN` is`` 变成 `where DOCFLOWKEEP000000TOKEN is`。（最初连外侧空白一起吞掉，英文式输出里公式会粘到相邻单词上，本轮修复改掉。）
 2. 用通用正则 `/D\s*O\s*C\s*F\s*L\s*O\s*W\s*K\s*E\s*E\s*P[\s:_-]*(\d[\s\d]{0,11})[\s_-]*T\s*O\s*K\s*E\s*N/gi` 统计所有疑似标记；数量 ≠ 期望数 → 错误 `保护标记数量不匹配：原文需要 N 个，译文检测到 M 个`。
 3. 编号多重集不同（改号/重复）→ PDF 模式 **不允许按位置重排**（公式编号有意义）→ 错误 `保护标记的编号发生变化，需要重译`。
 4. 每个 token 必须恰好出现一次，否则 `保护标记 X 无法恢复为唯一位置`。
@@ -273,18 +273,18 @@ PDF 模式下（`protectTexts()`，每次请求对该请求的全部成员一起
 
 **片段级** `translateSegment(seg)`：先查缓存；未命中则最多 3 次尝试：
 
-1. `standard` 模式请求。`invalid` 且当前为 standard → 切换 `strict` 再试；`empty` → 再试一次；`truncated`/`refused`（以及 strict 下仍 `invalid`）→ 直接进入下一步。请求抛出 `UserError`（取消、连续拒绝）或 fatal/credential → 向上抛；其他 `ProviderError`（rejected、重试用尽的 transient）→ 直接进入下一步。
+1. `standard` 模式请求。`invalid` 且当前为 standard → 切换 `strict` 再试；`empty` → 再试一次；`truncated`/`refused`（以及 strict 下仍 `invalid`）→ 直接进入下一步。请求抛出 `UserError`（取消、连续拒绝）、fatal/credential 或重试用尽（`RetriesExhaustedError`）→ 向上抛；其他 `ProviderError`（rejected、oversized、refused）→ 直接进入下一步。
 2. 仍失败且 `chars > SPLIT_MIN_CHARS (400)` → `smartSplit(text, ceil(chars/2))` 在段落/句子边界拆开（通常 2 部分，断点靠前时可能 3 部分），子片段 id 为 `<id>#k`，并行递归 `translateSegment`（事件 warning `第 N 段拆成 K 部分重译`，N 是原段在文档里的序号）；整段 kept 仅当所有部分都 kept。
-3. 否则**片段隔离模式**：先做 4.9.2 的保护，把片段按占位符切开成「纯文本运行段」与「占位符」交替序列；不含任何字母（`\p{L}`）的文本段不翻译；其余文本段超过 `ISOLATED_FRAGMENT_CHARS (1500)` 时用 `smartSplit` 分块，逐块用 `isolated` 模式翻译。每块最多 2 次，某次失败后若 `chars > MIN_FRAGMENT_CHARS (60)` 就对半拆开递归（所以长块试 1 次就拆，≤ 60 的块试 2 次）；任何一块失败 → 整个文本段失败。文本段并发 `REPAIR_PARALLELISM (16)`。
+3. 否则**片段隔离模式**：先做 4.9.2 的保护，把片段按占位符切开成「纯文本运行段」与「占位符」交替序列；不含任何字母（`\p{L}`）的文本段不翻译；其余文本段超过 `ISOLATED_FRAGMENT_CHARS (1500)` 时用 `smartSplit` 分块，逐块用 `isolated` 模式翻译。每块最多 2 次（请求抛出的 `UserError`、fatal/credential、重试用尽同样向上抛，不算这一块失败），某次失败后若 `chars > MIN_FRAGMENT_CHARS (60)` 就对半拆开递归（所以长块试 1 次就拆，≤ 60 的块试 2 次）；任何一块失败 → 整个文本段失败。文本段并发 `REPAIR_PARALLELISM (16)`。
 4. 最终仍失败的文本段**保留原文**，事件（warning）`第 N 段有一个片段无法翻译，已保留原文`；整段 `kept = true` 仅当它的全部文本段都失败。
 
-**批次级** `translateBatch(batch)`：只含空白的批次直接返回原文；先逐段查缓存（命中时发 info 事件 `缓存命中 N 段`），其余成员一次请求（standard 模式）；缺失/无效的成员各自走 `translateSegment`，并发 16。整批请求抛错：`UserError`、fatal、credential → 向上抛；其他（含 rejected 与重试用尽）→ 全部未命中缓存的成员走 `translateSegment`。
+**批次级** `translateBatch(batch)`：只含空白的批次直接返回原文；先逐段查缓存（命中时发 info 事件 `缓存命中 N 段`），其余成员一次请求（standard 模式）；缺失/无效的成员各自走 `translateSegment`，并发 16。整批请求抛错：`UserError`、fatal、credential、重试用尽 → 向上抛；其他（rejected、oversized、refused）→ 全部未命中缓存的成员走 `translateSegment`。
 
-**文档级**：批次按 `perDocumentConcurrency` 并发。`keptChars` 只统计整段 kept 的段落的原文字符数（部分保留的段落不计入）；`keptChars > 400 && keptChars × 5 > totalChars` → 永久失败 `mostly_untranslated`（`有部分内容无法翻译，已停止处理。请换一个翻译服务或模型后重新处理。`）。连续 `REJECTED_STREAK_LIMIT (6)` 次 rejected（整篇文档共用一个计数，任何请求成功即清零）→ 永久失败 `UserError('internal', '翻译服务连续拒绝了 6 个请求，已停止处理')`。
+**文档级**：批次按 `perDocumentConcurrency` 并发。任何批次向上抛错时，文档内部的 `AbortController` 立即中止其余批次（排队、退避等待与进行中的请求都随之结束），`translateDocument` 抛出第一个错误，而不是被中止批次的「已取消」。`keptChars` 只统计整段 kept 的段落的原文字符数（部分保留的段落不计入）；`keptChars > 400 && keptChars × 5 > totalChars` → 永久失败 `mostly_untranslated`（`有部分内容无法翻译，已停止处理。请换一个翻译服务或模型后重新处理。`）。连续 `REJECTED_STREAK_LIMIT (6)` 次 rejected（整篇文档共用一个计数，任何请求成功即清零）→ 永久失败 `UserError('internal', '翻译服务连续拒绝了 6 个请求，已停止处理')`。
 
-**传输级** `submit()`：最多 `SUBMIT_ATTEMPTS (8)` 次，每次都经 `TranslationPools.execute()` 重新取池。`UserError`（取消）→ 直接抛出；`fatal | credential` → 立即抛出（有多个 Key 时池已在请求内换过 Key，见 4.7）；`rejected` → 计入连续拒绝，不重试本次（抛给上层阶梯）；其余种类都退避重试——transient、rateLimited，以及 oversized、refused、output（`submit()` 没有用 `ProviderError.retryable`）：`backoff = min(2^(attempt-1), 32) × 1000 ms`（attempt 从 1 起，指数上限 5），`delay = max(retryAfterMs ?? backoff, backoff/2) + jitter(0–2040 ms)`；整篇文档的前 `RETRY_NOTICES (12)` 次失败，以及每个请求第 3 次起的失败都发 warning 事件 `翻译请求失败（<原因>），<n> 秒后重试`（第 8 次失败也会先发这条再结束）；用尽 → `ProviderError('transient', '翻译请求多次重试后仍然失败：<原因>')`。
+**传输级** `submit()`：最多 `SUBMIT_ATTEMPTS (8)` 次，每次都经 `TranslationPools.execute()` 重新取池。`UserError`（取消）→ 直接抛出；`fatal | credential` → 立即抛出（有多个 Key 时池已在请求内换过 Key，见 4.7）；`rejected` → 计入连续拒绝，不重试本次（抛给上层阶梯）；其他不可重试的种类（`ProviderError.retryable` 为假：oversized、refused、output）→ 立即抛给上层阶梯，不退避（重发也不会变，之前会白等约 95 s）；只有 transient、rateLimited 退避重试：`backoff = min(2^(attempt-1), 32) × 1000 ms`（attempt 从 1 起，指数上限 5），`delay = max(retryAfterMs ?? backoff, backoff/2) + jitter(0–2040 ms)`；整篇文档的前 `RETRY_NOTICES (12)` 次失败，以及每个请求第 3 次起的失败都发 warning 事件 `翻译请求失败（<原因>），<n> 秒后重试`（detail 为技术原因 `snippet`）；第 8 次失败不会再重试，所以不发这条；用尽 → `RetriesExhaustedError`（`ProviderError` 子类，kind transient，message `翻译请求多次重试后仍然失败：<原因>`）。
 
-这条「重试用尽」错误和其他非 fatal/credential 的 `ProviderError` 一样，会被上面的片段阶梯接住（拆分 → 隔离 → 保留原文），不会直接让任务以可重试错误结束；服务长时间不可用时，保留原文的字符超过阈值就以 `mostly_untranslated` 永久失败。
+「重试用尽」说明服务商暂时不可用，片段阶梯不接住它（拆分、隔离只会对每一段再跑几轮 8 次退避），而是向上抛、中止整篇文档；调度器按 transient 记为可重试失败，稍后自动重试（已翻译的段落在缓存里）。最初的实现让阶梯接住它，服务长时间不可用时要把每一段都磨完，最后以 `mostly_untranslated` 永久失败，本轮修复改掉。
 
 取消：所有 await 点检查 `signal.aborted`；`fetch` 传入同一 `signal`；重试等待（`delay`）与并发池排队都随 `signal` 立即结束，取消或删除不会被几十秒的退避卡住。
 
@@ -293,7 +293,7 @@ PDF 模式下（`protectTexts()`，每次请求对该请求的全部成员一起
 - 文件：`documents/<id>/work/translation-cache.json`：`{ version: 1, fingerprint, entries: { [sha256(segmentText)]: { text, at } } }`。
 - `fingerprint = sha256(JSON.stringify({ version: 1, translator: `llm:${type}:${baseUrl}:${model}`, chunkChars, maxSegmentsPerRequest, maxRequestChars, systemPrompt }))`——改提示词或模型即失效；改并发不失效。
 - 命中条件：fingerprint 相同（`load()` 时 version 或 fingerprint 不同就整份忽略）、条目存在、非空白、通过 `validate` 的 PDF 标记序列校验。`translateBatch` 与 `translateSegment` 都先查缓存；拆分出的子片段也按各自文本写入。
-- 写入：内存 Map，每 2 s（`CACHE_FLUSH_MS`）或每 20 条新增（`CACHE_FLUSH_EVERY`）落盘一次（原子写），阶段结束再落盘一次。写失败交给构造参数 `onWarning`（`翻译缓存写入失败：<原因>`），但翻译阶段（`pipeline/stages/translate.ts`）目前没有传这个回调，失败被静默忽略。
+- 写入：内存 Map，每 2 s（`CACHE_FLUSH_MS`）或每 20 条新增（`CACHE_FLUSH_EVERY`）落盘一次（原子写），阶段结束再落盘一次。写失败交给构造参数 `onWarning`（`翻译缓存写入失败（不影响翻译结果）：<原因>`）；翻译阶段（`pipeline/stages/translate.ts`）把它写进文档事件日志（warning，每次阶段只记第一条，避免 2 s 一次的定时落盘刷屏），翻译照常继续。
 - 任务成功归档后删除整个 `work/`（含缓存）；失败/取消时保留。
 
 ## 4.13 假服务商模式

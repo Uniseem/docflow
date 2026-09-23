@@ -10,7 +10,7 @@ import { composePdf, defaultComposeOptions } from '../pdf/compose'
 import { inspectPdf } from '../pdf/inspect'
 import { verifyPdf } from '../pdf/verify'
 import { DocumentLibrary } from '../library/library'
-import { bundledFonts, runPipeline, type PipelineHooks } from './run'
+import { bundledFonts, composeWarningEvent, runPipeline, type PipelineHooks } from './run'
 
 const fonts = bundledFonts()
 const translator = { providerId: 'fake', model: 'fake-model', label: '假 · fake-model' }
@@ -123,6 +123,54 @@ describe('runPipeline', () => {
     })
     await access(join(dir, 'documents', second.id, 'work', 'mono.pdf'))
     expect(lib.require(second.id).outputs.mono).toBeNull()
+  })
+})
+
+describe('composeWarningEvent', () => {
+  const analysis = {
+    paragraphs: [
+      { id: '0-0', page: 0 },
+      { id: '1-0', page: 1 },
+      { id: '1-3', page: 1 },
+    ],
+  } as unknown as AnalysisResult
+
+  test('numbers paragraphs by position on their page instead of internal ids', () => {
+    expect(
+      composeWarningEvent(
+        { code: 'overflow', page: 1, paragraphId: '1-3', message: 'overflow' },
+        analysis,
+      ).message,
+    ).toBe('第 2 页第 2 段译文超出原段落范围')
+    expect(
+      composeWarningEvent(
+        { code: 'layout_failed', page: 1, paragraphId: 'gone', message: 'x' },
+        analysis,
+      ).message,
+    ).toBe('第 2 页有一段排版失败，已保留原文')
+  })
+
+  test('every warning code reads as Chinese', () => {
+    const codes = [
+      'overflow',
+      'layout_failed',
+      'font_unmapped',
+      'encode_failed',
+      'page_skipped',
+      'op_mismatch',
+      'font_subset_fallback',
+      'something_new',
+    ]
+    for (const code of codes) {
+      const event = composeWarningEvent(
+        { code, page: 0, paragraphId: '0-0', message: 'technical english text' },
+        analysis,
+      )
+      expect(event.message, code).not.toMatch(/[A-Za-z]/)
+    }
+    expect(
+      composeWarningEvent({ code: 'something_new', message: 'technical english text' }, analysis),
+    ).toEqual({ message: '生成 PDF 时出现警告', detail: 'something_new: technical english text' })
   })
 })
 

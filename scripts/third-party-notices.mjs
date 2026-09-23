@@ -54,6 +54,15 @@ function readPackageLicense(name) {
   return { license, text }
 }
 
+// Packages that npm installs but electron-builder.yml keeps out of the app
+// (`!**/node_modules/@napi-rs/**`: pdf.js's optional native canvas, see ADR-0010).
+const NOT_SHIPPED_PREFIXES = ['@napi-rs/']
+
+/** @param {string} name */
+function isShipped(name) {
+  return !NOT_SHIPPED_PREFIXES.some((prefix) => name.startsWith(prefix))
+}
+
 function productionPackageNames() {
   const lockPath = join(root, 'package-lock.json')
   if (!existsSync(lockPath)) return []
@@ -68,9 +77,11 @@ function productionPackageNames() {
     if (!key.startsWith('node_modules/')) continue
     const name = key.slice('node_modules/'.length)
     if (name.includes('node_modules/')) continue
+    // Optional platform binaries for other OSes/CPUs are never installed, so never shipped.
+    if (value.optional && !existsSync(join(root, key, 'package.json'))) continue
     names.add(name)
   }
-  return [...names].sort()
+  return [...names].filter(isShipped).sort()
 }
 
 const bundled = JSON.parse(readFileSync(join(root, 'scripts/bundled-deps.json'), 'utf8'))

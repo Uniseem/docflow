@@ -8,6 +8,7 @@ import { DropOverlay, GlobalConfirm, LibraryView, RenameDialog } from './views/L
 import { NewTranslationModal } from './views/NewTranslation/NewTranslationModal'
 import { collectPdfDrop } from './lib/drop'
 import { notify, notifyError } from './lib/notify'
+import { relaunchApp } from './lib/relaunch'
 import { applyTheme } from './lib/theme'
 import { confirmDelete } from './views/Document/actions'
 import { DocumentDetail } from './views/Document/DocumentDetail'
@@ -105,8 +106,14 @@ export default function App() {
       if (name === 'focus-search') useUiStore.getState().focusSearch()
     })
     void (async () => {
+      // The bridge is there but main does not answer: show 处理引擎未运行, whose button then
+      // relaunches the app instead of only reloading the page.
+      const info = await window.docflow.invoke('app:info', {}).catch(() => null)
+      if (!info) {
+        useUiStore.setState({ engineReady: false })
+        return
+      }
       try {
-        const info = await invoke('app:info', {})
         useUiStore.getState().setAppInfo(info)
         applyTheme(info.theme)
         await useSettingsStore.getState().load()
@@ -231,14 +238,7 @@ export default function App() {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-3">
         <p>处理引擎未运行</p>
-        <Button
-          onPress={() => {
-            if (window.docflow) void window.docflow.invoke('app:relaunch', {})
-            else window.location.reload()
-          }}
-        >
-          重新启动
-        </Button>
+        <Button onPress={() => void relaunchApp()}>重新启动</Button>
       </div>
     )
   }
