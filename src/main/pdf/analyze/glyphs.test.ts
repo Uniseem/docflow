@@ -1,6 +1,7 @@
 import { readdir } from 'node:fs/promises'
 import { join } from 'node:path'
 import { describe, expect, test } from 'vitest'
+import { PDFDocument, PDFName, StandardFonts } from '@cantoo/pdf-lib'
 import { extractPageGraphics } from './glyphs'
 import { openPdfDocument } from '../pdfjs'
 
@@ -83,6 +84,54 @@ describe('extractPageGraphics', () => {
     expect(glyphs.length).toBeGreaterThan(0)
     expect(glyphs.every((g) => g.formPath === '1')).toBe(true)
     page.cleanup()
+    await doc.cleanup()
+  })
+
+  test('scaled text and graphics matrices advance in text space', async () => {
+    // `1 Tf` with the size carried by Tm (×20) inside a 0.5× CTM: 10 pt Helvetica at 72,720.
+    const pdf = await PDFDocument.create()
+    const font = await pdf.embedFont(StandardFonts.Helvetica)
+    const page = pdf.addPage([612, 792])
+    page.node.setFontDictionary(PDFName.of('F1'), font.ref)
+    const content = [
+      'q 0.5 0 0 0.5 0 0 cm',
+      'BT /F1 1 Tf 20 0 0 20 144 1440 Tm (Hello) Tj',
+      '0 -1.5 Td (Scaled) Tj',
+      '2 0 Td [(A) -500 (B)] TJ ET Q',
+    ].join('\n')
+    page.node.set(PDFName.of('Contents'), pdf.context.register(pdf.context.stream(content)))
+    const doc = await openPdfDocument(await pdf.save())
+    const pdfPage = await doc.getPage(1)
+    const { glyphs } = await extractPageGraphics(pdfPage, 0)
+
+    const hello = glyphs.slice(0, 5)
+    expect(hello.map((g) => g.unicode).join('')).toBe('Hello')
+    expect(hello[0]!.x).toBeCloseTo(72, 2)
+    expect(hello[0]!.y).toBeCloseTo(720, 2)
+    expect(hello[0]!.size).toBeCloseTo(10, 2)
+    // Helvetica widths H 722, e 556, l 222, l 222, o 556 → 22.78 pt at 10 pt.
+    expect(hello[0]!.adv).toBeCloseTo(7.22, 2)
+    expect(hello[1]!.x).toBeCloseTo(79.22, 2)
+    expect(hello.reduce((sum, g) => sum + g.adv, 0)).toBeCloseTo(22.78, 2)
+
+    const scaled = glyphs.find((g) => g.unicode === 'S')!
+    expect(scaled.x).toBeCloseTo(72, 2)
+    expect(scaled.y).toBeCloseTo(705, 2)
+    const a = glyphs.find((g) => g.unicode === 'A')!
+    const b = glyphs.find((g) => g.unicode === 'B')!
+    expect(a.x).toBeCloseTo(92, 2)
+    // A is 667 wide; the -500 TJ adjustment adds 5 pt at 10 pt.
+    expect(b.x).toBeCloseTo(92 + 6.67 + 5, 2)
+
+    const content2 = await pdfPage.getTextContent()
+    for (const item of content2.items) {
+      if (!('str' in item) || !item.str.trim()) continue
+      const x = Number(item.transform[4])
+      const y = Number(item.transform[5])
+      const hit = glyphs.some((g) => Math.abs(g.x - x) <= 0.05 && Math.abs(g.y - y) <= 0.05)
+      expect(hit, `item "${item.str}" at ${x},${y}`).toBe(true)
+    }
+    pdfPage.cleanup()
     await doc.cleanup()
   })
 })

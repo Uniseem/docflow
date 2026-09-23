@@ -53,6 +53,8 @@ async function launchApp(options: LaunchOptions & { dataDir: string }): Promise<
     env: {
       ...process.env,
       DOCFLOW_DATA_DIR: options.dataDir,
+      // The window stays hidden unless E2E_SHOW=1 (watching a run locally).
+      ...(process.env.E2E_SHOW === '1' ? {} : { DOCFLOW_HIDE_WINDOW: '1' }),
       ...(options.mock === false ? {} : { DOCFLOW_MOCK_PROVIDER_URL: MOCK_URL }),
       ...options.extraEnv,
     },

@@ -78,7 +78,7 @@ nsis:
 publish: null
 ```
 
-主进程读取资源路径：字体应为 `app.isPackaged ? join(process.resourcesPath, 'fonts') : join(app.getAppPath(), 'resources/fonts')`（`src/main/pipeline/run.ts` 的 `bundledFonts()`；当前代码按 `process.resourcesPath` 是否存在判断，未打包的 Electron 也有这个值，`npm run dev` 下会指到 Electron 自带的资源目录而找不到字体，待修）。pdf.js 的 `standardFontDataUrl`/`cMapUrl` 在开发与打包后都用 `require.resolve('pdfjs-dist/package.json')` 定位 `node_modules/pdfjs-dist/{standard_fonts,cmaps}`（打包后在 `app.asar` 里，`src/main/pdf/pdfjs.ts`），并转成以 `/` 结尾的 `file:` URL（pdf.js 要求）。因此 extraResources 里的 `pdfjs/` 两个目录目前没有被读取，与 asar 里的是重复的（worklog 2026-09-23-m5-fixes）。
+主进程读取资源路径：字体为 `app.isPackaged ? join(process.resourcesPath, 'fonts') : join(app.getAppPath(), 'resources/fonts')`（`AppSession` 算好后传给 `createPipelineHooks({ fontsDir })`，再交给 `src/main/pipeline/run.ts` 的 `bundledFonts(root)`；单测与脚本不传，默认 `<cwd>/resources/fonts`。2026-09-24 前按 `process.resourcesPath` 是否存在判断，未打包的 Electron 也有这个值，`npm run dev` 下找不到字体）。pdf.js 的 `standardFontDataUrl`/`cMapUrl` 在开发与打包后都用 `require.resolve('pdfjs-dist/package.json')` 定位 `node_modules/pdfjs-dist/{standard_fonts,cmaps}`（打包后在 `app.asar` 里，`src/main/pdf/pdfjs.ts`），并转成以 `/` 结尾的 `file:` URL（pdf.js 要求）。因此 extraResources 里的 `pdfjs/` 两个目录目前没有被读取，与 asar 里的是重复的（worklog 2026-09-23-m5-fixes）。
 
 E2E 启动的是 `electron-builder --dir` 产物，改渲染进程或主进程后必须重新 `npm run dist:dir`，否则测的是旧代码。
 

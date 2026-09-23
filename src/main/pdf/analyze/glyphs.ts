@@ -303,14 +303,14 @@ export async function extractPageGraphics(
         break
       case OPS.moveText: {
         const n = asNumbers(args)
-        state.tlm = multiply(translate(n[0] ?? 0, n[1] ?? 0), state.tlm)
+        state.tlm = multiply(state.tlm, translate(n[0] ?? 0, n[1] ?? 0))
         state.tm = cloneMatrix(state.tlm)
         break
       }
       case OPS.setLeadingMoveText: {
         const n = asNumbers(args)
         state.leading = -(n[1] ?? 0)
-        state.tlm = multiply(translate(n[0] ?? 0, n[1] ?? 0), state.tlm)
+        state.tlm = multiply(state.tlm, translate(n[0] ?? 0, n[1] ?? 0))
         state.tm = cloneMatrix(state.tlm)
         break
       }
@@ -323,7 +323,7 @@ export async function extractPageGraphics(
         break
       }
       case OPS.nextLine:
-        state.tlm = multiply(translate(0, -state.leading), state.tlm)
+        state.tlm = multiply(state.tlm, translate(0, -state.leading))
         state.tm = cloneMatrix(state.tlm)
         break
       case OPS.setFillRGBColor:
@@ -367,7 +367,6 @@ function showText(
   const fontMatrix = font?.fontMatrix ?? [0.001, 0, 0, 0.001, 0, 0]
   const size = state.fontSize
   const th = state.hScale
-  const ctmScale = hypot(state.ctm[0], state.ctm[1]) || 1
   const family = fontFamilyOf(font, state.fontKey)
   const bold = BOLD_RE.test(family)
   const italic = ITALIC_RE.test(family)
@@ -380,17 +379,22 @@ function showText(
 
   for (const item of items) {
     if (typeof item === 'number') {
-      state.tm = multiply(translate((-item * size * th) / 1000, 0), state.tm)
+      // Displacements are in text space: T(tx, 0) × Tm (PDF 32000 §9.4.4).
+      state.tm = multiply(state.tm, translate((-item * size * th) / 1000, 0))
       continue
     }
     const glyph = item as ShowGlyph
     const w0 = Number(glyph.width ?? 0) * Number(fontMatrix[0] ?? 0.001)
     const spacing = state.charSpacing + (glyph.isSpace ? state.wordSpacing : 0)
+    const tx = (w0 * size + spacing) * th
     const trm = multiply(state.ctm, multiply(state.tm, scale))
     const origin = apply(trm, 0, 0)
     const visualSize = hypot(trm[2], trm[3]) || size
-    const width = w0 * size * th * ctmScale
-    const adv = (w0 * size + spacing) * th * ctmScale
+    // Length of one text-space unit along the baseline, in page space.
+    const userTm = multiply(state.ctm, state.tm)
+    const unit = hypot(userTm[0], userTm[1]) || 1
+    const width = w0 * size * th * unit
+    const adv = tx * unit
     const code = Number(glyph.originalCharCode ?? 0)
     const unicode = glyph.unicode ?? ''
     glyphs.push({
@@ -420,7 +424,7 @@ function showText(
       color: [...state.fill],
       isSpace: Boolean(glyph.isSpace) || unicode === ' ',
     })
-    state.tm = multiply(translate(adv, 0), state.tm)
+    state.tm = multiply(state.tm, translate(tx, 0))
   }
 }
 

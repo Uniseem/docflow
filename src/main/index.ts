@@ -24,6 +24,11 @@ if (dataDirOverride) {
   app.setPath('userData', join(absolute, '.electron-user-data'))
 }
 
+// E2E and smoke scripts: drive the app without putting a window, a Dock icon or
+// notifications on the developer's screen.
+const hideWindow = process.env.DOCFLOW_HIDE_WINDOW === '1'
+if (hideWindow) app.dock?.hide()
+
 let mainWindow: BrowserWindow | null = null
 let session: AppSession | null = null
 /** open-file can fire before the app is ready (macOS cold start from Finder). */
@@ -60,12 +65,16 @@ function createWindow(): void {
       webSecurity: true,
       plugins: true,
       spellcheck: false,
+      // A never-shown window would otherwise report `hidden` and pause timers and animations.
+      backgroundThrottling: !hideWindow,
     },
   })
   window.once('ready-to-show', () => {
-    // maximize() also shows the window, so it waits for the first paint too.
-    if (saved?.maximized) window.maximize()
-    window.show()
+    if (!hideWindow) {
+      // maximize() also shows the window, so it waits for the first paint too.
+      if (saved?.maximized) window.maximize()
+      window.show()
+    }
     void session?.showBootNotice(window)
   })
 
@@ -153,7 +162,7 @@ if (!gotLock) {
   app.quit()
 } else {
   app.on('second-instance', (_event, argv) => {
-    if (mainWindow) {
+    if (mainWindow && !hideWindow) {
       if (mainWindow.isMinimized()) mainWindow.restore()
       mainWindow.focus()
     }

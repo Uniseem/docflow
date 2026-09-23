@@ -22,7 +22,7 @@ export type TranslateOutcome = {
 
 export type PipelineHooks = {
   inspect: (path: string, signal: AbortSignal) => Promise<PdfInspection>
-  analyze: (path: string, signal: AbortSignal) => Promise<AnalysisResult>
+  analyze: (path: string, pages: number, signal: AbortSignal) => Promise<AnalysisResult>
   translate: (input: {
     analysis: AnalysisResult
     manifest: DocumentManifest
@@ -112,7 +112,7 @@ export async function runPipeline(
     manifest.sourceSha256,
     async () => {
       throwIfAborted(signal)
-      return hooks.analyze(src, signal)
+      return hooks.analyze(src, inspection.pages, signal)
     },
   )
   const pagesWithout = new Set<number>()
@@ -316,10 +316,11 @@ function throwIfAborted(signal: AbortSignal): void {
   if (signal.aborted) throw new UserError(ERROR_CODES.cancelled)
 }
 
-export function bundledFonts(): { regular: string; bold: string } {
-  const root = process.resourcesPath
-    ? join(process.resourcesPath, 'fonts')
-    : join(process.cwd(), 'resources/fonts')
+/** `root` is `<resources>/fonts` in a packaged app; tests and scripts run from the repo root. */
+export function bundledFonts(root = join(process.cwd(), 'resources/fonts')): {
+  regular: string
+  bold: string
+} {
   return {
     regular: join(root, 'NotoSansSC-Regular.otf'),
     bold: join(root, 'NotoSansSC-Bold.otf'),

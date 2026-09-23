@@ -82,6 +82,21 @@ describe('walkTextOps', () => {
     expect(ops[0]!.fontName).toBe('F1')
   })
 
+  test('Td moves in text space under a scaled Tm and CTM', () => {
+    const bytes = Buffer.from(
+      'q 0.5 0 0 0.5 0 0 cm BT /F1 1 Tf 20 0 0 20 144 1440 Tm (Hello) Tj ' +
+        '0 -1.5 Td (Scaled) Tj 2 0 Td [(A) -500 (B)] TJ 3 TL T* (Next) Tj ET Q',
+      'latin1',
+    )
+    const starts = walkTextOps(bytes).map((op) => op.start.map((v) => Math.round(v * 100) / 100))
+    expect(starts).toEqual([
+      [72, 720],
+      [72, 705],
+      [92, 705],
+      [92, 675],
+    ])
+  })
+
   test('skips shared forms', async () => {
     const bytes = await readFile(join(dir, 'shared-form.pdf'))
     const pdf = await PDFDocument.load(bytes)

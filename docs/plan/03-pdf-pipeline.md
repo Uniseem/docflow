@@ -222,11 +222,11 @@ w0 = glyph.width × fontMatrix[0]                     // 文字空间字形宽�
 spacing = charSpacing + (glyph.isSpace ? wordSpacing : 0)
 trm = [size × Th, 0, 0, size, 0, rise] × Tm × CTM
 origin = apply(trm-with-x, (x, 0))                   // 先把 x 平移进 Tm：Tm' = translate(x × Th, 0) × Tm
-record Glyph { x: origin.x, y: origin.y, size: hypot(trm[2], trm[3]), width: w0 × size × Th × ctmScale, adv: (w0 × size + spacing) × Th × ctmScale, ... }
+record Glyph { x: origin.x, y: origin.y, size: hypot(trm[2], trm[3]), width: w0 × size × Th × unit, adv: (w0 × size + spacing) × Th × unit, ... }
 x += w0 × size + spacing                             // 文字空间累加，最后 Tm 平移 x × Th
 ```
 
-`ctmScale = hypot(CTM[0], CTM[1])`；`rotated = |trm[1]| > 1e-3 || |trm[2]| > 1e-3`（用 trm 的旋转分量判断）；`ascent`、`descent` 取 `font.ascent`、`font.descent`，缺失或不是有限数（Symbol 字体会给 NaN，写进 bbox 会被 zod 拒绝）时用 `0.8`、`−0.2`；`unicode = glyph.unicode ?? ''`（空串 → 视为未知字形，§3.8 当公式处理）；`isSpace = glyph.isSpace || unicode === ' '`；`fontFamily = font.name.split('+').pop()`（没有 `name` 时用 `loadedName`）；`bold = /bold|black|heavy|semibold|-BX|CMBX/i`、`italic = /italic|oblique|-It$|MI\d|CMTI|Slanted/i` 匹配 `fontFamily`。`opSeq` 每遇到一个 `showText` 加一（页内计数，含表单）。`renderMode` 取当前 Tr。
+`unit = hypot(M[0], M[1])`，`M = Tm × CTM`，即文字空间 1 个单位沿基线在页面上的长度（`Tm` 带缩放如 `1 Tf` + `10 0 0 10 x y Tm`、或 CTM 缩放时都成立；2026-09-24 前按 `hypot(CTM[0], CTM[1])` 计算且把平移乘在 `Tm` 外侧，这两种 PDF 的字距与换行都算错）。本节矩阵按 PDF 的行向量写法；代码里 `multiply(a, b)` 是列向量约定（先 `b` 后 `a`），所以 `translate(tx, ty) × Tlm` 写成 `multiply(tlm, translate(tx, ty))`，content-walker 同理。`rotated = |trm[1]| > 1e-3 || |trm[2]| > 1e-3`（用 trm 的旋转分量判断）；`ascent`、`descent` 取 `font.ascent`、`font.descent`，缺失或不是有限数（Symbol 字体会给 NaN，写进 bbox 会被 zod 拒绝）时用 `0.8`、`−0.2`；`unicode = glyph.unicode ?? ''`（空串 → 视为未知字形，§3.8 当公式处理）；`isSpace = glyph.isSpace || unicode === ' '`；`fontFamily = font.name.split('+').pop()`（没有 `name` 时用 `loadedName`）；`bold = /bold|black|heavy|semibold|-BX|CMBX/i`、`italic = /italic|oblique|-It$|MI\d|CMTI|Slanted/i` 匹配 `fontFamily`。`opSeq` 每遇到一个 `showText` 加一（页内计数，含表单）。`renderMode` 取当前 Tr。
 
 其余算子忽略。整个解释器要能在 300 页文档上跑完，`getOperatorList` 每页独立调用并在用完后 `page.cleanup()`。
 

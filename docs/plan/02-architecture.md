@@ -283,14 +283,15 @@ audit=false
 
 ## 2.8 环境变量
 
-| 变量                        | 作用                                                                                                                                                                      |
-| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `DOCFLOW_DATA_DIR`          | 覆盖文档库目录（优先于 host.json；相对路径按当前目录转成绝对路径）；同时把 Electron `userData` 改到 `<dir>/.electron-user-data`，E2E 不碰真实的 host.json、缓存与单实例锁 |
-| `DOCFLOW_FAKE_PROVIDERS=1`  | 翻译不发网络请求，返回确定性的假译文（04 章 4.13）；打开文档库时在设置里补一个 `fake` 服务商                                                                              |
-| `DOCFLOW_MOCK_PROVIDER_URL` | 存在时把所有服务商的 Base URL 按接口类型改指向它（E2E 用 mock 服务）                                                                                                      |
-| `DOCFLOW_LOG_LEVEL`         | `debug/info/warn/error`                                                                                                                                                   |
-| `DOCFLOW_E2E_SAVE_PATH`     | 存在时保存对话框直接返回该路径（E2E 用）                                                                                                                                  |
-| `DOCFLOW_E2E_FOLDER_PATH`   | 存在时选文件夹对话框直接返回该路径；同时让 `app:info.dataDirFromEnv` 为 false，以便 E2E 改文档库位置                                                                      |
+| 变量                        | 作用                                                                                                                                                                                                               |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `DOCFLOW_DATA_DIR`          | 覆盖文档库目录（优先于 host.json；相对路径按当前目录转成绝对路径）；同时把 Electron `userData` 改到 `<dir>/.electron-user-data`，E2E 不碰真实的 host.json、缓存与单实例锁                                          |
+| `DOCFLOW_FAKE_PROVIDERS=1`  | 翻译不发网络请求，返回确定性的假译文（04 章 4.13）；打开文档库时在设置里补一个 `fake` 服务商                                                                                                                       |
+| `DOCFLOW_MOCK_PROVIDER_URL` | 存在时把所有服务商的 Base URL 按接口类型改指向它（E2E 用 mock 服务）                                                                                                                                               |
+| `DOCFLOW_LOG_LEVEL`         | `debug/info/warn/error`                                                                                                                                                                                            |
+| `DOCFLOW_E2E_SAVE_PATH`     | 存在时保存对话框直接返回该路径（E2E 用）                                                                                                                                                                           |
+| `DOCFLOW_E2E_FOLDER_PATH`   | 存在时选文件夹对话框直接返回该路径；同时让 `app:info.dataDirFromEnv` 为 false，以便 E2E 改文档库位置                                                                                                               |
+| `DOCFLOW_HIDE_WINDOW`       | `1` 时窗口创建后不显示、macOS 隐藏 Dock 图标、不发系统通知，`backgroundThrottling` 关闭（隐藏窗口的定时器与动画照常）；E2E 默认带上（`E2E_SHOW=1` 时不带），自写的冒烟脚本也应带上，避免在开发者屏幕上反复开关窗口 |
 
 ## 2.9 各配置文件全文
 

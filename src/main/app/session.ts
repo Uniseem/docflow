@@ -13,7 +13,7 @@ import {
 } from 'electron'
 import { randomBytes } from 'node:crypto'
 import { mkdir, unlink } from 'node:fs/promises'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { DOCUMENT_CHANGED_THROTTLE_MS } from '../../shared/constants'
 import { ERROR_CODES, UserError, isUserError } from '../../shared/errors'
@@ -253,7 +253,7 @@ export class AppSession {
 
   /** Switches every consumer to `opened`. The previous scheduler must already be stopped. */
   private activateLibrary(opened: OpenedLibrary): void {
-    this.logsDir = configureLogger(opened.dir, { env: this.env, packaged: app.isPackaged })
+    this.logsDir = dirname(configureLogger(opened.dir, { env: this.env, packaged: app.isPackaged }))
     this.logger = createLogger('app')
     this.library = opened.library
     this.settings = opened.settings
@@ -293,6 +293,9 @@ export class AppSession {
       analyze: this.analyzeWorker,
       compose: this.composeWorker,
       env: this.env,
+      fontsDir: app.isPackaged
+        ? join(process.resourcesPath, 'fonts')
+        : join(app.getAppPath(), 'resources/fonts'),
       onChanged: (manifest) => this.onManifestChanged(manifest),
     })
     return new Scheduler(library, (id, signal) => runPipeline(library, id, signal, hooks), {
@@ -321,7 +324,7 @@ export class AppSession {
         status: manifest.status,
         title: manifest.title,
       })
-      if (note && Notification.isSupported()) {
+      if (note && Notification.isSupported() && this.env.DOCFLOW_HIDE_WINDOW !== '1') {
         const notification = new Notification({ title: note.title, body: note.body })
         notification.on('click', () => {
           const window = this.getWindow()
@@ -402,8 +405,12 @@ export class AppSession {
   }
 
   private handlerContext(): HandlerContext {
+    // One handler set serves one library: changeLibrary() swaps this.library before it
+    // re-registers the handlers, and app:info must not report the new directory while the
+    // other channels still read the old library.
+    const library = this.library
     return {
-      library: this.library,
+      library,
       scheduler: this.scheduler,
       settings: this.settings,
       secrets: this.secrets,
@@ -415,7 +422,7 @@ export class AppSession {
       platform: process.platform,
       arch: process.arch,
       logsDir: this.logsDir,
-      getLibraryDir: () => this.library.dir,
+      getLibraryDir: () => library.dir,
       getTheme: () => this.host.snapshot.theme ?? 'system',
       setTheme: async (theme) => {
         nativeTheme.themeSource = theme

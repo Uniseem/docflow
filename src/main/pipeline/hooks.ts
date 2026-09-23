@@ -21,13 +21,15 @@ export function createPipelineHooks(input: {
   analyze: PdfWorkerHost
   compose: PdfWorkerHost
   env?: NodeJS.Dict<string>
+  /** Directory holding the bundled Noto Sans SC fonts. */
+  fontsDir?: string
   onChanged?: (manifest: DocumentManifest) => void
 }): PipelineHooks {
   const env = input.env ?? process.env
   return {
     ...(input.onChanged ? { onChanged: input.onChanged } : {}),
     inspect: (path, signal) => inspectStage(input.analyze, path, signal),
-    analyze: (path, signal) => analyzeStage(input.analyze, path, 1, signal),
+    analyze: (path, pages, signal) => analyzeStage(input.analyze, path, pages, signal),
     translate: async ({ analysis, manifest, workDir, signal, onProgress }) => {
       const provider = resolveProvider(
         input.settings.snapshot.providers,
@@ -75,7 +77,7 @@ export function createPipelineHooks(input: {
         },
         args.signal,
       ),
-    fonts: bundledFonts(),
+    fonts: bundledFonts(input.fontsDir),
     bilingual: () => input.settings.snapshot.pdf.bilingual,
     minFontScale: () => input.settings.snapshot.pdf.minFontScale,
   }

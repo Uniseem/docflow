@@ -137,7 +137,8 @@ export function walkTextOps(
         const tx = args.numbers[0] ?? 0
         const ty = args.numbers[1] ?? 0
         if (op === 'TD') state.leading = -ty
-        state.tlm = multiply(translate(tx, ty), state.tlm)
+        // Td translates in text space: T(tx, ty) × Tlm (PDF 32000 §9.4.2).
+        state.tlm = multiply(state.tlm, translate(tx, ty))
         state.tm = clone(state.tlm)
         break
       }
@@ -150,11 +151,11 @@ export function walkTextOps(
         break
       }
       case 'T*':
-        state.tlm = multiply(translate(0, -state.leading), state.tlm)
+        state.tlm = multiply(state.tlm, translate(0, -state.leading))
         state.tm = clone(state.tlm)
         break
       case "'":
-        state.tlm = multiply(translate(0, -state.leading), state.tlm)
+        state.tlm = multiply(state.tlm, translate(0, -state.leading))
         state.tm = clone(state.tlm)
         pushText(ops, bytes, tokens, argStart, i, state, formPath, seq)
         seq += 1
@@ -162,7 +163,7 @@ export function walkTextOps(
       case '"':
         state.wordSpacing = args.numbers[0] ?? state.wordSpacing
         state.charSpacing = args.numbers[1] ?? state.charSpacing
-        state.tlm = multiply(translate(0, -state.leading), state.tlm)
+        state.tlm = multiply(state.tlm, translate(0, -state.leading))
         state.tm = clone(state.tlm)
         pushText(ops, bytes, tokens, argStart, i, state, formPath, seq)
         seq += 1
