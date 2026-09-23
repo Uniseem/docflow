@@ -74,13 +74,13 @@
 - [x] M5-6 设置：通用、翻译服务（列表 + 详情 + 获取模型 + 检查 + 自定义 + 删除）、网络、高级、关于（检查更新）。
 - [x] M5-7 E2E 七个 spec（08.5）全部通过（本地用 `npm run build && electron-builder --dir` 产物）。
 - [ ] M5-8 用真实 DeepSeek Key 跑 5 篇真实论文，肉眼检查，记录问题到 `docs/worklog/` 并修复明显的版面问题。
-- [ ] M5-9 修复 M5 复查发现的问题（清单与已定方案见 `docs/worklog/2026-09-23-m5-review.md`）。
+- [x] M5-9 修复 M5 复查发现的问题（清单与已定方案见 `docs/worklog/2026-09-23-m5-review.md`）。
 
 验收：E2E 全绿；08.6 验收清单前三项通过；截图（浅色、深色各一张文档库与详情）放 `docs/screenshots/`。
 
 ## M6 打包与发布
 
-- [ ] M6-1 `scripts/third-party-notices.mjs` + `prebuild`；README 更新为 4.0 的安装与使用说明（含已知限制 3.15）。
+- [x] M6-1 `scripts/third-party-notices.mjs` + `prebuild`；README 更新为 4.0 的安装与使用说明（含已知限制 3.15）。
 - [ ] M6-2 `npm run dist` 在 macOS 与 Windows 各打一次，按 07.7 清单检查。
 - [ ] M6-3 打 `v4.0.0-beta.1` 标签，`release.yml` 跑通，从 Release 下载安装验证（macOS 一行命令、Windows 安装器）。
 - [ ] M6-4 修复 beta 发现的问题；`CHANGELOG.md` 整理；打 `v4.0.0`。

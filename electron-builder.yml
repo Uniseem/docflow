@@ -9,6 +9,7 @@ files:
   - out/**
   - package.json
   - '!**/*.map'
+  - '!**/node_modules/@napi-rs/**' # pdf.js optional native canvas; DOMMatrix is polyfilled
 extraResources:
   - from: resources/fonts
     to: fonts

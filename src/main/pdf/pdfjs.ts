@@ -1,3 +1,6 @@
+// Must run before pdf.js evaluates: it installs DOMMatrix, which pdf.js would take from
+// the native @napi-rs/canvas otherwise.
+import './dom-matrix'
 import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
 import { pathToFileURL } from 'node:url'

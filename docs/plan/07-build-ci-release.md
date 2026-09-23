@@ -14,6 +14,7 @@ files:
   - out/**
   - package.json
   - '!**/*.map'
+  - '!**/node_modules/@napi-rs/**' # pdf.js 的可选原生依赖；DOMMatrix 由 src/main/pdf/dom-matrix.ts 补齐
 extraResources:
   - from: resources/fonts
     to: fonts
