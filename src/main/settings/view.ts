@@ -1,5 +1,6 @@
 import { PRESETS, keyOptional } from '../../shared/presets'
-import type { Settings, ProviderConfig } from '../../shared/types'
+import type { Settings } from '../../shared/types'
+import type { SettingsView } from '../../shared/view'
 import type { SecretsStore } from './secrets'
 
 export function llmReady(
@@ -16,7 +17,7 @@ export function toSettingsView(
   settings: Settings,
   secrets: Pick<SecretsStore, 'keyConfigured' | 'keyMasked'>,
   env: NodeJS.Dict<string> = process.env,
-) {
+): SettingsView {
   return {
     ...settings,
     providers: settings.providers.map((provider) => ({
@@ -37,6 +38,3 @@ export function toSettingsView(
     },
   }
 }
-
-export type SettingsView = ReturnType<typeof toSettingsView>
-export type { ProviderConfig }

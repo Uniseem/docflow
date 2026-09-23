@@ -13,6 +13,11 @@ protocol.registerSchemesAsPrivileged([
   },
 ])
 
+// A DOCFLOW_DATA_DIR run (E2E, debugging) must not touch the real profile: host.json,
+// Chromium caches and the single-instance lock all live under userData.
+const dataDirOverride = process.env.DOCFLOW_DATA_DIR?.trim()
+if (dataDirOverride) app.setPath('userData', join(dataDirOverride, '.electron-user-data'))
+
 let mainWindow: BrowserWindow | null = null
 let session: AppSession | null = null
 const pendingOpen: string[] = []

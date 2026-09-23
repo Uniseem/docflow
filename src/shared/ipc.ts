@@ -36,6 +36,8 @@ export const channels = {
       libraryDir: z.string(),
       logsDir: z.string(),
       arch: z.string(),
+      theme: z.enum(['system', 'light', 'dark']),
+      dataDirFromEnv: z.boolean(),
     }),
   },
   'app:setTheme': {
@@ -49,6 +51,7 @@ export const channels = {
       z.object({ error: z.string() }),
     ]),
   },
+  'app:relaunch': { request: empty, response: empty },
   'settings:get': { request: empty, response: z.unknown() },
   'settings:update': { request: z.unknown(), response: z.unknown() },
   'secrets:set': {
@@ -171,6 +174,7 @@ export const channels = {
     response: empty,
   },
   'shell:openLogs': { request: empty, response: empty },
+  'shell:openNotices': { request: empty, response: empty },
 } as const
 
 export type ChannelName = keyof typeof channels
@@ -190,6 +194,9 @@ export function envelopeOk<T>(data: T): { ok: true; data: T } {
 export function envelopeErr(code: string, message: string, user: boolean) {
   return { ok: false as const, error: { code, message, user } }
 }
+
+/** Rejection value of `window.docflow.invoke`. A plain object because contextBridge drops custom Error properties. */
+export type IpcFailure = { code: string; message: string; user: boolean }
 
 export type DocflowApi = {
   invoke<K extends ChannelName>(channel: K, payload: ChannelRequest<K>): Promise<ChannelResponse<K>>

@@ -32,3 +32,13 @@ body {
 .titlebar-no-drag {
   -webkit-app-region: no-drag;
 }
+/* Overlays are portaled to the end of <body> and can cover the draggable title bar.
+   Electron hit-tests app regions, not stacking order, so without no-drag the part of a
+   drawer, backdrop or popover that overlaps the title bar swallows clicks. */
+[data-slot='modal-backdrop'],
+[data-slot='alert-dialog-backdrop'],
+[data-slot='drawer-backdrop'],
+[data-slot$='-popover'],
+[data-slot='popover-dialog'] {
+  -webkit-app-region: no-drag;
+}

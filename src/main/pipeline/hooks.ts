@@ -4,6 +4,7 @@ import type { DocumentLibrary } from '../library/library'
 import type { SettingsStore } from '../settings/settings'
 import type { TranslationPools } from '../translate/pool'
 import { fakeProvider } from '../translate/fake'
+import { withMockProviderUrl } from '../../shared/presets'
 import { ERROR_CODES, UserError } from '../../shared/errors'
 import type { ProviderConfig } from '../../shared/types'
 import { analyzeStage } from './stages/analyze'
@@ -88,7 +89,7 @@ function resolveProvider(
   env: NodeJS.Dict<string>,
 ): ProviderConfig {
   const found = providers.find((item) => item.id === id)
-  if (found) return found
+  if (found) return withMockProviderUrl(found, env.DOCFLOW_MOCK_PROVIDER_URL)
   if (env.DOCFLOW_FAKE_PROVIDERS === '1') return fakeProvider()
   throw new UserError(ERROR_CODES.not_found, '找不到这个翻译服务商。')
 }

@@ -13,6 +13,7 @@ import type { Logger } from '../log/logger'
 import {
   handleAppInfo,
   handleAppSetTheme,
+  handleAppRelaunch,
   handleDialogPickFolder,
   handleDialogPickPdfs,
   handleDocumentsCancel,
@@ -36,6 +37,7 @@ import {
   handleSettingsUpdate,
   handleShellOpenExternal,
   handleShellOpenLogs,
+  handleShellOpenNotices,
   type HandlerContext,
 } from './handlers'
 
@@ -48,6 +50,7 @@ export function createIpcHandlers(ctx: HandlerContext): IpcHandlers {
     'app:info': () => handleAppInfo(ctx),
     'app:setTheme': (req) => handleAppSetTheme(ctx, req),
     'app:checkUpdates': () => ctx.checkUpdates(),
+    'app:relaunch': () => handleAppRelaunch(ctx),
     'settings:get': () => handleSettingsGet(ctx),
     'settings:update': (req) => handleSettingsUpdate(ctx, req),
     'secrets:set': (req) => handleSecretsSet(ctx, req),
@@ -71,6 +74,7 @@ export function createIpcHandlers(ctx: HandlerContext): IpcHandlers {
     'library:change': (req) => handleLibraryChange(ctx, req),
     'shell:openExternal': (req) => handleShellOpenExternal(ctx, req),
     'shell:openLogs': () => handleShellOpenLogs(ctx),
+    'shell:openNotices': () => handleShellOpenNotices(ctx),
   }
 }
 

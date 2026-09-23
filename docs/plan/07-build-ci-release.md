@@ -79,6 +79,8 @@ publish: null
 
 主进程读取资源路径：`app.isPackaged ? join(process.resourcesPath, 'fonts') : join(app.getAppPath(), 'resources/fonts')`；pdf.js 的 `standardFontDataUrl`/`cMapUrl` 同理（开发时指向 `node_modules/pdfjs-dist/...`），注意 pdf.js 需要以 `/` 结尾的 URL 或路径字符串。
 
+E2E 启动的是 `electron-builder --dir` 产物，改渲染进程或主进程后必须重新 `npm run dist:dir`，否则测的是旧代码。
+
 ## 7.2 图标
 
 `build/icon.png`（1024×1024，从 `old` 分支 `apps/shared/AppIcon-1024.png` 取：`git show old:apps/shared/AppIcon-1024.png > build/icon.png`）。`scripts/make-icons.mjs` 用 `png2icons`（devDependency，纯 JS）生成 `build/icon.icns` 与 `build/icon.ico`；三者都提交到仓库，脚本只在换图时跑。

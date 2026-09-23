@@ -1,0 +1,24 @@
+import { expect, launchApp, tempDataDir, test } from './helpers'
+
+test('首次启动：空状态 → 添加 DeepSeek → 可用', async () => {
+  const dataDir = tempDataDir()
+  const { app, page } = await launchApp({ dataDir })
+  await expect(page.getByText('DocFlow 用大模型翻译。先在设置中添加一个服务商')).toBeVisible({
+    timeout: 20_000,
+  })
+  await page.getByText('添加大模型服务商…').click()
+  await expect(page.getByText('大模型服务商')).toBeVisible()
+  await page.getByTestId('add-provider').getByText('添加服务商').click()
+  await page.getByTestId('preset-deepseek').click()
+  await page.getByPlaceholder('粘贴 API Key').fill('test-key')
+  await page.getByText('保存', { exact: true }).click()
+  await page.getByText('获取模型列表…').click()
+  await expect(page.getByText('mock-chat').first()).toBeVisible({ timeout: 20_000 })
+  await page.getByText('mock-chat').first().click()
+  await page.getByText('确定', { exact: true }).click()
+  await page.getByText('检查', { exact: true }).click()
+  await expect(page.getByText(/可用/)).toBeVisible({ timeout: 20_000 })
+  await page.getByText('返回文档库').click()
+  await expect(page.getByText('把 PDF 拖到这里，或点按“新建翻译”。')).toBeVisible()
+  await app.close()
+})

@@ -248,11 +248,12 @@ export class AppSession {
     this.analyzeWorker.kill()
     this.composeWorker.kill()
     await this.host.update({ libraryDir: path })
-    await this.openLibrary(this.host.libraryDir())
+    await this.openLibrary(path)
     this.handlers = createIpcHandlers(this.handlerContext())
     registerIpc(this.handlers, this.logger)
     await this.scheduler.start()
     this.send('library:changed', { libraryDir: this.library.dir })
+    this.send('settings:changed', toSettingsView(this.settings.snapshot, this.secrets, this.env))
     return this.library.dir
   }
 
@@ -271,6 +272,7 @@ export class AppSession {
       arch: process.arch,
       logsDir: this.logsDir,
       getLibraryDir: () => this.library.dir,
+      getTheme: () => this.host.snapshot.theme ?? 'system',
       setTheme: async (theme) => {
         nativeTheme.themeSource = theme
         await this.host.update({ theme })
@@ -282,7 +284,12 @@ export class AppSession {
         await shell.openPath(path)
       },
       openExternal: (url) => shell.openExternal(url),
+      sendChanged: (item) => this.send('document:changed', item),
       sendRemoved: (id) => this.send('document:removed', { id }),
+      relaunch: () => {
+        app.relaunch()
+        app.quit()
+      },
     }
   }
 

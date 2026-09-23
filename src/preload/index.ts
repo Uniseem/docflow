@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
-import { PUSH_CHANNEL_NAMES, type DocflowApi } from '../shared/ipc'
+import { PUSH_CHANNEL_NAMES, type DocflowApi, type IpcFailure } from '../shared/ipc'
 
 const api: DocflowApi = {
   async invoke(channel, payload) {
@@ -8,10 +8,15 @@ const api: DocflowApi = {
       | { ok: false; error: { code: string; message: string; user: boolean } }
     if (result && typeof result === 'object' && 'ok' in result) {
       if (!result.ok) {
-        const error = new Error(result.error.message) as Error & { code: string; user: boolean }
-        error.code = result.error.code
-        error.user = result.error.user
-        throw error
+        // contextBridge only keeps `message` of a thrown Error, so reject with a plain object;
+        // renderer/api/invoke.ts turns it back into an Error that carries code and user.
+        const failure: IpcFailure = {
+          code: result.error.code,
+          message: result.error.message,
+          user: result.error.user,
+        }
+        // eslint-disable-next-line @typescript-eslint/only-throw-error
+        throw failure
       }
       return result.data as never
     }

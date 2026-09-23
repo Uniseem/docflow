@@ -7,6 +7,7 @@ import {
 import { ERROR_CODES, UserError } from '../../shared/errors'
 import type { DocumentLibrary } from '../library/library'
 import type { DocumentManifest } from '../../shared/types'
+import { ProviderError, userFacingProviderError } from '../translate/errors'
 
 export type PipelineFn = (id: string, signal: AbortSignal) => Promise<void>
 
@@ -178,11 +179,10 @@ export class Scheduler {
         return
       }
       const current = this.library.require(id)
-      const code =
-        error && typeof error === 'object' && 'code' in error ? String(error.code) : 'internal'
-      const message = error instanceof Error ? error.message : String(error)
-      const permanent =
-        error && typeof error === 'object' && 'permanent' in error ? Boolean(error.permanent) : true
+      const mapped = mapFailure(error)
+      const code = mapped.code
+      const message = mapped.message
+      const permanent = mapped.permanent
       const attempts = current.attempts + 1
       if (!permanent && attempts < MAX_ATTEMPTS) {
         const wait = RETRY_BASE_SECONDS * attempts
@@ -212,4 +212,21 @@ export class Scheduler {
 
 function isCancelled(error: unknown): boolean {
   return error instanceof UserError && error.code === ERROR_CODES.cancelled
+}
+
+function mapFailure(error: unknown): { code: string; message: string; permanent: boolean } {
+  if (error instanceof UserError) {
+    return { code: error.code, message: error.message, permanent: error.permanent }
+  }
+  if (error instanceof ProviderError) {
+    const permanent =
+      error.kind === 'credential' || error.kind === 'fatal' || error.kind === 'refused'
+    return { code: error.kind, message: userFacingProviderError(error), permanent }
+  }
+  const message = error instanceof Error ? error.message : String(error)
+  const code =
+    error && typeof error === 'object' && 'code' in error ? String(error.code) : 'internal'
+  const permanent =
+    error && typeof error === 'object' && 'permanent' in error ? Boolean(error.permanent) : true
+  return { code, message, permanent }
 }

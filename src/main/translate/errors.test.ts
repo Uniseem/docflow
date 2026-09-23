@@ -1,5 +1,11 @@
 import { describe, expect, test } from 'vitest'
-import { classifyHttpError, parseRetryAfter, redact, snippet } from './errors'
+import {
+  classifyHttpError,
+  parseRetryAfter,
+  redact,
+  snippet,
+  userFacingProviderError,
+} from './errors'
 
 describe('classifyHttpError', () => {
   test('status table', () => {
@@ -19,6 +25,13 @@ describe('classifyHttpError', () => {
     expect(classifyHttpError({ status: 400, body: 'model not found' }).kind).toBe('fatal')
     expect(classifyHttpError({ status: 400, body: 'too many requests' }).kind).toBe('rateLimited')
     expect(classifyHttpError({ status: 400, body: 'nope' }).kind).toBe('rejected')
+  })
+
+  test('userFacingProviderError uses Chinese for credential and missing model', () => {
+    const cred = classifyHttpError({ status: 401, body: 'unauthorized' })
+    expect(userFacingProviderError(cred)).toContain('API Key')
+    const missing = classifyHttpError({ status: 404, body: 'The model does not exist' })
+    expect(userFacingProviderError(missing)).toContain('模型')
   })
 
   test('rateLimited defaults Retry-After to 5s and caps at 300s', () => {

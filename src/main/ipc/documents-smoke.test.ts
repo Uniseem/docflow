@@ -91,6 +91,7 @@ describe('documents:create smoke', () => {
       arch: 'arm64',
       logsDir: join(dir, 'logs'),
       getLibraryDir: () => dir,
+      getTheme: () => 'system' as const,
       setTheme: () => Promise.resolve(),
       checkUpdates: () =>
         Promise.resolve({ latest: '4.0.0', url: 'https://example', newer: false }),
@@ -98,7 +99,9 @@ describe('documents:create smoke', () => {
       reveal: () => undefined,
       openPath: () => Promise.resolve(),
       openExternal: () => Promise.resolve(),
+      sendChanged: () => undefined,
       sendRemoved: () => undefined,
+      relaunch: () => undefined,
     }
     const created = await handleDocumentsCreate(ctx, {
       paths: [join(process.cwd(), 'tests/fixtures/colored-text.pdf')],

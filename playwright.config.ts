@@ -6,5 +6,6 @@ export default defineConfig({
   workers: 1,
   retries: process.env.CI ? 1 : 0,
   reporter: [['list'], ['html', { open: 'never' }]],
+  globalSetup: './tests/e2e/global-setup.ts',
   use: { trace: 'retain-on-failure' },
 })

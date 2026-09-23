@@ -90,6 +90,13 @@
 6. `settings.spec`：修改并发、代理、提示词、主题 → 重启后保留；更改文档库位置 → 新库为空、改回后文档还在。
 7. `delete.spec`：删除完成的文档 → 目录消失、列表更新。
 
+约定（M5 实测，见 `docs/worklog/2026-09-22-m5-ui.md`）：
+
+- 启动的是 `electron-builder --dir` 产物，不是 `npm run dev`。改 `src/renderer` 后必须重打，否则 DOM 与源码不一致。
+- HeroUI 3 的 `Button` 常常没有 `role="button"`，也不转发 `data-testid`。优先 `getByText`；列表行用 `data-testid="document-row-<id>"` 与 `data-status`。
+- 侧栏筛选文案「已完成」始终存在，不能当翻译完成判定。
+- 改文档库位置：`DOCFLOW_E2E_FOLDER_PATH` 绕过选文件夹对话框；有它时 `dataDirFromEnv` 为 false，设置页「更改位置」可点。
+
 ## 8.6 验收清单（发布前人工）
 
 - [ ] 5 篇真实论文（两栏、含公式图表；至少一篇有彩色标题背景、一篇有表格）用 DeepSeek 跑通，逐页翻看：正文全部翻译、公式位置合理、图表未被覆盖、标题与图注翻译。

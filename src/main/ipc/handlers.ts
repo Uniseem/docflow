@@ -1,4 +1,6 @@
+import { existsSync } from 'node:fs'
 import { mkdir } from 'node:fs/promises'
+import { join } from 'node:path'
 import { ERROR_CODES, UserError, isUserError } from '../../shared/errors'
 import { MAX_PROVIDERS } from '../../shared/constants'
 import type { ChannelRequest, ChannelResponse } from '../../shared/ipc'
@@ -15,6 +17,7 @@ import { checkModel, listModels } from '../translate/providers'
 import type { FetchFn } from '../translate/http'
 import type { TranslationPools } from '../translate/pool'
 import { fakeProvider } from '../translate/fake'
+import { withMockProviderUrl } from '../../shared/presets'
 
 export type HandlerContext = {
   library: DocumentLibrary
@@ -30,13 +33,16 @@ export type HandlerContext = {
   arch: string
   logsDir: string
   getLibraryDir: () => string
+  getTheme: () => 'system' | 'light' | 'dark'
   setTheme: (theme: 'system' | 'light' | 'dark') => Promise<void>
   checkUpdates: () => Promise<ChannelResponse<'app:checkUpdates'>>
   changeLibrary: (path: string) => Promise<string>
   reveal: (path: string) => void
   openPath: (path: string) => Promise<void>
   openExternal: (url: string) => Promise<void>
+  sendChanged: (item: ChannelResponse<'documents:get'>) => void
   sendRemoved: (id: string) => void
+  relaunch: () => void
 }
 
 function running(ctx: HandlerContext): Set<string> {
@@ -49,7 +55,7 @@ function view(ctx: HandlerContext) {
 
 function resolveProvider(ctx: HandlerContext, id: string): ProviderConfig {
   const found = ctx.settings.snapshot.providers.find((item) => item.id === id)
-  if (found) return found
+  if (found) return withMockProviderUrl(found, ctx.env.DOCFLOW_MOCK_PROVIDER_URL)
   if (ctx.env.DOCFLOW_FAKE_PROVIDERS === '1' && id === 'fake') return fakeProvider()
   throw new UserError(ERROR_CODES.not_found, '找不到这个翻译服务商。')
 }
@@ -81,6 +87,7 @@ export async function handleDocumentsCreate(
         ...(req.title ? { title: req.title } : {}),
       })
       created.push(item)
+      ctx.sendChanged(item)
     } catch (error) {
       failed.push({
         path,
@@ -119,7 +126,9 @@ export async function handleDocumentsRename(
   req: ChannelRequest<'documents:rename'>,
 ): Promise<ChannelResponse<'documents:rename'>> {
   const renamed = await ctx.library.rename(req.id, req.title)
-  return ctx.library.get(renamed.id, ctx.scheduler.isRunning(renamed.id))
+  const summary = ctx.library.get(renamed.id, ctx.scheduler.isRunning(renamed.id))
+  ctx.sendChanged(summary)
+  return summary
 }
 
 export async function handleDocumentsRetry(
@@ -127,7 +136,9 @@ export async function handleDocumentsRetry(
   req: ChannelRequest<'documents:retry'>,
 ): Promise<ChannelResponse<'documents:retry'>> {
   const saved = await ctx.scheduler.retry(req.id, ctx.settings.snapshot.translation)
-  return ctx.library.get(saved.id, ctx.scheduler.isRunning(saved.id))
+  const summary = ctx.library.get(saved.id, ctx.scheduler.isRunning(saved.id))
+  ctx.sendChanged(summary)
+  return summary
 }
 
 export async function handleDocumentsCancel(
@@ -135,7 +146,9 @@ export async function handleDocumentsCancel(
   req: ChannelRequest<'documents:cancel'>,
 ): Promise<ChannelResponse<'documents:cancel'>> {
   const saved = await ctx.scheduler.cancel(req.id)
-  return ctx.library.get(saved.id, ctx.scheduler.isRunning(saved.id))
+  const summary = ctx.library.get(saved.id, ctx.scheduler.isRunning(saved.id))
+  ctx.sendChanged(summary)
+  return summary
 }
 
 export async function handleDocumentsDelete(
@@ -180,6 +193,10 @@ export function handleDocumentsReveal(
   ctx: HandlerContext,
   req: ChannelRequest<'documents:reveal'>,
 ): ChannelResponse<'documents:reveal'> {
+  if (!req.id) {
+    ctx.reveal(ctx.getLibraryDir())
+    return {}
+  }
   ctx.reveal(ctx.library.pathFor(req.id, req.kind ?? 'folder'))
   return {}
 }
@@ -199,6 +216,8 @@ export function handleAppInfo(ctx: HandlerContext): ChannelResponse<'app:info'> 
     libraryDir: ctx.getLibraryDir(),
     logsDir: ctx.logsDir,
     arch: ctx.arch,
+    theme: ctx.getTheme(),
+    dataDirFromEnv: Boolean(ctx.env.DOCFLOW_DATA_DIR) && !ctx.env.DOCFLOW_E2E_FOLDER_PATH,
   }
 }
 
@@ -290,7 +309,7 @@ function draftFromRequest(
     baseUrl: req.baseUrl,
   }
   if (req.providerId) input.providerId = req.providerId
-  return draftProvider(ctx, input)
+  return withMockProviderUrl(draftProvider(ctx, input), ctx.env.DOCFLOW_MOCK_PROVIDER_URL)
 }
 
 export async function handleProvidersListModels(
@@ -322,6 +341,8 @@ export async function handleDialogPickFolder(
   ctx: HandlerContext,
   req: ChannelRequest<'dialog:pickFolder'>,
 ): Promise<ChannelResponse<'dialog:pickFolder'>> {
+  const e2e = ctx.env.DOCFLOW_E2E_FOLDER_PATH
+  if (e2e) return { path: e2e }
   return pickFolder(ctx.dialog, req.title, req.message)
 }
 
@@ -349,5 +370,22 @@ export async function handleShellOpenLogs(
 ): Promise<ChannelResponse<'shell:openLogs'>> {
   await mkdir(ctx.logsDir, { recursive: true })
   await ctx.openPath(ctx.logsDir)
+  return {}
+}
+
+export function handleAppRelaunch(ctx: HandlerContext): ChannelResponse<'app:relaunch'> {
+  ctx.relaunch()
+  return {}
+}
+
+export async function handleShellOpenNotices(
+  ctx: HandlerContext,
+): Promise<ChannelResponse<'shell:openNotices'>> {
+  const candidates = [
+    join(process.cwd(), 'THIRD_PARTY_NOTICES.md'),
+    join(process.resourcesPath, 'THIRD_PARTY_NOTICES.md'),
+  ]
+  const found = candidates.find((path) => existsSync(path))
+  if (found) await ctx.openPath(found)
   return {}
 }

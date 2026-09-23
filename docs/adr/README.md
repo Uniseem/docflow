@@ -12,3 +12,4 @@
 | [0006](0006-raster-inline-objects.md)          | 行内公式等不可翻译对象用栅格化贴图保留位置                               | 已废弃（被 0008 取代） |
 | [0007](0007-unsigned-distribution-and-ci.md)   | 不签名分发；macOS 用 pkg + dmg，Windows 用 NSIS；CI 只依赖 Node          | 已采纳                 |
 | [0008](0008-content-stream-rewrite.md)         | 写回采用内容流改写（PDFMathTranslate 方式），公式用原字体重绘            | 已采纳                 |
+| [0009](0009-packed-renderer-loading.md)        | 沙箱 preload 把 zod 打进 CJS；渲染进程保持 module 脚本与严格 CSP         | 已采纳                 |

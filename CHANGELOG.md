@@ -15,10 +15,13 @@
 - PDF 解析：inspect、字形/行/栏/公式/段落、表单引用、analyze worker 与调试脚本。
 - PDF 写回：内容流词法分析与遍历、CJK 字体嵌入、译文排版、公式重绘、双语 PDF 与校验。
 - 文档库、任务调度、PDF 流水线与 IPC：`documents:create` 可跑通 inspect→翻译→写回，产出中文 PDF 与双语 PDF。
+- 渲染进程界面：文档库、新建翻译、详情预览与导出、设置（服务商/网络/高级/关于）；E2E 七个场景通过。
+- 打包后窗口可挂上 React：沙箱 preload 把 zod 打进 CJS（见 ADR-0009）。
 
 ### 变更
 
 - 项目重建：主分支清空，旧代码移至 `old` 分支；新建标准仓库结构与 4.0 规划（Electron + React + HeroUI 3）。
+- 设置了 `DOCFLOW_DATA_DIR` 时 Electron `userData` 也改到该目录下，E2E 不再改写真实用户目录里的 `host.json`。
 
 ## [3.1.0] - 2026-09-12
 

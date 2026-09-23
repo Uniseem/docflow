@@ -212,3 +212,11 @@ export function resolvedBaseUrl(type: ProviderType, baseUrl: string, mockRoot?: 
   if (mockRoot) return mockBaseUrl(type, mockRoot)
   return baseUrl.replace(/\/$/, '')
 }
+
+export function withMockProviderUrl<T extends { type: ProviderType; baseUrl: string }>(
+  provider: T,
+  mockRoot?: string,
+): T {
+  if (!mockRoot) return provider
+  return { ...provider, baseUrl: mockBaseUrl(provider.type, mockRoot) }
+}

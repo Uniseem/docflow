@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest'
-import { PRESETS, keyOptional, mockBaseUrl, uniqueProviderId } from './presets'
+import { PRESETS, keyOptional, mockBaseUrl, uniqueProviderId, withMockProviderUrl } from './presets'
 
 describe('PRESETS', () => {
   test('has 20 unique ids covering the four interface types', () => {
@@ -30,5 +30,16 @@ describe('PRESETS', () => {
     expect(mockBaseUrl('azure', mock)).toBe('http://127.0.0.1:38111/v1')
     expect(mockBaseUrl('anthropic', mock)).toBe('http://127.0.0.1:38111/anthropic')
     expect(mockBaseUrl('gemini', mock)).toBe('http://127.0.0.1:38111/gemini')
+  })
+
+  test('withMockProviderUrl rewrites baseUrl when mock root is set', () => {
+    const provider = {
+      type: 'openai' as const,
+      baseUrl: 'https://api.deepseek.com/v1',
+    }
+    expect(withMockProviderUrl(provider).baseUrl).toBe('https://api.deepseek.com/v1')
+    expect(withMockProviderUrl(provider, 'http://127.0.0.1:38111').baseUrl).toBe(
+      'http://127.0.0.1:38111/v1',
+    )
   })
 })

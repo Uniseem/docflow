@@ -240,7 +240,7 @@ audit=false
 ## 2.6 安全设置
 
 - 主窗口 `webPreferences`：`{ preload, sandbox: true, contextIsolation: true, nodeIntegration: false, webSecurity: true, plugins: true, spellcheck: false }`。`plugins: true` 是为了 iframe 里用 Chromium 内置 PDF 查看器。
-- `index.html` 的 CSP（meta 标签，开发与生产一致）：
+- `index.html` 的 CSP（meta 标签，开发与生产一致；生产是 asar 里的 `<script type="module">`，`'self'` 能匹配，见 ADR-0009）：
 
   ```
   default-src 'self';
@@ -253,7 +253,7 @@ audit=false
   worker-src 'self' blob:;
   ```
 
-  开发模式 Vite 需要 `connect-src ws://localhost:*`，通过 electron-vite 的 `process.env.ELECTRON_RENDERER_URL` 判断后注入。
+  开发模式 Vite 需要 `connect-src ws://localhost:*`，通过 Vite 插件在非 production 时注入。`script-src` 不含 `'unsafe-eval'`：zod 4 会先试探 `new Function`，被拦时自动退回非 JIT 路径，控制台那条 CSP 报告可以忽略。
 
 - `docflow://` 协议处理器（`app/protocol.ts`）：只接受 `docflow://library/<相对路径>`，把相对路径 `path.resolve(libraryDir, rel)` 后检查仍在 `libraryDir` 内且不含符号链接逃逸（`fs.realpath` 比较），否则 404；只允许 `.pdf`；用 `net.fetch(pathToFileURL(file))` 返回，附 `Content-Type: application/pdf` 与 `Cache-Control: no-store`。
 - 所有 `shell.openExternal` 只放行 `https:` 与 `mailto:`。
@@ -270,13 +270,14 @@ audit=false
 
 ## 2.8 环境变量
 
-| 变量                        | 作用                                                   |
-| --------------------------- | ------------------------------------------------------ |
-| `DOCFLOW_DATA_DIR`          | 覆盖文档库目录（优先于 host.json）；E2E 用             |
-| `DOCFLOW_FAKE_PROVIDERS=1`  | 翻译不发网络请求，返回确定性的假译文（04 章 4.13）     |
-| `DOCFLOW_MOCK_PROVIDER_URL` | 存在时把所有预设的 base_url 指向它（E2E 用 mock 服务） |
-| `DOCFLOW_LOG_LEVEL`         | `debug/info/warn/error`                                |
-| `DOCFLOW_E2E_SAVE_PATH`     | 存在时保存对话框直接返回该路径（E2E 用）               |
+| 变量                        | 作用                                                                                                                                      |
+| --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `DOCFLOW_DATA_DIR`          | 覆盖文档库目录（优先于 host.json）；同时把 Electron `userData` 改到 `<dir>/.electron-user-data`，E2E 不碰真实的 host.json、缓存与单实例锁 |
+| `DOCFLOW_FAKE_PROVIDERS=1`  | 翻译不发网络请求，返回确定性的假译文（04 章 4.13）                                                                                        |
+| `DOCFLOW_MOCK_PROVIDER_URL` | 存在时把所有预设的 base_url 指向它（E2E 用 mock 服务）                                                                                    |
+| `DOCFLOW_LOG_LEVEL`         | `debug/info/warn/error`                                                                                                                   |
+| `DOCFLOW_E2E_SAVE_PATH`     | 存在时保存对话框直接返回该路径（E2E 用）                                                                                                  |
+| `DOCFLOW_E2E_FOLDER_PATH`   | 存在时选文件夹对话框直接返回该路径；同时让 `app:info.dataDirFromEnv` 为 false，以便 E2E 改文档库位置                                      |
 
 ## 2.9 各配置文件全文
 
@@ -287,6 +288,19 @@ import { defineConfig, externalizeDepsPlugin } from 'electron-vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import { resolve } from 'node:path'
+
+function devCsp() {
+  return {
+    name: 'dev-csp',
+    transformIndexHtml(html: string) {
+      if (process.env.NODE_ENV === 'production') return html
+      return html.replace(
+        "connect-src 'self' blob: data:;",
+        "connect-src 'self' blob: data: ws://localhost:* http://localhost:* ws://127.0.0.1:* http://127.0.0.1:*;",
+      )
+    },
+  }
+}
 
 export default defineConfig({
   main: {
@@ -308,18 +322,18 @@ export default defineConfig({
     resolve: { alias: { '@shared': resolve(__dirname, 'src/shared') } },
   },
   preload: {
-    plugins: [externalizeDepsPlugin()],
+    plugins: [externalizeDepsPlugin({ exclude: ['zod'] })],
     build: {
       rollupOptions: {
         input: { index: resolve(__dirname, 'src/preload/index.ts') },
-        // 沙箱 preload 必须是 CommonJS
+        // 沙箱 preload 必须是 CommonJS；zod 必须打进 bundle，不能 require node_modules
         output: { format: 'cjs', entryFileNames: '[name].cjs' },
       },
     },
     resolve: { alias: { '@shared': resolve(__dirname, 'src/shared') } },
   },
   renderer: {
-    plugins: [react(), tailwindcss()],
+    plugins: [react(), tailwindcss(), devCsp()],
     build: { rollupOptions: { input: { index: resolve(__dirname, 'src/renderer/index.html') } } },
     resolve: {
       alias: {
@@ -335,8 +349,9 @@ export default defineConfig({
 
 - `"type": "module"` + 主进程 ESM 输出：`pdfjs-dist` 是 ESM-only，这样主进程与 worker 可以直接 `import * as pdfjs from 'pdfjs-dist/legacy/build/pdf.mjs'`。ESM 主进程里没有 `__dirname`，路径用 `fileURLToPath(new URL('../preload/index.cjs', import.meta.url))`。
 - worker 作为主进程的额外入口打包（`out/main/workers/analyze.mjs`），用 `new Worker(new URL('./workers/analyze.mjs', import.meta.url))` 启动。M0 已验证：electron-vite 5 在 `dev` 与 `build` 下都会把 `out/main/workers/{analyze,compose}.mjs` 打出来，路径一致，无需改 `?nodeWorker` 或 `utilityProcess.fork`。
-- 沙箱 preload 必须是 CJS（Electron 限制），所以 preload 单独指定 `format: 'cjs'`、后缀 `.cjs`。
+- 沙箱 preload 必须是 CJS（Electron 限制），所以 preload 单独指定 `format: 'cjs'`、后缀 `.cjs`。沙箱里不能 `require('zod')`，因此 `externalizeDepsPlugin({ exclude: ['zod'] })` 把 zod 打进 preload（ADR-0009）。
 - 开发模式 CSP：renderer 用 Vite 插件把 `connect-src` 扩成允许 `ws://localhost:*` / `http://localhost:*`（生产构建 `NODE_ENV=production` 不改）。
+- 生产窗口：`loadFile(out/renderer/index.html)`，文件在 asar 里，Vite 产出的 `<script type="module" crossorigin>` 原样可用。开发窗口：`ELECTRON_RENDERER_URL`。
 
 ### `tsconfig.json`（基础）
 

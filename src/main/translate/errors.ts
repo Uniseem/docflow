@@ -50,6 +50,15 @@ export function snippet(text: string, limit = SNIPPET_CHARS): string {
 
 export function userFacingProviderError(error: ProviderError): string {
   const status = error.status === undefined ? '' : `（HTTP ${error.status}）`
+  if (error.kind === 'credential') {
+    if (error.message.includes('API Key')) return error.message
+    return `API Key 无效或已欠费${status}。请在设置中检查密钥。`
+  }
+  const blob = `${error.message} ${error.snippet}`.toLowerCase()
+  if (error.kind === 'fatal' && /model|模型/.test(blob)) {
+    return `找不到这个模型${status}。请在设置中重新选择。`
+  }
+  if (error.kind === 'fatal') return `翻译服务返回了无法恢复的错误${status}。`
   const detail = error.snippet ? `：${error.snippet}` : ''
   return `翻译服务返回错误${status}${detail}`
 }

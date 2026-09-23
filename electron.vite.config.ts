@@ -36,7 +36,7 @@ export default defineConfig({
     resolve: { alias: { '@shared': resolve(__dirname, 'src/shared') } },
   },
   preload: {
-    plugins: [externalizeDepsPlugin()],
+    plugins: [externalizeDepsPlugin({ exclude: ['zod'] })],
     build: {
       rollupOptions: {
         input: { index: resolve(__dirname, 'src/preload/index.ts') },

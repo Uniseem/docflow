@@ -49,6 +49,7 @@ async function setup() {
   const revealed: string[] = []
   const opened: string[] = []
   const removed: string[] = []
+  const changed: string[] = []
   const dialog: DialogHost = {
     showOpenDialog: () => Promise.resolve({ canceled: true, filePaths: [] }),
     showSaveDialog: ({ defaultPath }) =>
@@ -71,6 +72,7 @@ async function setup() {
     arch: 'arm64',
     logsDir: join(dir, 'logs'),
     getLibraryDir: () => dir,
+    getTheme: () => 'system' as const,
     setTheme: () => Promise.resolve(),
     checkUpdates: () => Promise.resolve({ latest: '4.0.0', url: 'https://example', newer: false }),
     changeLibrary: (path) => Promise.resolve(path),
@@ -82,22 +84,27 @@ async function setup() {
       return Promise.resolve()
     },
     openExternal: () => Promise.resolve(),
+    sendChanged: (item) => {
+      changed.push(item.id)
+    },
     sendRemoved: (id) => {
       removed.push(id)
     },
+    relaunch: () => undefined,
   }
   const pdf = join(dir, 'paper.pdf')
   await writeFile(pdf, '%PDF-1.4 fixture')
-  return { dir, lib, ctx, pdf, hold, revealed, opened, removed }
+  return { dir, lib, ctx, pdf, hold, revealed, opened, removed, changed }
 }
 
 describe('documents handlers', () => {
   test('create / list / get / events / rename', async () => {
-    const { ctx, pdf, hold } = await setup()
+    const { ctx, pdf, hold, changed } = await setup()
     const created = await handleDocumentsCreate(ctx, { paths: [pdf], translator, title: 'Paper' })
     expect(created.created).toHaveLength(1)
     expect(created.failed).toHaveLength(0)
     const id = created.created[0]!.id
+    expect(changed).toContain(id)
     const listed = handleDocumentsList(ctx, { filter: 'all' })
     expect(listed.counts.all).toBe(1)
     expect(listed.items[0]?.title).toBe('Paper')

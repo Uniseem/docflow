@@ -174,6 +174,13 @@ async function translateBatch(
     if (hit) cached.push({ id: member.id, text: hit, kept: false })
     else pending.push(member)
   }
+  if (cached.length > 0) {
+    ctx.onEvent({
+      stage: 'translate',
+      level: 'info',
+      message: `缓存命中 ${cached.length} 段`,
+    })
+  }
   if (pending.length === 0) return cached
   try {
     const got = await requestMembers(pending, 'standard', ctx)

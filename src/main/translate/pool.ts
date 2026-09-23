@@ -4,6 +4,7 @@ import {
   REQUEST_TIMEOUT_MS,
 } from '../../shared/constants'
 import type { ProviderConfig } from '../../shared/types'
+import { withMockProviderUrl } from '../../shared/presets'
 import { ProviderError } from './errors'
 import type { FetchFn } from './http'
 import { type Clock, KeyRing, degradeCredential, systemClock } from './keys'
@@ -45,6 +46,10 @@ export class ProviderPool {
     this.#current = provider.concurrency
     this.#clock = options.clock ?? systemClock
     this.#appVersion = options.appVersion ?? '4.0.0'
+  }
+
+  useProvider(provider: ProviderConfig): void {
+    this.provider = provider
   }
 
   stats(): PoolStats {
@@ -194,15 +199,19 @@ export class TranslationPools {
   ) {}
 
   get(provider: ProviderConfig): ProviderPool {
-    const existing = this.#pools.get(provider.id)
-    if (existing) return existing
-    const ring = new KeyRing(this.readRawKey(provider.id) ?? '', this.clock)
-    const pool = new ProviderPool(provider, ring, this.fetchFn, {
+    const resolved = withMockProviderUrl(provider, process.env.DOCFLOW_MOCK_PROVIDER_URL)
+    const existing = this.#pools.get(resolved.id)
+    if (existing) {
+      existing.useProvider(resolved)
+      return existing
+    }
+    const ring = new KeyRing(this.readRawKey(resolved.id) ?? '', this.clock)
+    const pool = new ProviderPool(resolved, ring, this.fetchFn, {
       clock: this.clock,
       appVersion: this.appVersion,
     })
-    this.#rings.set(provider.id, ring)
-    this.#pools.set(provider.id, pool)
+    this.#rings.set(resolved.id, ring)
+    this.#pools.set(resolved.id, pool)
     return pool
   }
 
