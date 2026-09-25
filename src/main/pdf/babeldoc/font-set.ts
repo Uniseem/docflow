@@ -3,6 +3,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import fontkit, { type Font as FontkitFont } from '@cantoo/fontkit'
+import { ERROR_CODES, PermanentError } from '../../../shared/errors'
 import { bundledFont } from './fonts'
 
 export class BundledFontSet {
@@ -18,9 +19,15 @@ export class BundledFontSet {
     let entry = this.#fonts.get(file)
     if (!entry) {
       bundledFont(file)
-      const bytes = new Uint8Array(readFileSync(join(this.#dir, file)))
+      let bytes: Uint8Array
+      try {
+        bytes = new Uint8Array(readFileSync(join(this.#dir, file)))
+      } catch (error) {
+        // A missing font file is an installation problem, not an internal error.
+        throw Object.assign(new PermanentError(ERROR_CODES.font_embed_failed), { cause: error })
+      }
       const font = fontkit.create(bytes)
-      if (!('glyphForCodePoint' in font)) throw new Error(`${file} is a font collection`)
+      if (!font || !('glyphForCodePoint' in font)) throw new Error(`${file} is not a single font`)
       entry = { bytes, font }
       this.#fonts.set(file, entry)
     }
