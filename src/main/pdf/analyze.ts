@@ -29,8 +29,8 @@ import { unicodeSource, type UnicodeSource } from './pdf2zh/unicode'
 export type AnalyzeOptions = ParseOptions & {
   /** 0-based pages to analyse; the others are left as they are (BabelDOC pages option). */
   pages?: readonly number[] | null
-  /** auto_enable_ocr_workaround (DetectScannedFile). */
-  autoOcr?: boolean
+  /** DetectScannedFile found an OCR'd scan and the OCR workaround is on. */
+  ocrWorkaround?: boolean
 }
 
 export async function analyzePdf(
@@ -142,6 +142,7 @@ export async function analyzePdf(
     pages: inspection.pages,
     pageSizes: inspection.pageSizes,
     units,
+    ocrWorkaround: options.ocrWorkaround ?? false,
     stats: {
       chars,
       paragraphs: texts.length,

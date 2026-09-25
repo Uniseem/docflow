@@ -55,8 +55,10 @@ ADR-0017 只从 BabelDOC 搬了修 pdf2zh 毛病的部分（颜色、排版、�
 
 ### 5. 扫描件
 
-- inspect 只在完全没有文字（`textChars == 0`）时报 `scanned_pdf`；原来「可见字形太少」的判定去掉，改由分析阶段照 `DetectScannedFile` 判定：对所选页 72 dpi 渲染（MuPDF.js，灰度），去掉全部文字算子后再渲染，SSIM（skimage 默认：7×7 均匀窗、样本协方差、K1 0.01、K2 0.03、data_range 255）> 0.95 记为扫描页；提前结束的条件照抄；扫描页 ≥ 80% 为扫描件。
-- 设置「自动处理带文字层的扫描件」对应 `auto_enable_ocr_workaround`（默认关，与 pdf2zh-next 相同）：关时报 `scanned_pdf`（文案提示可以打开这个设置）；开时启用 OCR workaround：每段画白底（段落框与其版面框的并集，线宽 0.1），译文一律黑色，不用样式占位符。
+- inspect 的「文字太少」阈值不变（抽样 < 200 字且平均每页 < 25 字 → `scanned_pdf`），但不可见文字（`3 Tr`，OCR 文字层）也算进去，让带 OCR 文字层的扫描件走到下一步；完全是图片的扫描件仍报 `scanned_pdf`。
+- 版面检测之前照 `DetectScannedFile` 判定（`src/main/pdf/scanned.ts`）：对所选页按 `with_pixel_budget`（72 dpi，最多 1200 万像素）用 MuPDF.js 渲染，按 BabelDOC 的写法转灰度（`[:, :, ::-1]` 后 `cv2.COLOR_RGB2GRAY` 的定点系数），把该页与它画的表单换成去掉文字的 `q {ops_base}Q` 后再渲染一次，SSIM（skimage 默认：7×7 均匀窗、样本协方差、K1 0.01、K2 0.03、data_range 255，去 3 像素边后取平均）> 0.95 记为扫描页；提前结束的条件照抄（单页文档因此永远不判为扫描件）；扫描页 ≥ 80% 为扫描件。灰度与 SSIM 已对照 PyMuPDF + OpenCV + skimage 0.26 逐像素、到 1e-12 一致。
+- **多加的一个条件**：该页图片（MuPDF 结构化文本的 image block）覆盖 ≥ 50% 页面，才去算 SSIM。原因：只有几段字的普通页，去掉文字后 SSIM 也高于 0.95（Letter 页一段字是 0.964，`long.pdf` 每页都是），BabelDOC 会把这种文档报成扫描件——pdf2zh-next 用户常遇到的「Scanned PDF detected」误报。扫描件每页都是整页图片，这个条件不影响它们；没有大图的页也就不用渲染，普通文档的这一步只要几十毫秒。
+- 设置「自动处理带文字层的扫描件」对应 `auto_enable_ocr_workaround`（默认关，与 pdf2zh-next 相同）：关时报 `scanned_with_text`（文案提示可以打开这个设置）；开时启用 OCR workaround：每段画白底（段落框与其版面框的并集，线宽 0.1），译文一律黑色，不用样式占位符。
 
 ## 没有采用的
 

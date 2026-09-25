@@ -12,6 +12,7 @@ import { fakeFetch, fakeProvider } from '../translate/fake'
 import { analyzePdf } from '../pdf/analyze'
 import { composePdf } from '../pdf/compose'
 import { inspectPdf } from '../pdf/inspect'
+import { detectScanned } from '../pdf/scanned'
 import { detectPage } from '../pdf/pdf2zh/detect'
 import { fakeTranslations } from '../../../tests/unit/fake-translations'
 import { LAYOUT_MODEL } from '../../../tests/unit/pdf2zh-reference'
@@ -25,6 +26,7 @@ const fonts = bundledFonts()
 function inProcessHooks(): PipelineHooks {
   return {
     inspect: (path) => inspectPdf(path),
+    scan: (path, _pages, selected) => detectScanned(path, selected),
     // The real layout model in-process: MuPDF.js renders, onnxruntime-web detects.
     layout: async (path, pages, _selected, _signal, onPage) => {
       const layouts = []

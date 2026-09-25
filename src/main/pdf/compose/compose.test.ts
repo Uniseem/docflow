@@ -232,6 +232,60 @@ describe('composePdf (pdf2zh write-back)', () => {
     expect(content).toMatch(/q [^B]*\b0\.8 0\.1 0\.1 rg BT \/DocFlow-/)
   })
 
+  test('OCR workaround: black translations on white backgrounds, the page picture kept', async () => {
+    const sourcePath = fixture('ocr-scan')
+    // Three paragraphs per page (DocLayout-YOLO image space: origin top left, 72 dpi).
+    const box = (top: number) => ({
+      name: 'plain text',
+      conf: 0.9,
+      xyxy: [66, top, 545, top + 36] as [number, number, number, number],
+    })
+    const layouts = Array.from({ length: 3 }, () => ({
+      width: 612,
+      height: 792,
+      boxes: [box(57), box(105), box(153)],
+    }))
+    const analysis = await analyzePdf(sourcePath, layouts, { ocrWorkaround: true })
+    expect(analysis.ocrWorkaround).toBe(true)
+    const translations = fakeTranslations(analysis, { richText: false })
+    const dir = await mkdtemp(join(tmpdir(), 'df-compose-'))
+    const mono = join(dir, 'mono.pdf')
+    const result = await composePdf({
+      sourcePath,
+      monoPath: mono,
+      dualPath: null,
+      analysis,
+      translations,
+      fonts: { dir: FONTS_DIR },
+    })
+    expect(result.writtenPages).toEqual([0, 1, 2])
+    const doc = await loadPdfLib(await readFile(mono))
+    const content = Buffer.from(
+      streamBytes(doc.context.lookup(doc.getPages()[0]!.node.get(PDFName.of('Contents')))),
+    ).toString('latin1')
+    // PDFCreater._render_rectangle(WHITE, line width 0.1) before any text, then BLACK text.
+    const rectangles = content.match(
+      /q 1 g 1 G {2}0\.100000 w [\d.]+ [\d.]+ [\d.]+ [\d.]+ re {2}f {2}n Q/g,
+    )
+    expect(rectangles).toHaveLength(3)
+    expect(content.indexOf('re  f  n Q')).toBeLessThan(content.indexOf(' Tf '))
+    expect(content).toMatch(/q 0 g 0 G BT \/DocFlow-/)
+    expect(content).toMatch(/ Do\b/)
+
+    const rendered = new mupdf.PDFDocument(await readFile(mono))
+    const page = rendered.loadPage(0)
+    expect(page.toStructuredText().asText()).toContain('译文 1.1')
+    const pix = page.toPixmap(mupdf.Matrix.identity, mupdf.ColorSpace.DeviceGray, false, true)
+    const at = (x: number, y: number) => pix.getPixels()[y * pix.getStride() + x]!
+    // The first box shows the black translation; the picture's empty lower half is unchanged.
+    let darkest = 255
+    for (let y = 60; y < 90; y += 1)
+      for (let x = 60; x < 540; x += 1) darkest = Math.min(darkest, at(x, y))
+    expect(darkest).toBeLessThan(80)
+    expect(at(300, 600)).toBeGreaterThan(240)
+    rendered.destroy()
+  })
+
   test('long fixture compose+dual+verify stays within 30 s', { timeout: 120_000 }, async () => {
     const started = Date.now()
     const { analysis, result, mono, dual } = await compose('long')

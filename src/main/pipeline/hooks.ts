@@ -6,7 +6,7 @@ import { fakeProvider } from '../translate/fake'
 import { withMockProviderUrl } from '../../shared/presets'
 import { ERROR_CODES, UserError } from '../../shared/errors'
 import type { DocumentManifest, ProviderConfig } from '../../shared/types'
-import { analyzeStage } from './stages/analyze'
+import { analyzeStage, scanStage } from './stages/analyze'
 import { layoutStage } from './stages/layout'
 import { composeStage } from './stages/compose'
 import { inspectStage } from './stages/inspect'
@@ -41,8 +41,10 @@ export function createPipelineHooks(input: {
         signal,
         onPage,
       }),
-    analyze: (path, layouts, pages, selected, autoOcr, signal) =>
-      analyzeStage(input.analyze, path, layouts, pages, selected, autoOcr, signal),
+    scan: (path, pages, selected, signal) =>
+      scanStage(input.analyze, path, pages, selected, signal),
+    analyze: (path, layouts, pages, selected, ocrWorkaround, signal) =>
+      analyzeStage(input.analyze, path, layouts, pages, selected, ocrWorkaround, signal),
     translate: async ({ analysis, manifest, workDir, signal, onProgress }) => {
       const provider = resolveProvider(
         input.settings.snapshot.providers,

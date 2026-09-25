@@ -452,25 +452,74 @@ async function invisibleText() {
   await save('invisible-text.pdf', await doc.save())
 }
 
-async function main() {
-  await mkdir(outDir, { recursive: true })
-  await singleColumn()
-  await twoColumn()
-  await inlineFormula()
-  await displayMath()
-  await figureCaption()
-  await hyphenation()
-  await longDoc()
-  await encrypted()
-  await scanned()
-  await empty()
-  await coloredText()
-  await tjArrays()
-  await cidFont()
-  await formWrapped()
-  await sharedForm()
-  await italicSentence()
-  await invisibleText()
+/** Three single-column pages; `draw(page, text, y)` draws a paragraph and returns its height. */
+function textPages(doc, draw) {
+  for (let pageNo = 1; pageNo <= 3; pageNo += 1) {
+    const page = doc.addPage(PAGE)
+    let y = 720
+    ;[P1, P2, P3].forEach((text, i) => {
+      y -= draw(page, `${text} Paragraph ${pageNo}.${i + 1} of the scanned report.`, y) + 18
+    })
+  }
 }
 
-await main()
+/** An OCR'd scan: each page is a grey 72 dpi picture of text plus an invisible text layer. */
+async function ocrScan() {
+  const mupdf = await import('mupdf')
+  const clean = await PDFDocument.create()
+  const cleanFont = await clean.embedFont(StandardFonts.TimesRoman)
+  textPages(clean, (page, text, y) => drawWrapped(page, cleanFont, text, 72, y, 11, 468, 15))
+  const rendered = mupdf.Document.openDocument(await clean.save(), 'application/pdf')
+  const doc = await PDFDocument.create()
+  const font = await doc.embedFont(StandardFonts.TimesRoman)
+  const images = []
+  for (let i = 0; i < rendered.countPages(); i += 1) {
+    const pix = rendered
+      .loadPage(i)
+      .toPixmap(mupdf.Matrix.identity, mupdf.ColorSpace.DeviceGray, false, true)
+    images.push(await doc.embedPng(pix.asPNG()))
+  }
+  let index = 0
+  textPages(doc, (page, text, y) => {
+    if (y === 720) {
+      page.drawImage(images[index], { x: 0, y: 0, width: 612, height: 792 })
+      index += 1
+      page.pushOperators(setTextRenderingMode(TextRenderingMode.Invisible))
+    }
+    return drawWrapped(page, font, text, 72, y, 11, 468, 15)
+  })
+  await save('ocr-scan.pdf', await doc.save())
+}
+
+const GENERATORS = {
+  'single-column.pdf': singleColumn,
+  'two-column.pdf': twoColumn,
+  'inline-formula.pdf': inlineFormula,
+  'display-math.pdf': displayMath,
+  'figure-caption.pdf': figureCaption,
+  'hyphenation.pdf': hyphenation,
+  'long.pdf': longDoc,
+  'encrypted.pdf': encrypted,
+  'scanned.pdf': scanned,
+  'empty.pdf': empty,
+  'colored-text.pdf': coloredText,
+  'tj-arrays.pdf': tjArrays,
+  'cid-font.pdf': cidFont,
+  'form-wrapped.pdf': formWrapped,
+  'shared-form.pdf': sharedForm,
+  'italic-sentence.pdf': italicSentence,
+  'invisible-text.pdf': invisibleText,
+  'ocr-scan.pdf': ocrScan,
+}
+
+// `npm run fixtures -- ocr-scan.pdf` regenerates only the named files.
+async function main(names) {
+  await mkdir(outDir, { recursive: true })
+  for (const name of names.length > 0 ? names : Object.keys(GENERATORS)) {
+    const generate = GENERATORS[name]
+    if (!generate) throw new Error(`unknown fixture ${name}`)
+    await generate()
+  }
+}
+
+await main(process.argv.slice(2))

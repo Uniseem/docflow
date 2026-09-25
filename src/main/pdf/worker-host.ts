@@ -18,9 +18,10 @@ export type WorkerJob =
       layouts: PageLayout[]
       /** 0-based pages to analyse (BabelDOC pages option); null for all. */
       pages: number[] | null
-      /** auto_enable_ocr_workaround */
-      autoOcr: boolean
+      /** DetectScannedFile found an OCR'd scan and the OCR workaround is on. */
+      ocrWorkaround: boolean
     }
+  | { kind: 'scan'; path: string; pages: number[] | null }
   | { kind: 'detect'; path: string; index: number; modelPath: string }
   | {
       kind: 'verify'
@@ -225,6 +226,8 @@ export const TIMEOUT = {
     Math.max(PDF.TIMEOUT_COMPOSE_BASE_MS, pages * PDF.TIMEOUT_COMPOSE_PER_PAGE_MS),
   verify: PDF.TIMEOUT_VERIFY_MS,
   detect: PDF.TIMEOUT_DETECT_PAGE_MS,
+  scan: (pages: number) =>
+    Math.max(PDF.TIMEOUT_ANALYZE_BASE_MS, pages * PDF.TIMEOUT_ANALYZE_PER_PAGE_MS),
 }
 
 export type { AnalysisResult, VerifyResult }

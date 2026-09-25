@@ -18,10 +18,14 @@ describe('inspectPdf', () => {
     })
   })
 
-  test('invisible text counts as scanned', async () => {
-    await expect(inspectPdf(join(fixtures, 'invisible-text.pdf'))).rejects.toMatchObject({
-      code: ERROR_CODES.scanned_pdf,
-    })
+  test('an invisible (OCR) text layer passes: scan detection decides', async () => {
+    const info = await inspectPdf(join(fixtures, 'invisible-text.pdf'))
+    expect(info.textChars).toBeGreaterThan(25)
+    expect(info.visibleTextChars).toBe(0)
+    expect(info.hasTextLayer).toBe(false)
+    const scan = await inspectPdf(join(fixtures, 'ocr-scan.pdf'))
+    expect(scan.pages).toBe(3)
+    expect(scan.visibleTextChars).toBe(0)
   })
 
   test('empty pdf', async () => {

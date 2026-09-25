@@ -86,8 +86,10 @@ export async function inspectPdf(path: string): Promise<PdfInspection> {
       page.cleanup()
     }
 
-    const avgVisible = visibleTextChars / Math.max(1, samples.length)
-    if (visibleTextChars < PDF.MIN_TEXT_CHARS_SAMPLE && avgVisible < 25) {
+    // Invisible text counts too: an OCR'd scan goes on to DetectScannedFile (scanned.ts),
+    // which lets it through with the OCR workaround (ADR-0018).
+    const avg = textChars / Math.max(1, samples.length)
+    if (textChars < PDF.MIN_TEXT_CHARS_SAMPLE && avg < 25) {
       throw new PermanentError(ERROR_CODES.scanned_pdf)
     }
 

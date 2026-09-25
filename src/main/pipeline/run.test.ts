@@ -10,6 +10,7 @@ import { fixture, referenceLayouts } from '../../../tests/unit/pdf2zh-reference'
 import { analyzePdf } from '../pdf/analyze'
 import { composePdf } from '../pdf/compose'
 import { inspectPdf } from '../pdf/inspect'
+import { detectScanned } from '../pdf/scanned'
 import { verifyPdf } from '../pdf/verify'
 import { DocumentLibrary } from '../library/library'
 import { bundledFonts, composeWarningEvent, runPipeline, type PipelineHooks } from './run'
@@ -31,6 +32,7 @@ describe('runPipeline', () => {
     await lib.update(created.id, { status: 'processing' })
     await runPipeline(lib, created.id, new AbortController().signal, {
       inspect: (path) => inspectPdf(path),
+      scan: (path, _pages, selected) => detectScanned(path, selected),
       layout: async (_path, pages, _selected, _signal, onPage) => {
         for (let i = 1; i <= pages; i += 1) await onPage(i, pages)
         return referenceLayouts('colored-text')
@@ -199,6 +201,67 @@ describe('page selection (BabelDOC pages)', () => {
   })
 })
 
+describe('scanned documents (DetectScannedFile)', () => {
+  const scanned = () =>
+    Promise.resolve({ scanned: true, scannedPages: 3, checkedPages: 3, total: 3 })
+
+  test('are refused while the OCR workaround is off', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'df-scan-'))
+    const lib = new DocumentLibrary()
+    await lib.open(dir)
+    const pdf = join(dir, 'in.pdf')
+    await writeFile(pdf, '%PDF-1.4')
+    const created = await lib.create({
+      path: pdf,
+      translator,
+      settingsSnapshot: defaultTranslationRuntime(),
+    })
+    await lib.update(created.id, { status: 'processing' })
+    let analyzed = false
+    await expect(
+      runPipeline(lib, created.id, new AbortController().signal, {
+        ...fakeHooks(() => undefined),
+        scan: scanned,
+        layout: () => {
+          analyzed = true
+          return Promise.resolve([])
+        },
+      }),
+    ).rejects.toMatchObject({ code: 'scanned_with_text' })
+    expect(analyzed).toBe(false)
+  })
+
+  test('are analysed with the OCR workaround when it is on', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'df-scan-'))
+    const lib = new DocumentLibrary()
+    await lib.open(dir)
+    const pdf = join(dir, 'in.pdf')
+    await writeFile(pdf, '%PDF-1.4')
+    const created = await lib.create({
+      path: pdf,
+      translator,
+      settingsSnapshot: defaultTranslationRuntime(),
+    })
+    await lib.update(created.id, { status: 'processing' })
+    const hooks = fakeHooks(() => undefined)
+    const flags: boolean[] = []
+    await runPipeline(lib, created.id, new AbortController().signal, {
+      ...hooks,
+      scan: scanned,
+      autoOcr: () => true,
+      analyze: (...args) => {
+        flags.push(args[4])
+        return hooks.analyze(...args)
+      },
+    })
+    expect(flags).toEqual([true])
+    const events = await lib.events.read(created.id)
+    expect(
+      events.items.some((e) => e.message === '检测到扫描件（3 / 3 页）：译文用黑色写在白底上'),
+    ).toBe(true)
+  })
+})
+
 describe('composeWarningEvent', () => {
   test('every warning code reads as Chinese', () => {
     for (const code of ['font_unmapped', 'paragraph_not_fit', 'something_new']) {
@@ -264,6 +327,7 @@ function fakeHooks(onChanged: NonNullable<PipelineHooks['onChanged']>): Pipeline
         visibleTextChars: 5,
         hasTextLayer: true,
       }),
+    scan: () => Promise.resolve({ scanned: false, scannedPages: 0, checkedPages: 0, total: 1 }),
     layout: () => Promise.resolve([{ width: 612, height: 792, boxes: [] }]),
     analyze: () => Promise.resolve(analysis),
     translate: () =>

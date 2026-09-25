@@ -7,6 +7,7 @@ import {
   type ComposeOptions,
   type ComposeResult,
   type PdfInspection,
+  ScanResult,
   type TranslatedParagraph,
   type VerifyResult,
 } from '../../shared/pdf-types'
@@ -30,6 +31,13 @@ export type TranslateOutcome = {
 
 export type PipelineHooks = {
   inspect: (path: string, signal: AbortSignal) => Promise<PdfInspection>
+  /** DetectScannedFile over the chosen pages. */
+  scan: (
+    path: string,
+    pages: number,
+    selected: number[] | null,
+    signal: AbortSignal,
+  ) => Promise<ScanResult>
   /** DocLayout-YOLO boxes for every page (raster window + model). */
   layout: (
     path: string,
@@ -43,7 +51,7 @@ export type PipelineHooks = {
     layouts: PageLayout[],
     pages: number,
     selected: number[] | null,
-    autoOcr: boolean,
+    ocrWorkaround: boolean,
     signal: AbortSignal,
   ) => Promise<AnalysisResult>
   translate: (input: {
@@ -137,6 +145,25 @@ export async function runPipeline(
   if (selected && selected.length === 0) throw new UserError(ERROR_CODES.pages_out_of_range)
   // Checkpoints hold the chosen pages only: another choice computes them again.
   const scope = `${manifest.sourceSha256}:${selected ? selected.join(',') : 'all'}`
+  const scan = await withCheckpoint(
+    join(work, 'scan.json'),
+    scope,
+    async () => {
+      throwIfAborted(signal)
+      return hooks.scan(src, inspection.pages, selected, signal)
+    },
+    (data) => ScanResult.safeParse(data).success,
+  )
+  // DetectScannedFile: an OCR'd scan is refused unless auto_enable_ocr_workaround is on.
+  const ocrWorkaround = scan.scanned && hooks.autoOcr()
+  if (scan.scanned && !ocrWorkaround) throw new UserError(ERROR_CODES.scanned_with_text)
+  if (ocrWorkaround) {
+    await emit({
+      stage: 'inspect',
+      level: 'info',
+      message: `检测到扫描件（${scan.scannedPages} / ${scan.checkedPages} 页）：译文用黑色写在白底上`,
+    })
+  }
   await enterStage('analyze', 10)
   const layouts = await withCheckpoint(
     join(work, 'layout.json'),
@@ -162,20 +189,13 @@ export async function runPipeline(
   )
   const analysis = await withCheckpoint(
     join(work, 'analysis.json'),
-    `${scope}:${hooks.autoOcr() ? 'ocr' : ''}`,
+    `${scope}:${ocrWorkaround ? 'ocr' : ''}`,
     async () => {
       throwIfAborted(signal)
-      return hooks.analyze(src, layouts, inspection.pages, selected, hooks.autoOcr(), signal)
+      return hooks.analyze(src, layouts, inspection.pages, selected, ocrWorkaround, signal)
     },
     (data) => AnalysisResult.safeParse(data).success,
   )
-  if (analysis.ocrWorkaround) {
-    await emit({
-      stage: 'analyze',
-      level: 'info',
-      message: '这是带文字层的扫描件：译文用黑色写在白底上（OCR workaround）',
-    })
-  }
   const pagesWithout = new Set<number>()
   for (let i = 0; i < analysis.pages; i += 1) {
     if (selected && !selected.includes(i)) continue

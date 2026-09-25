@@ -273,6 +273,15 @@ export const ComposeResult = z.object({
 })
 export type ComposeResult = z.infer<typeof ComposeResult>
 
+/** DetectScannedFile: pages that look the same without their text. */
+export const ScanResult = z.object({
+  scanned: z.boolean(),
+  scannedPages: z.number().int().nonnegative(),
+  checkedPages: z.number().int().nonnegative(),
+  total: z.number().int().nonnegative(),
+})
+export type ScanResult = z.infer<typeof ScanResult>
+
 export const VerifyResult = z.object({
   monoPages: z.number(),
   dualPages: z.number().nullable(),

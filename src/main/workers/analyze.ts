@@ -3,6 +3,7 @@ import { inspectPdf } from '../pdf/inspect'
 import { analyzePdf } from '../pdf/analyze'
 import { verifyPdf } from '../pdf/verify'
 import { detectPage } from '../pdf/pdf2zh/detect'
+import { detectScanned } from '../pdf/scanned'
 import { isUserError } from '../../shared/errors'
 import type { WorkerRequest, WorkerResponse } from '../pdf/worker-host'
 
@@ -18,7 +19,13 @@ async function handle(msg: WorkerRequest): Promise<void> {
         result = await inspectPdf(msg.path)
         break
       case 'analyze':
-        result = await analyzePdf(msg.path, msg.layouts, { pages: msg.pages, autoOcr: msg.autoOcr })
+        result = await analyzePdf(msg.path, msg.layouts, {
+          pages: msg.pages,
+          ocrWorkaround: msg.ocrWorkaround,
+        })
+        break
+      case 'scan':
+        result = await detectScanned(msg.path, msg.pages)
         break
       case 'detect':
         result = await detectPage(msg.path, msg.index, msg.modelPath)

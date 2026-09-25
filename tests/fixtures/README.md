@@ -24,7 +24,8 @@
 | `form-wrapped.pdf`    | 整页内容在一个 Form XObject                  | 表单递归、字体资源搬运                    |
 | `shared-form.pdf`     | 两页 `Do` 同一个含文字表单（页眉 LOGO）      | shared 表单跳过                           |
 | `italic-sentence.pdf` | 斜体整句 + 单个斜体变量                      | `.*Ital` 放宽规则                         |
-| `invisible-text.pdf`  | 整页图片 + `3 Tr` 隐藏文字                   | `scanned_pdf`（可见字形为 0）             |
+| `invisible-text.pdf`  | 整页图片 + `3 Tr` 隐藏文字（1 页）           | 可见字形为 0，inspect 放行                |
+| `ocr-scan.pdf`        | 3 页文字图片 + 同位置 `3 Tr` 文字层          | 扫描件判定（SSIM）、OCR workaround        |
 
 ## 真实论文（仅解析回归测试）
 
@@ -35,4 +36,4 @@
 | `arxiv-2201.11903.pdf` | [arXiv:2201.11903](https://arxiv.org/abs/2201.11903) Chain-of-Thought Prompting Elicits Reasoning in Large Language Models | [CC-BY-4.0](https://creativecommons.org/licenses/by/4.0/) | 两栏、含公式 |
 | `arxiv-2302.13971.pdf` | [arXiv:2302.13971](https://arxiv.org/abs/2302.13971) LLaMA: Open and Efficient Foundation Language Models                  | [CC-BY-4.0](https://creativecommons.org/licenses/by/4.0/) | 两栏、含图表 |
 
-重新生成合成 PDF：`npm run fixtures`。真实论文不会被该脚本覆盖。
+重新生成合成 PDF：`npm run fixtures`；只生成其中几个：`npm run fixtures -- ocr-scan.pdf`。真实论文不会被该脚本覆盖。

@@ -1,4 +1,4 @@
-import type { AnalysisResult, PageLayout } from '../../../shared/pdf-types'
+import type { AnalysisResult, PageLayout, ScanResult } from '../../../shared/pdf-types'
 import { TIMEOUT, type PdfWorkerHost } from '../../pdf/worker-host'
 
 export async function analyzeStage(
@@ -7,12 +7,27 @@ export async function analyzeStage(
   layouts: PageLayout[],
   pages: number,
   selected: number[] | null,
-  autoOcr: boolean,
+  ocrWorkaround: boolean,
   signal: AbortSignal,
 ): Promise<AnalysisResult> {
   return host.request<AnalysisResult>(
-    { kind: 'analyze', path, layouts, pages: selected, autoOcr },
+    { kind: 'analyze', path, layouts, pages: selected, ocrWorkaround },
     TIMEOUT.analyze(pages),
+    signal,
+  )
+}
+
+/** DetectScannedFile over the pages to translate (scanned.ts). */
+export async function scanStage(
+  host: PdfWorkerHost,
+  path: string,
+  pages: number,
+  selected: number[] | null,
+  signal: AbortSignal,
+): Promise<ScanResult> {
+  return host.request<ScanResult>(
+    { kind: 'scan', path, pages: selected },
+    TIMEOUT.scan(selected ? selected.length : pages),
     signal,
   )
 }

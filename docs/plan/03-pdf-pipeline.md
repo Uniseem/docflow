@@ -71,10 +71,12 @@ ComposeResult = { monoBytes, dualBytes, paragraphsWritten, paragraphsKept,
 1. pdf.js 由 `src/main/pdf/pdfjs.ts` 加载：Node 下用 `pdfjs-dist/legacy/build/pdf.mjs`；加载前 `import './dom-matrix'` 补上 `DOMMatrix`（[ADR-0010](../adr/0010-exclude-pdfjs-native-canvas.md)）。
 2. 文件前 5 字节不是 `%PDF-` → `pdf_invalid`；`PasswordException` → `pdf_encrypted`；`InvalidPDFException` → `pdf_invalid`；其他 → `pdf_open`。
 3. `numPages === 0` → `pdf_empty`；`> 600` → `pdf_too_long`；页宽或页高 < 50 或 > 14400 pt → `page_geometry`。
-4. 抽样页（前 3 页 + 均匀取样，最多 8 页）统计 `renderMode ∉ {3, 7}` 的可见字形，< 200 且平均每页 < 25 → `scanned_pdf`。
+4. 抽样页（前 3 页 + 均匀取样，最多 8 页）统计字形（含 `3 Tr` 不可见文字，4.1.0 起），< 200 且平均每页 < 25 → `scanned_pdf`；可见字形（`renderMode ∉ {3, 7}`）数只记进 `visibleTextChars`。
 5. `info.Title` 去空白后长 3–300、不像文件名时作为标题候选。
 
 超时 60 s → `inspect_timeout`（可重试）。
+
+扫描件判定（4.1.0）：inspect 之后、版面检测之前，照 BabelDOC `DetectScannedFile` 判定带 OCR 文字层的扫描件（`src/main/pdf/scanned.ts`，[ADR-0018](../adr/0018-port-babeldoc-features.md) §5）：只看所选页；该页图片覆盖 ≥ 50% 时，比较 72 dpi 渲染与去掉文字后的渲染，SSIM > 0.95 为扫描页；扫描页 ≥ 80% 为扫描件。设置 `pdf.ocrWorkaround` 关 → `scanned_with_text`；开 → 分析结果 `ocrWorkaround: true`（白底黑字、不用样式占位符）。结果存 `work/scan.json`，超时同 analyze（`scan_timeout`）。
 
 ## 3.4 版面检测（`translate_patch` 前半段）
 
@@ -186,7 +188,7 @@ type WorkerJob =
 
 analyze、compose 各一个共用线程，空闲 15 s 退出（[ADR-0014](../adr/0014-pdf-workers-exit-when-idle.md)）；取消即终止线程，同线程其他请求在新线程上重发。超时：inspect 60 s、detect 每页 120 s、analyze `max(120 s, 页数 × 3 s)`、compose `max(120 s, 页数 × 2 s)`、verify 120 s，超时 → `<kind>_timeout`（可重试）。
 
-错误码（`src/shared/errors.ts`）：永久——`pdf_encrypted`、`pdf_invalid`、`pdf_empty`、`pdf_too_long`、`page_geometry`、`scanned_pdf`、`no_paragraphs`、`pdf_open`、`font_embed_failed`、`layout_model_missing`、`mostly_untranslated`；可重试——`*_timeout`（含 `detect_timeout`）、`verify_failed`、`worker_crashed`。文案见 05 章。
+错误码（`src/shared/errors.ts`）：永久——`pdf_encrypted`、`pdf_invalid`、`pdf_empty`、`pdf_too_long`、`page_geometry`、`scanned_pdf`、`scanned_with_text`、`pages_out_of_range`、`no_paragraphs`、`pdf_open`、`font_embed_failed`、`layout_model_missing`、`mostly_untranslated`；可重试——`*_timeout`（含 `detect_timeout`、`scan_timeout`）、`verify_failed`、`worker_crashed`。文案见 05 章。
 
 ## 3.12 调试工具
 

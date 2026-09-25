@@ -68,12 +68,12 @@ describe('PdfWorkerHost', () => {
     const host = new PdfWorkerHost(scripted, 'analyze', 15_000, memoryLogger())
     const ac = new AbortController()
     const cancelled = host.request(
-      { kind: 'analyze', path: 'never', layouts: [], pages: null, autoOcr: false },
+      { kind: 'analyze', path: 'never', layouts: [], pages: null, ocrWorkaround: false },
       5_000,
       ac.signal,
     )
     const other = host.request(
-      { kind: 'analyze', path: 'slow:150', layouts: [], pages: null, autoOcr: false },
+      { kind: 'analyze', path: 'slow:150', layouts: [], pages: null, ocrWorkaround: false },
       5_000,
     )
     await new Promise((resolve) => setTimeout(resolve, 30))
@@ -97,7 +97,7 @@ describe('PdfWorkerHost', () => {
     const host = new PdfWorkerHost(scripted, 'analyze', 15_000, logger)
     const error = await host
       .request(
-        { kind: 'analyze', path: 'internal', layouts: [], pages: null, autoOcr: false },
+        { kind: 'analyze', path: 'internal', layouts: [], pages: null, ocrWorkaround: false },
         5_000,
       )
       .then(
