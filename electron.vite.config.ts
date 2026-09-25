@@ -30,6 +30,11 @@ export default defineConfig({
           format: 'es',
           entryFileNames: '[name].mjs',
           chunkFileNames: 'chunks/[name]-[hash].mjs',
+          // The o200k token list holds strings such as " import": in a chunk that also uses
+          // __dirname, electron-vite's CommonJS shim takes one for an import statement and is
+          // inserted inside the list. On its own the list needs no shim.
+          manualChunks: (id) =>
+            id.includes('/node_modules/gpt-tokenizer/') ? 'gpt-tokenizer' : undefined,
         },
       },
     },
