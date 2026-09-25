@@ -1,6 +1,6 @@
 # ADR-0003：用 TypeScript（pdf.js + pdf-lib）实现 PDF 原生翻译，替代 BabelDOC/Python
 
-- 状态：已采纳
+- 状态：已采纳（部分被 ADR-0016 修订：改为照搬 pdf2zh，使用 DocLayout-YOLO 版面模型与 MuPDF.js 渲染）
 - 日期：2026-09-21
 - 相关：docs/plan/03-pdf-pipeline.md、ADR-0006
 

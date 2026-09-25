@@ -97,6 +97,18 @@
 - [ ] M7-4 性能：60 页 fixture 全流程内存曲线（worklog 记录），主进程空闲内存。
 - [x] M7-5 `docs/` 与实现对齐：把执行中所有偏离写回规划；ADR 补齐；README「已知问题」。
 
+## M8 照搬 PDFMathTranslate（4.0.0 之后，维护者要求）
+
+4.0.0 的真实论文译文与原文重叠，维护者要求不再自行设计，逐步照搬 PDFMathTranslate 1.9.11（[ADR-0016](../adr/0016-port-pdfmathtranslate.md)，03 章整章重写）。
+
+- [x] M8-1 pdf2zh 对照环境：独立虚拟环境跑 pdf2zh 1.9.11，导出样例与维护者论文的版面框、`sstk` 与输出 PDF；`tests/fixtures/pdf2zh/*.json`。
+- [x] M8-2 版面检测：MuPDF.js 渲染 + onnxruntime-web 推理 DocLayout-YOLO + 前后处理与版面矩阵；模型下载脚本与打包。
+- [x] M8-3 `receive_layout` A 部分、pdfminer `LTChar` 与 `to_unichr`、内容流解释（`ops_base`、`do_S`、`do_Do`）与算子对齐；14 个样例与论文逐页和 pdf2zh 一致。
+- [x] M8-4 C 部分排版与整页、表单写回（`tiro` + 思源宋体）；写回结果与 pdf2zh 单词位置差 ≤ 0.016 pt。
+- [x] M8-5 翻译改为一段一请求 + pdf2zh 提示词；设置页去掉失效参数；旧提示词迁移。
+- [x] M8-6 单测、E2E（8 个）、调试脚本、CI 模型缓存、文档（02–08 章、ADR、README、CHANGELOG）。
+- [ ] M8-7 用真实大模型翻几篇论文，与 pdf2zh 实际输出对照（需要维护者的 Key）。
+
 ## 之后（不在 4.0.0）
 
 - 版面检测模型（可选安装）；MuPDF.js 评估；术语表；多目标语言；签名与公证；自动更新；DOCX 输入。

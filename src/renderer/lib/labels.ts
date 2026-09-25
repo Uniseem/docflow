@@ -32,7 +32,7 @@ export type StageInfo = {
 export const STAGES: StageInfo[] = [
   { id: 'received', name: '接收与排队', detail: '复制源文件并加入处理队列', from: 0, to: 2 },
   { id: 'inspect', name: '检查 PDF', detail: '检查文本层，拒绝扫描件与加密文件', from: 3, to: 9 },
-  { id: 'analyze', name: '分析版面', detail: '识别段落、栏与公式', from: 10, to: 29 },
+  { id: 'analyze', name: '分析版面', detail: '版面检测，识别段落与公式', from: 10, to: 29 },
   { id: 'translate', name: '翻译段落', detail: '共享任务池并发翻译', from: 30, to: 79 },
   {
     id: 'compose',

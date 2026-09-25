@@ -336,7 +336,7 @@ async function tjArrays() {
 async function cidFont() {
   const doc = await PDFDocument.create()
   doc.registerFontkit(fontkit)
-  const bytes = await readFile(join(root, 'resources/fonts/NotoSansSC-Regular.otf'))
+  const bytes = await readFile(join(root, 'resources/fonts/SourceHanSerifCN-Regular.ttf'))
   const font = await doc.embedFont(bytes, { subset: true })
   const italic = await doc.embedFont(StandardFonts.TimesRomanItalic)
   const page = doc.addPage(PAGE)

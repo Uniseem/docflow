@@ -2,7 +2,7 @@
 
 PDF 论文翻译桌面应用（Windows / macOS）。把带文本层的 PDF 拖进来，DocFlow 在本机分析版面，用你自己配置的大模型 API（DeepSeek、通义、Kimi、智谱、OpenAI、Claude、Gemini、Ollama 等）翻译正文，再按原版式写回，生成 **中文 PDF** 和 **双语对照 PDF**。公式、图表、表格保持原样。
 
-4.0 是一次完全重写：Electron + React + HeroUI 3，全部 TypeScript，不再需要 MinerU、Python 或 BabelDOC。
+4.0 是一次完全重写：Electron + React + HeroUI 3，全部 TypeScript，不再需要 MinerU、Python 或 BabelDOC。PDF 的版面分析、公式识别与写回照搬 [PDFMathTranslate（pdf2zh）](https://github.com/PDFMathTranslate/PDFMathTranslate) 1.9.11 的处理逻辑：用 DocLayout-YOLO 版面模型划分段落，删除页面上的全部原文后重新排版，公式与图表内的文字原样重画。
 
 ## 下载与安装
 
@@ -41,14 +41,16 @@ ARCH=$([ "$(sysctl -n hw.optional.arm64 2>/dev/null)" = 1 ] && echo arm64 || ech
 
 ## 已知问题
 
-1. 没有版面模型：表格内的长单元格会被当作段落翻译，可能与表格线重叠；三栏及以上、复杂浮动排版的阅读顺序可能错乱。
-2. 行内分式的横线是图形而不是文字，公式搬动后横线会留在原处。
-3. 斜体、等宽字体的短片段按公式处理、保留原文；三个单词以上的斜体句子才翻译。
-4. 页眉页脚、图表轴标签、图例不翻译；字号明显小于正文的文字（图内文字，以及用小字号排的表格、算法框）也不翻译。
-5. 译文比原文长时可能溢出到下一段的位置（不截断），与下一段文字重叠。
-6. 旋转页面、竖排、从右到左的文字、多页共用的表单里的文字不翻译；扫描件（没有文本层）不支持，也没有 OCR。
-7. 图例紧挨图注时，图例文字可能被并进图注一起翻译。
-8. 以上标数字开头的脚注（如 `1http://…`）会被当作正文处理。
+以下是 PDFMathTranslate 本身的行为，DocFlow 照搬了它的处理逻辑，所以表现相同：
+
+1. 译文与重画的公式都是黑色，原文的彩色标题、链接颜色不保留。
+2. 只有原文段落本身有换行时译文才换行：单行的标题、图注，译文比原文长时会向右超出。
+3. 行距最多压到 1 倍左右，不缩小字号：译文比原文长很多时会压到下面的内容。
+4. 版面模型判为图、表、公式、页眉页脚的区域不翻译；模型的框不准时，段落可能被合并或拆开。
+5. 斜体、等宽等字体名像公式字体的整段文字（例如 Times-Italic）会当作公式保留原文。
+6. 少数 PDF 的空格用很小的字号排版，空格会被当成角标公式，译文词与词之间出现空隙。
+7. 内联图片会被删除；旋转页面、竖排文字的字符当作公式按正立方向重画。
+8. 扫描件（没有文本层）不支持，也没有 OCR。
 
 ## 开发
 
@@ -56,6 +58,7 @@ ARCH=$([ "$(sysctl -n hw.optional.arm64 2>/dev/null)" = 1 ] && echo arm64 || ech
 
 ```bash
 npm ci
+npm run model    # 下载版面模型（75 MB，dev/build 前也会自动检查）
 npm run dev      # 开发模式
 npm run check    # typecheck + lint + 单元测试
 npm run dist     # 打当前平台的安装包到 release/
@@ -67,4 +70,4 @@ npm run dist     # 打当前平台的安装包到 release/
 
 ## 许可
 
-[MIT](LICENSE)。第三方组件的许可见随应用分发的 `THIRD_PARTY_NOTICES.md`（「设置 → 关于」里可以打开）。
+仓库里 DocFlow 自己的代码按 [MIT](LICENSE) 授权。安装包里包含以 AGPL-3.0 授权的 [MuPDF.js](https://github.com/ArtifexSoftware/mupdf.js)（用于渲染页面给版面模型），因此分发的安装包整体按 AGPL-3.0 提供，源码即本仓库。PDF 处理逻辑移植自 AGPL-3.0 的 PDFMathTranslate。版面模型 DocLayout-YOLO-DocStructBench 的权重为 Apache-2.0，中文字体思源宋体为 SIL OFL 1.1。第三方组件的许可见随应用分发的 `THIRD_PARTY_NOTICES.md`（「设置 → 关于」里可以打开）。

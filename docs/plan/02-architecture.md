@@ -48,12 +48,14 @@ docflow/
 ├─ build/                         # electron-builder 用的图标与安装器资源
 │  ├─ icon.icns  icon.ico  icon.png (1024)
 ├─ resources/                     # extraResources，运行时通过 process.resourcesPath 访问
-│  └─ fonts/NotoSansSC-Regular.otf  NotoSansSC-Bold.otf  LICENSE-OFL.txt  README.md
+│  ├─ fonts/SourceHanSerifCN-Regular.ttf  LICENSE-OFL.txt  README.md   # 思源宋体（pdf2zh 的 noto）
+│  └─ models/doclayout_yolo_docstructbench_imgsz1024.onnx   # 75 MB，不进 git，npm run model 下载
 ├─ scripts/
 │  ├─ verify-fonts.mjs            # 核对字体 SHA-256
+│  ├─ fetch-model.mjs             # 下载版面模型并校验 SHA3-256（predev、prebuild 自动运行）
 │  ├─ make-icons.mjs              # 由 build/icon.png 生成 icns/ico（png2icons）
 │  ├─ make-fixtures.mjs           # 生成 tests/fixtures/*.pdf（用 pdf-lib）
-│  ├─ analyze-pdf.mjs             # 调试：输出 analysis.json 与画框的调试 PDF（03 章 §3.15）
+│  ├─ analyze-pdf.mjs             # 调试：版面检测 + 分段，输出 analysis.json 与画框的调试 PDF（03 章 §3.12）
 │  ├─ compose-pdf.mjs             # 调试：假翻译跑完整写回
 │  ├─ third-party-notices.mjs     # 生成 THIRD_PARTY_NOTICES.md（生成物，已 gitignore）
 │  └─ bundled-deps.json           # 打进渲染进程 bundle 的包名清单，供上一个脚本列许可（07.3）
@@ -62,8 +64,8 @@ docflow/
 │  │  ├─ ipc.ts                   # 通道名常量 + 每个通道的请求/响应 zod schema + 类型
 │  │  ├─ types.ts                 # Document、ProcessingEvent、Settings、Provider… 的 zod schema 与类型
 │  │  ├─ view.ts                  # 设置视图类型（服务商带 keyConfigured 等只读字段）
-│  │  ├─ pdf-types.ts             # Glyph、Line、Paragraph、AnalysisResult… （03 章 §3.2）
-│  │  ├─ pdf-constants.ts         # 03 章 §3.16 的阈值表
+│  │  ├─ pdf-types.ts             # Glyph、LtChar、LayoutUnit、AnalysisResult… （03 章 §3.2）
+│  │  ├─ pdf-constants.ts         # DocFlow 自己的页数上限与超时（03 章 §3.15）
 │  │  ├─ presets.ts               # 服务商预设表
 │  │  ├─ provider-url.ts          # 按接口类型拼请求地址
 │  │  ├─ library-filter.ts        # 文档库筛选与状态分组
@@ -82,18 +84,22 @@ docflow/
 │  │  ├─ jobs/scheduler.ts  jobs/job.ts
 │  │  ├─ pipeline/run.ts          # 阶段编排
 │  │  ├─ pipeline/hooks.ts        # 把 worker、翻译池、设置接到各阶段
-│  │  ├─ pipeline/stages/inspect.ts  analyze.ts  translate.ts  compose.ts  verify.ts  archive.ts
+│  │  ├─ pipeline/stages/inspect.ts  layout.ts  analyze.ts  translate.ts  compose.ts  verify.ts  archive.ts
 │  │  ├─ pdf/worker-host.ts       # spawn worker、超时、取消、空闲退出、typed messages
 │  │  ├─ pdf/pdfjs.ts             # 加载 pdf.js legacy 构建（先 import dom-matrix.ts）
 │  │  ├─ pdf/dom-matrix.ts        # 纯 JS 的 DOMMatrix，替代 pdf.js 的可选原生依赖（ADR-0010）
 │  │  ├─ pdf/load-pdf-lib.ts      # 加载 pdf-lib 前把间接 /Length 改写为数字
-│  │  ├─ pdf/inspect.ts  pdf/verify.ts  pdf/forms.ts（表单引用统计）  pdf/analyze.ts（分析入口）
-│  │  ├─ pdf/analyze/glyphs.ts  lines.ts  columns.ts  paragraphs.ts  formula.ts  normalize.ts   # 纯函数
-│  │  ├─ pdf/compose/index.ts  content-lexer.ts  content-walker.ts  resources.ts  streams.ts
-│  │  ├─ pdf/compose/fonts.ts  layout.ts  emit.ts  rewrite.ts  dual.ts
+│  │  ├─ pdf/inspect.ts  pdf/verify.ts  pdf/analyze.ts（分析入口）
+│  │  ├─ pdf/analyze/glyphs.ts    # pdf.js 算子流 → 逐字形
+│  │  ├─ pdf/pdf2zh/              # PDFMathTranslate 1.9.11 的移植（03 章，ADR-0016）
+│  │  │  ├─ render.ts detect.ts doclayout.ts   # MuPDF.js 渲染 + DocLayout-YOLO + 版面矩阵
+│  │  │  ├─ interp.ts pages.ts                  # pdfinterp：ops_base、do_S、do_Do
+│  │  │  ├─ chars.ts unicode.ts pdfminer-tables.ts  # LTChar、to_unichr
+│  │  │  ├─ parse.ts typeset.ts segments.ts     # receive_layout A、C、B
+│  │  ├─ pdf/compose/index.ts  content-lexer.ts  streams.ts  dual.ts
 │  │  ├─ workers/analyze.ts  workers/compose.ts   # worker 入口（薄封装，调用 pdf/ 下纯函数）
 │  │  ├─ translate/providers.ts  request.ts  response.ts  errors.ts  keys.ts  pool.ts
-│  │  ├─ translate/batch.ts  protect.ts  validate.ts  translate-document.ts  cache.ts  fake.ts
+│  │  ├─ translate/pdf2zh-prompt.ts  translate-document.ts  cache.ts  fake.ts
 │  │  ├─ translate/http.ts        # fetch 注入：生产用 net.fetch，测试用 Node fetch
 │  │  └─ log/logger.ts
 │  ├─ preload/index.ts            # contextBridge.exposeInMainWorld('docflow', api)
@@ -118,29 +124,31 @@ docflow/
 
 调研日期 2026-09-21 的 npm 最新稳定版。用 caret 范围；执行时取范围内最新。**major 不同时**：先看 `docs/worklog/` 有无说明；没有就按下表「若升级」列处理。
 
-| 包                                                                                                                                                                                                                                      | 版本                                                 | 用途                                                                                | 若升级 major                                                   |
-| --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------- | ----------------------------------------------------------------------------------- | -------------------------------------------------------------- |
-| `electron`                                                                                                                                                                                                                              | `^44.4.3`（Node 24.21 / Chromium 152）               | 运行时                                                                              | 允许到 45/46；检查 `protocol.handle`、`safeStorage` API 无变化 |
-| `electron-vite`                                                                                                                                                                                                                         | `^5.0.0`                                             | 构建 main/preload/renderer                                                          | 检查 peer 的 vite 范围，随之调整 vite                          |
-| `vite`                                                                                                                                                                                                                                  | `^7.3.6`（electron-vite 5 的 peer 只到 7）           | 打包                                                                                | 不要升到 8，除非 electron-vite 支持                            |
-| `@vitejs/plugin-react`                                                                                                                                                                                                                  | `^5.2.0`                                             | React Fast Refresh；6.x 的 peer 是 Vite 8，而 electron-vite 5 只到 Vite 7，故锁 5.x | 等 electron-vite 支持 Vite 8 后再升 6                          |
-| `typescript`                                                                                                                                                                                                                            | `^5.9.3`（typescript-eslint 8.70 只支持 < 6.1）      | —                                                                                   | 不升 6/7                                                       |
-| `react` / `react-dom`                                                                                                                                                                                                                   | `^19.3.0`                                            | UI                                                                                  | —                                                              |
-| `@heroui/react` / `@heroui/styles`                                                                                                                                                                                                      | `^3.2.6`                                             | 组件库；需 Tailwind ≥ 4、不需要 Provider                                            | 4.x 出现时停下，读迁移文档                                     |
-| `tailwindcss` / `@tailwindcss/vite`                                                                                                                                                                                                     | `^4.3.3`                                             | 样式                                                                                | —                                                              |
-| `zustand`                                                                                                                                                                                                                               | `^5.0.15`                                            | 渲染进程状态                                                                        | —                                                              |
-| `zod`                                                                                                                                                                                                                                   | `^4.6.5`                                             | 所有跨进程/跨文件数据校验                                                           | —                                                              |
-| `pdfjs-dist`                                                                                                                                                                                                                            | `^6.3.289`（`legacy/build/pdf.mjs` 供 Node）         | 解析（算子流、文本层检测、校验）                                                    | 检查 `getOperatorList`/`OPS`/glyph 对象字段                    |
-| `@cantoo/pdf-lib`                                                                                                                                                                                                                       | `^2.11.1`（pdf-lib 的维护分支，API 同 pdf-lib 1.17） | 写回（低层对象 API + 字体嵌入 + copyPages）                                         | —                                                              |
-| `@cantoo/fontkit`                                                                                                                                                                                                                       | `^2.0.12`                                            | 字体嵌入与子集化                                                                    | —                                                              |
-| `electron-log`                                                                                                                                                                                                                          | `^5.4.4`                                             | 日志                                                                                | —                                                              |
-| `fflate`                                                                                                                                                                                                                                | `^0.8.2`                                             | ZIP 导出（内容流的解压/压缩用 pdf-lib 自带的）                                      | —                                                              |
-| `lucide-react`                                                                                                                                                                                                                          | `^1.47.0`                                            | 图标                                                                                | —                                                              |
-| `clsx`                                                                                                                                                                                                                                  | `^2.1.1`                                             | className 拼接                                                                      | —                                                              |
-| `vitest`                                                                                                                                                                                                                                | `^5.0.1`                                             | 单测                                                                                | —                                                              |
-| `@playwright/test`                                                                                                                                                                                                                      | `^1.63.0`                                            | E2E（`_electron`）                                                                  | —                                                              |
-| `electron-builder`                                                                                                                                                                                                                      | `^26.15.3`                                           | 打包                                                                                | —                                                              |
-| `png2icons`                                                                                                                                                                                                                             | `^2.0.1`                                             | 生成图标                                                                            | —                                                              |
+| 包                                                                                                                                                                                                                                      | 版本                                                 | 用途                                                                                | 若升级 major                                                       |
+| --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------- | ----------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
+| `electron`                                                                                                                                                                                                                              | `^44.4.3`（Node 24.21 / Chromium 152）               | 运行时                                                                              | 允许到 45/46；检查 `protocol.handle`、`safeStorage` API 无变化     |
+| `electron-vite`                                                                                                                                                                                                                         | `^5.0.0`                                             | 构建 main/preload/renderer                                                          | 检查 peer 的 vite 范围，随之调整 vite                              |
+| `vite`                                                                                                                                                                                                                                  | `^7.3.6`（electron-vite 5 的 peer 只到 7）           | 打包                                                                                | 不要升到 8，除非 electron-vite 支持                                |
+| `@vitejs/plugin-react`                                                                                                                                                                                                                  | `^5.2.0`                                             | React Fast Refresh；6.x 的 peer 是 Vite 8，而 electron-vite 5 只到 Vite 7，故锁 5.x | 等 electron-vite 支持 Vite 8 后再升 6                              |
+| `typescript`                                                                                                                                                                                                                            | `^5.9.3`（typescript-eslint 8.70 只支持 < 6.1）      | —                                                                                   | 不升 6/7                                                           |
+| `react` / `react-dom`                                                                                                                                                                                                                   | `^19.3.0`                                            | UI                                                                                  | —                                                                  |
+| `@heroui/react` / `@heroui/styles`                                                                                                                                                                                                      | `^3.2.6`                                             | 组件库；需 Tailwind ≥ 4、不需要 Provider                                            | 4.x 出现时停下，读迁移文档                                         |
+| `tailwindcss` / `@tailwindcss/vite`                                                                                                                                                                                                     | `^4.3.3`                                             | 样式                                                                                | —                                                                  |
+| `zustand`                                                                                                                                                                                                                               | `^5.0.15`                                            | 渲染进程状态                                                                        | —                                                                  |
+| `zod`                                                                                                                                                                                                                                   | `^4.6.5`                                             | 所有跨进程/跨文件数据校验                                                           | —                                                                  |
+| `pdfjs-dist`                                                                                                                                                                                                                            | `^6.3.289`（`legacy/build/pdf.mjs` 供 Node）         | 解析（算子流、文本层检测、校验）                                                    | 检查 `getOperatorList`/`OPS`/glyph 对象字段                        |
+| `@cantoo/pdf-lib`                                                                                                                                                                                                                       | `^2.11.1`（pdf-lib 的维护分支，API 同 pdf-lib 1.17） | 写回（低层对象 API + 字体嵌入 + copyPages）                                         | —                                                                  |
+| `@cantoo/fontkit`                                                                                                                                                                                                                       | `^2.0.12`                                            | 字体嵌入与子集化                                                                    | —                                                                  |
+| `mupdf`                                                                                                                                                                                                                                 | `1.3.6`（精确版本，MuPDF 1.25.6，WebAssembly）       | 版面检测前的页面渲染，与 pdf2zh 的 PyMuPDF 一致；AGPL-3.0（ADR-0016）               | 换版本前用 `tests/fixtures/pdf2zh` 与维护者论文对照版面框          |
+| `onnxruntime-web`                                                                                                                                                                                                                       | `1.30.0`（精确版本）                                 | DocLayout-YOLO 推理（Node 下用 wasm 后端，不用原生的 onnxruntime-node）             | 检查 `ort.node.min.mjs` 与 wasm 文件名（electron-builder `files`） |
+| `electron-log`                                                                                                                                                                                                                          | `^5.4.4`                                             | 日志                                                                                | —                                                                  |
+| `fflate`                                                                                                                                                                                                                                | `^0.8.2`                                             | ZIP 导出（内容流的解压/压缩用 pdf-lib 自带的）                                      | —                                                                  |
+| `lucide-react`                                                                                                                                                                                                                          | `^1.47.0`                                            | 图标                                                                                | —                                                                  |
+| `clsx`                                                                                                                                                                                                                                  | `^2.1.1`                                             | className 拼接                                                                      | —                                                                  |
+| `vitest`                                                                                                                                                                                                                                | `^5.0.1`                                             | 单测                                                                                | —                                                                  |
+| `@playwright/test`                                                                                                                                                                                                                      | `^1.63.0`                                            | E2E（`_electron`）                                                                  | —                                                                  |
+| `electron-builder`                                                                                                                                                                                                                      | `^26.15.3`                                           | 打包                                                                                | —                                                                  |
+| `png2icons`                                                                                                                                                                                                                             | `^2.0.1`                                             | 生成图标                                                                            | —                                                                  |
 | `eslint` `^10.11.0`、`@eslint/js` `^10.0.1`、`typescript-eslint` `^8.70.0`、`eslint-plugin-react-hooks` `^7.1.1`、`eslint-plugin-react-refresh` `^0.5.7`、`eslint-config-prettier` `^10.1.8`、`globals` `^17.12.0`、`prettier` `^3.9.8` | lint/格式                                            |                                                                                     |
 | `tsx` `^4.23.15`                                                                                                                                                                                                                        | 直接运行 `tests/mock-provider/server.ts` 与脚本      |                                                                                     |
 | `@types/node` `^24`、`@types/react` `^19.3`、`@types/react-dom` `^19.3`                                                                                                                                                                 | 类型                                                 |                                                                                     |
@@ -163,8 +171,9 @@ docflow/
   "engines": { "node": ">=24" },
   "scripts": {
     "dev": "electron-vite dev",
+    "predev": "node scripts/fetch-model.mjs",
     "build": "electron-vite build",
-    "prebuild": "node scripts/third-party-notices.mjs",
+    "prebuild": "node scripts/fetch-model.mjs && node scripts/third-party-notices.mjs",
     "preview": "electron-vite preview",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
     "lint": "eslint . && prettier --check .",
@@ -173,6 +182,7 @@ docflow/
     "test:watch": "vitest",
     "test:e2e": "playwright test",
     "verify:fonts": "node scripts/verify-fonts.mjs",
+    "model": "node scripts/fetch-model.mjs",
     "check": "npm run verify:fonts && npm run typecheck && npm run lint && npm run test",
     "dist": "npm run build && electron-builder --publish never",
     "dist:dir": "npm run build && electron-builder --dir --publish never",
@@ -187,6 +197,8 @@ docflow/
     "@cantoo/pdf-lib": "^2.11.1",
     "electron-log": "^5.4.4",
     "fflate": "^0.8.2",
+    "mupdf": "1.3.6",
+    "onnxruntime-web": "1.30.0",
     "pdfjs-dist": "^6.3.289",
     "zod": "^4.6.5"
   },

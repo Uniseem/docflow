@@ -2,38 +2,38 @@
 
 ## 8.1 层次
 
-| 层   | 工具                       | 范围                                                                                                                                                                                                                                                                                                                                                                                                                        | 何时跑                    |
-| ---- | -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------- |
-| 单元 | vitest（node 环境）        | `src/shared/**`、`src/main/**` 的纯函数与模块：解析、段落合并、公式识别、排版、翻译请求/响应/错误/池/批处理/占位符、设置与 manifest 的 zod、原子写、调度器（注入 `now` 或用可控 promise）；`src/renderer/**` 里不依赖 DOM 的模块（store、`lib/labels`、`api/errors`、`views/Document/progress`、`views/Library/virtual-list`）；`tests/mock-provider/server.test.ts`。React 组件不做单测（没有 jsdom），界面交互由 E2E 覆盖 | `npm run check`，每次提交 |
-| 集成 | vitest（与单元同一次运行） | 流水线 inspect→analyze→假翻译（可翻译段落前加 `译`）→compose→verify 写出中文与双语 PDF（`pipeline/run.test.ts`、`ipc/documents-smoke.test.ts`、`pdf/compose/compose.test.ts`，不启动 Electron，compose 不依赖任何 Electron API）；翻译阶梯与获取/检查模型对 `tests/mock-provider` 本地服务（`translate/translate-document.test.ts`、`translate/providers.test.ts`，用 Node fetch 代替 `net.fetch`）                         | `npm run check`           |
-| E2E  | Playwright `_electron`     | 真实应用（`electron-builder --dir` 产物）：首次启动在界面上配置 mock 服务商；其余场景用 IPC 配置服务商、用 `documents:create` 建文档 → 翻译完成 → 预览、导出、失败文案、取消与重新处理、重启续跑、删除、设置持久化与更换文档库                                                                                                                                                                                              | CI `package` job；发布前  |
-| 手工 | 人                         | 真实 arXiv 论文 5 篇 + 真实服务商 1 个（DeepSeek）                                                                                                                                                                                                                                                                                                                                                                          | 里程碑 M5、M6             |
+| 层   | 工具                       | 范围                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          | 何时跑                    |
+| ---- | -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------- |
+| 单元 | vitest（node 环境）        | `src/shared/**`、`src/main/**` 的纯函数与模块：pdf2zh 移植（版面矩阵、逐字符分段、内容流解释、排版、字符映射）、翻译请求/响应/错误/池/pdf2zh 提示词、设置与 manifest 的 zod、原子写、调度器（注入 `now` 或用可控 promise）；`src/renderer/**` 里不依赖 DOM 的模块（store、`lib/labels`、`api/errors`、`views/Document/progress`、`views/Library/virtual-list`）；`tests/mock-provider/server.test.ts`。React 组件不做单测（没有 jsdom），界面交互由 E2E 覆盖                                                                                                                  | `npm run check`，每次提交 |
+| 集成 | vitest（与单元同一次运行） | 与 pdf2zh 逐页比对段落切分（`pdf/analyze.test.ts`，用 `tests/fixtures/pdf2zh/*.json`）；真实版面检测（MuPDF.js + 模型，`pdf/pdf2zh/doclayout.test.ts`、`ipc/documents-smoke.test.ts`）；流水线 inspect→版面检测→analyze→假翻译→compose→verify 写出中文与双语 PDF（`pipeline/run.test.ts`、`ipc/documents-smoke.test.ts`、`pdf/compose/compose.test.ts`，不启动 Electron，compose 不依赖任何 Electron API）；翻译阶梯与获取/检查模型对 `tests/mock-provider` 本地服务（`translate/translate-document.test.ts`、`translate/providers.test.ts`，用 Node fetch 代替 `net.fetch`） | `npm run check`           |
+| E2E  | Playwright `_electron`     | 真实应用（`electron-builder --dir` 产物）：首次启动在界面上配置 mock 服务商；其余场景用 IPC 配置服务商、用 `documents:create` 建文档 → 翻译完成 → 预览、导出、失败文案、取消与重新处理、重启续跑、删除、设置持久化与更换文档库                                                                                                                                                                                                                                                                                                                                                | CI `package` job；发布前  |
+| 手工 | 人                         | 真实 arXiv 论文 5 篇 + 真实服务商 1 个（DeepSeek）                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            | 里程碑 M5、M6             |
 
-现状（2026-09-24）：`npm run test` 共 53 个测试文件、265 个用例；E2E 8 个 spec（8.5）。没有覆盖率门槛：`vitest.config.ts` 里写了 v8 覆盖率配置（只统计 `src/main/**`、`src/shared/**`），但没有安装 `@vitest/coverage-v8`，也没有脚本调用。vitest 的 `globalSetup`（`tests/unit/global-setup.ts`）在 `tests/fixtures/single-column.pdf` 不存在时先跑 `scripts/make-fixtures.mjs`。CI 的 `package` job 在 windows-latest 与 macos-15 上 `npm run build`、`npx electron-builder --dir` 后跑 `npm run test:e2e`。
+现状（2026-09-26）：`npm run test` 共 55 个测试文件、338 个用例，本机约 40 s，需要先 `npm run model` 下载版面模型；E2E 8 个 spec（8.5）。没有覆盖率门槛：`vitest.config.ts` 里写了 v8 覆盖率配置（只统计 `src/main/**`、`src/shared/**`），但没有安装 `@vitest/coverage-v8`，也没有脚本调用。vitest 的 `globalSetup`（`tests/unit/global-setup.ts`）在 `tests/fixtures/single-column.pdf` 不存在时先跑 `scripts/make-fixtures.mjs`。CI 的 `package` job 在 windows-latest 与 macos-15 上 `npm run build`、`npx electron-builder --dir` 后跑 `npm run test:e2e`。
 
 ## 8.2 fixture 生成（`scripts/make-fixtures.mjs`，用 `@cantoo/pdf-lib` + 标准字体）
 
 生成到 `tests/fixtures/`，全部提交（`npm run fixtures`；脚本对每个文件检查 < 200 KB，超了就报错）。页面都是 612×792 pt，正文用真实英文句子（不是 lorem）：
 
-| 文件                  | 内容                                                                                                                                                       | 用来测什么                                     |
-| --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
-| `single-column.pdf`   | 3 页，Times-Roman 10 pt，每页 4 段英文，灰色页眉 `Header · page N` 与页码                                                                                  | 行/段合并、页眉页脚跳过、断点                  |
-| `two-column.pdf`      | 4 页两栏，首页通栏标题与摘要，`1 Introduction`/`2 Method` 等编号标题，末页参考文献                                                                         | 栏检测、阅读顺序、标题识别                     |
-| `inline-formula.pdf`  | 段落里用 `Symbol`（`≤`、`α`）与 `Times-Italic` 单字母（`x`）模拟行内公式，角标用 7 pt 并偏移基线                                                           | 公式项判定、占位符合并、上下标                 |
-| `display-math.pdf`    | 独立公式行 `E = mc²` + `(3)` 编号                                                                                                                          | display math 不翻译                            |
-| `figure-caption.pdf`  | 嵌入一张 PNG，图内有短文字，下方 `Figure 1: …`                                                                                                             | `inside_image`、`short_isolated`、caption 翻译 |
-| `hyphenation.pdf`     | 行尾连字符断词、连字 `ﬁ`                                                                                                                                   | 文本规整                                       |
-| `long.pdf`            | 60 页单栏，每页一段                                                                                                                                        | 性能、进度、事件上限；E2E 的取消与重启         |
-| `encrypted.pdf`       | 用户口令 `secret`                                                                                                                                          | `pdf_encrypted`                                |
-| `scanned.pdf`         | 只有一张整页图片                                                                                                                                           | `scanned_pdf`                                  |
-| `empty.pdf`           | 0 页（pdf-lib 无法生成 0 页，用手工构造的最小 PDF 字节）                                                                                                   | `pdf_empty`                                    |
-| `colored-text.pdf`    | 红色标题 + 蓝色正文                                                                                                                                        | 颜色提取与颜色保留                             |
-| `tj-arrays.pdf`       | 用 `TJ` 数组（字距调整）、`'`、`"` 算子与 `Tc`/`Tw`/`Tz` 绘制的段落（手写内容流）                                                                          | 算子流状态机、词法分析器、删除集合             |
-| `cid-font.pdf`        | 嵌入 Noto Sans SC 子集（`resources/fonts/NotoSansSC-Regular.otf`，pdf-lib 生成 Type0/Identity-H，2 字节编码）的中英文段落，与 Times-Italic 的变量 `x` 混排 | 复合字体编码字节数、公式重绘                   |
-| `form-wrapped.pdf`    | 整页内容包在一个 Form XObject 里（手工构造）                                                                                                               | 表单递归、页面级追加、字体资源搬运             |
-| `shared-form.pdf`     | 2 页都 `Do` 同一个含文字的表单（页眉 `LOGO`）                                                                                                              | shared 表单跳过                                |
-| `italic-sentence.pdf` | 斜体的整句 + 单个斜体变量                                                                                                                                  | `.*Ital` 放宽规则                              |
-| `invisible-text.pdf`  | 整页图片 + `3 Tr` 隐藏文字层                                                                                                                               | `scanned_pdf`（可见字形为 0）                  |
+| 文件                  | 内容                                                                                                                                                                                              | 用来测什么                                     |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
+| `single-column.pdf`   | 3 页，Times-Roman 10 pt，每页 4 段英文，灰色页眉 `Header · page N` 与页码                                                                                                                         | 行/段合并、页眉页脚跳过、断点                  |
+| `two-column.pdf`      | 4 页两栏，首页通栏标题与摘要，`1 Introduction`/`2 Method` 等编号标题，末页参考文献                                                                                                                | 栏检测、阅读顺序、标题识别                     |
+| `inline-formula.pdf`  | 段落里用 `Symbol`（`≤`、`α`）与 `Times-Italic` 单字母（`x`）模拟行内公式，角标用 7 pt 并偏移基线                                                                                                  | 公式项判定、占位符合并、上下标                 |
+| `display-math.pdf`    | 独立公式行 `E = mc²` + `(3)` 编号                                                                                                                                                                 | display math 不翻译                            |
+| `figure-caption.pdf`  | 嵌入一张 PNG，图内有短文字，下方 `Figure 1: …`                                                                                                                                                    | `inside_image`、`short_isolated`、caption 翻译 |
+| `hyphenation.pdf`     | 行尾连字符断词、连字 `ﬁ`                                                                                                                                                                          | 文本规整                                       |
+| `long.pdf`            | 60 页单栏，每页一段                                                                                                                                                                               | 性能、进度、事件上限；E2E 的取消与重启         |
+| `encrypted.pdf`       | 用户口令 `secret`                                                                                                                                                                                 | `pdf_encrypted`                                |
+| `scanned.pdf`         | 只有一张整页图片                                                                                                                                                                                  | `scanned_pdf`                                  |
+| `empty.pdf`           | 0 页（pdf-lib 无法生成 0 页，用手工构造的最小 PDF 字节）                                                                                                                                          | `pdf_empty`                                    |
+| `colored-text.pdf`    | 红色标题 + 蓝色正文                                                                                                                                                                               | 颜色提取与颜色保留                             |
+| `tj-arrays.pdf`       | 用 `TJ` 数组（字距调整）、`'`、`"` 算子与 `Tc`/`Tw`/`Tz` 绘制的段落（手写内容流）                                                                                                                 | 算子流状态机、词法分析器、删除集合             |
+| `cid-font.pdf`        | 嵌入中文字体子集（现有文件用 Noto Sans SC 生成，脚本现用 `resources/fonts/SourceHanSerifCN-Regular.ttf`；pdf-lib 生成 Type0/Identity-H，2 字节编码）的中英文段落，与 Times-Italic 的变量 `x` 混排 | 复合字体编码字节数、公式重绘                   |
+| `form-wrapped.pdf`    | 整页内容包在一个 Form XObject 里（手工构造）                                                                                                                                                      | 表单递归、页面级追加、字体资源搬运             |
+| `shared-form.pdf`     | 2 页都 `Do` 同一个含文字的表单（页眉 `LOGO`）                                                                                                                                                     | shared 表单跳过                                |
+| `italic-sentence.pdf` | 斜体的整句 + 单个斜体变量                                                                                                                                                                         | `.*Ital` 放宽规则                              |
+| `invisible-text.pdf`  | 整页图片 + `3 Tr` 隐藏文字层                                                                                                                                                                      | `scanned_pdf`（可见字形为 0）                  |
 
 另放 2 篇真实的 CC-BY-4.0 arXiv 论文（来源与许可记录在 `tests/fixtures/README.md`；各约 0.7–0.9 MB，不受 200 KB 限制，脚本不会覆盖）：`arxiv-2201.11903.pdf`（Chain-of-Thought）、`arxiv-2302.13971.pdf`（LLaMA）。它们只用在 `pdf/analyze.test.ts` 的「真实论文」三个版面断言里（两栏按栏阅读且段落完整、图旁环绕的正文是一段、矢量图里的小字不翻译，来自 [M5 修复 worklog](../worklog/2026-09-23-m5-fixes.md) 的版面修复）；字形、词法、compose/verify 的逐 fixture 循环都跳过 `arxiv-*`，所以目前没有对真实论文跑写回与校验（`tests/fixtures/README.md` 里「不崩溃、页数正确、译页含中文」的说法与实际不符）。
 
@@ -43,7 +43,7 @@
 
 - `POST /v1/chat/completions`（OpenAI）、`GET /v1/models`（`mock-chat`、`mock-model`、`mock-reasoner`）；`POST /anthropic/v1/messages`（缺 `max_tokens` 或 `anthropic-version: 2023-06-01` 时 400）、`GET /anthropic/v1/models`（分两页：`claude-mock`，`after_id=claude-mock` 时 `claude-mock-2`）；`POST /gemini/v1beta/models/:model:generateContent`、`GET /gemini/v1beta/models`（`models/gemini-mock` 支持 `generateContent`，`models/embed-mock` 只支持 `embedContent`，用来测过滤）。没有 Azure 专用接口：Azure 类型会被指到 `<mock>/v1`，OpenAI 接口的 Key 先取 `Authorization: Bearer`，没有时取 Azure 的 `api-key` 头（与 `translate/request.ts` 的 `authHeaders` 一致）。应用通过 `DOCFLOW_MOCK_PROVIDER_URL` 把服务商地址换成 mock（`shared/presets.ts` 的 `mockBaseUrl`：OpenAI 兼容与 Azure → `<mock>/v1`，Anthropic → `<mock>/anthropic`，Gemini → `<mock>/gemini`）。
 - 鉴权：OpenAI 读 `Authorization: Bearer`，Anthropic 读 `x-api-key`，Gemini 读 `x-goog-api-key`；没有 Key 时 401（`--open` / `open: true` 时放行），模型列表接口同样检查。
-- 默认行为：把每个 `<segment>` 原样返回，正文 = 原文 + `〔测试译文〕`，占位符原样保留；单段请求返回 `原文〔测试译文〕`（空白原文不加标记）。
+- 默认行为：用户消息是 pdf2zh 提示词时（04 §4.9），取出 `Source Text: ` 与 `\n\nTranslated Text:` 之间的原文，返回 `原文〔测试译文〕`（`{vN}` 原样保留，空白原文不加标记）；旧的 `<segment>` 多段格式仍按段返回。故障注入对取出的原文生效。
 - 故障注入（按用户消息里的触发词、Key、模型或计数）：
   - 每种接口（OpenAI/Anthropic/Gemini 分别计数）的每第 9 个对话请求返回 429（`Rate limit reached, please retry`，带 `Retry-After: 1`；间隔可用 `rateLimitEvery` 调整，0 表示关闭）；
   - 用户消息 > 3000 字符 → 只返回一半，`finish_reason: length`（Anthropic `stop_reason: max_tokens`，Gemini `finishReason: MAX_TOKENS`）；
@@ -63,30 +63,25 @@
 
 ## 8.4 单元测试清单（最低要求）
 
-下面是规划时定的最低要求，测试文件与被测文件同目录（`src/main/**`、`src/shared/**`、`src/renderer/**` 下的 `*.test.ts`）。2026-09-24 核对时还没有对应用例的项在条目末尾用「（缺：…）」标出。
+测试文件与被测文件同目录（`src/main/**`、`src/shared/**`、`src/renderer/**` 下的 `*.test.ts`）。
 
-- `shared/types`：每个 schema 的合法/非法样例；`Settings` 未知字段拒绝；`ProviderConfig.extraBody` 禁用字段。
-- `translate/providers`：4 种类型的 chatUrl/modelsUrl（含 base 已带 `/v1`、尾部 `/`、gemini `models/` 前缀）、鉴权头、请求体、extraBody 深合并。（这些在 `translate/request.test.ts`；`translate/providers.test.ts` 对 mock 服务测获取模型列表与检查模型。）
-- `translate/response`：三种接口的正常、截断、拒绝、`<think>`、content 数组形式、200 带 error。
-- `translate/errors`：状态码表逐项、正文关键词逐项、Retry-After 秒/日期/上限、`redact`。
-- `translate/keys`：拆分（中英文逗号、分号、换行）、掩码、轮询、下架 600 s 后恢复（假时钟）、全部下架。
-- `translate/pool`：并发上限（用可控 promise 验证峰值）、429 减半与回升序列 100→50→62→77→96→100、`setConfigured` 降低时不打断。
-- `translate/batch`：分批边界（段数、字符数、超长拆分与拼回）、`parseBatch` 各种格式。
-- `translate/protect + validate`：占位符替换与还原、损坏修复样例、数量不符、编号变化拒绝、PDF 序列校验（交换/新增/大小写）、isolated 模式禁标记。（都在 `translate/validate.test.ts`，另测 `TranslationCache`；缺：PDF 序列校验的「新增」「大小写」。）
-- `translate/translate-document`（对 mock 服务）：正常、DROP_ME 触发逐段、DAMAGE 触发修复、LOSE 触发 strict 再拆分再隔离、REFUSE 保留原文、mostly_untranslated、连续拒绝、缓存命中不请求、取消。（另有：重试等待中取消立即结束、`DOCFLOW_FAKE_PROVIDERS` 假 fetch；缺：LOSE、连续拒绝。）
-- `pdf/analyze/glyphs`：每个 fixture 的字形 x/y/size/adv 与 pdf.js `getTextContent` 的位置一致（容差 0.05 pt）；`TJ` 数字间距、`'`/`"`、`Tz`/`Tc`/`Tw`/`Ts`、表单矩阵、`Tr 3`、复合字体编码字节数、颜色（数组与 `#rrggbb` 两种输入）。
-- `pdf/analyze/*`：每个 fixture 的行数/段数/栏数/公式片段数与角色（用快照 JSON），阈值边界；「同一算子的字形同行同段」不变量。（实际：`pdf/analyze.test.ts` 只对 `single-column.pdf` 的统计做快照，快照在 `src/main/pdf/__snapshots__/analyze.test.ts.snap`，不在 `tests/unit/__snapshots__/`；两栏、行内公式、独立公式、斜体整句、表单 shared 判定与两篇真实论文用针对性断言；`analyze/normalize.test.ts` 测连字符与连字。缺：其余 fixture 的快照、「同一算子的字形同行同段」不变量。）
-- `pdf/compose/content-lexer`：fixture 内容流分词后原样拼回逐字节相等；字符串转义/嵌套括号/十六进制串/字典/内联图像/注释的边角样例。
-- `pdf/compose/content-walker`：每个 show-text 算子的起点与字形记录的首字形一致（容差 0.5 pt）；表单递归与 shared 跳过；删除集合数量与段落 `opSeqs` 一致；`op_mismatch` 超阈值时整页放弃。（超过 10% 整页放弃与删除集合在 `pdf/compose/emit.test.ts` 的 `rewrite` 组里。）
-- `pdf/compose/fonts`：`loadedName → 资源名` 起点匹配、BaseFont 回退、`DFo<n>` 挂载；CJK 子集回退。（实际只测了去掉子集前缀、嵌入 CJK 子集并挂载字典名；缺：`loadedName` 匹配与 BaseFont 回退。）
-- `pdf/compose/layout`：换行（避头尾、拉丁词不拆）、行高再字号缩放、justify 分配、`{vN}` 占位宽度。
-- `pdf/compose/emit`：译文 `Tj` 的十六进制编码、公式片段合并/拆分规则、1/2 字节编码、颜色 `rg`。
-- `pdf` 集成：每个 fixture 跑 inspect→analyze→（假翻译：原文前加 `译`）→compose→verify，断言页数、尺寸、译页含中文、改写页 `getOperatorList` 可执行、未翻译段落的原字节仍在输出流中、无未捕获异常；`encrypted/scanned/empty/invisible-text` 断言错误码。（`pdf/compose/compose.test.ts` 跑除 `arxiv-*`、四个错误文件和 `long.pdf` 之外的合成 fixture；`long.pdf` 单独测 compose+双语+verify 在 30 s 内；`getOperatorList` 可执行在 `pdf/verify.test.ts`，只用 `single-column.pdf`；错误码另见 `pdf/inspect.test.ts`。）
-- `settings/atomic-write`：并发写、目标存在、崩溃模拟（写一半的 tmp 文件不影响读取）。
-- `library`：manifest 读写、索引重建、事件追加与截断、导出 ZIP 内容。
-- `jobs/scheduler`（注入 `now` + 假流水线）：并发数、重试间隔、永久失败不重试、取消、重启恢复。（另有：关停不算取消、取消只对进行中生效且只记一次、取消/删除最多等宽限期、重试清掉上次的计时、意外错误显示通用中文。）
+### pdf2zh 对照数据
 
-清单之外已有的单测：`app/`（dialogs、menu、notifications、protocol、proxy、window-state）、`ipc/handlers`、`ipc/documents-smoke`、`log/logger`、`pdf/inspect`、`pdf/verify`、`pdf/load-pdf-lib`、`pdf/dom-matrix`、`pdf/worker-host`、`settings/`（host、secrets、settings）、`translate/http`；`shared/`（errors、pdf-types、presets、text）；渲染进程的 `store/documents`（排序与方向键、按 seq 合并处理记录、换库后丢弃旧响应、推送与筛选计数、删除后选中相邻行、只采用最新的 `list()` 响应）、`store/ui`（`openSettings` 的默认页签、换库保留主题、`clearConfirm` 只清自己）、`lib/labels`、`api/errors`（`toDocflowError`）、`views/Document/progress`（阶段状态、用时）、`views/Library/virtual-list`；`tests/mock-provider/server.test.ts`。`tests/unit/placeholder.test.ts` 只是占位。
+`tests/fixtures/pdf2zh/<样例>.json` 是 PDFMathTranslate 1.9.11（pdfminer.six 20250416、PyMuPDF 1.25.2、onnxruntime）在 `tests/fixtures/*.pdf` 上实跑导出的结果：每页的 DocLayout-YOLO 框（`layout`）和每次 `receive_layout` 的 `sstk` 与公式数（`units`，页面与表单）。导出用的是开发机上的独立 Python 虚拟环境与假翻译器，不在仓库里（ADR-0016、worklog 2026-09-26-pdf2zh-port）；pdf2zh 升级或样例重生成时要重新导出。`tests/unit/pdf2zh-reference.ts` 负责读取。
+
+- `pdf/analyze`：给定 pdf2zh 的版面框，14 个样例（含两篇 arXiv 论文、60 页的 `long`、表单、共享表单）每页的 `sstk` 与公式数、各表单单元的 `sstk` 与 pdf2zh 完全相同；`tj-arrays` 记录 pdfminer `"` 缺陷造成的已知差异（字符相同，分段不同）。
+- `pdf/pdf2zh/parse`：`vflag` 各条规则；新段、空格、`brk`、类别变化、保留区域与项目符号、角标、括号计数、`vfix`、纯公式段、首字母放大、`vlen`、公式线条与全局线条、`vmax` 截断。
+- `pdf/pdf2zh/typeset`：tiro/noto 切换、无 `brk` 不换行但切段、`brk` 换行、行高递减（含浮点结果）、公式按原字体原编码与 `fix` 重画、公式线条、段首公式、越界标记、行首空格、全局线条与线宽 5、`codeHex`。
+- `pdf/pdf2zh/interp`：`ops_base` 的删除与保留（含只保留弹出的操作数、`true/false/null`）、`do_S` 的黑线判定（灰、CMYK、SCN、未设色、非水平、三点、`s`）与 CTM、`Tf` 资源名与起点、表单单元（Matrix × CTM、BBox 宽、无 BBox 只计数）、页面 CTM 与旋转。
+- `pdf/pdf2zh/doclayout`：`pyRound`、`imgsz`、缩放补边尺寸与补边值、后处理过滤与坐标还原与排序、版面矩阵填充顺序；`two-column` 的真实检测结果与 pdf2zh 的框一致（置信度差 < 0.01、坐标差 < 1 px）。
+- `pdf/pdf2zh/unicode`：`name2unicode`（AGL、`uni`、`u`、`_`、`.`、代理区、未知名）、ToUnicode 的 bfchar/bfrange/数组、U+00A0 不覆盖空格、Type1 明文头编码。
+- `pdf/pdf2zh/chars`：`LTChar` 框与字号、`(cid:N)`、竖排判定；算子对齐（一一对应、续写算子只比基线、数量不等时按位置配对）。
+- `translate/pdf2zh-prompt`：默认提示词与 pdf2zh 逐字相同、自定义模板变量、4.0.0 旧提示词替换、`safe_substitute`、回复清理。
+- `translate/translate-document`（对 mock 服务或注入 fetch）：正常与缓存命中不请求、逐段请求且只有一条 user 消息、`<think>` 清理、REFUSE 保留原文并触发 `mostly_untranslated`、不可重试错误保留原文不退避、服务一直不可用时可重试失败、一个请求耗尽时中止其余请求、取消、重试等待中取消立即结束、假 fetch。
+- `pdf/compose`：5 个样例假翻译后原文全部删除（剩下的拉丁字母只来自公式字符）、译文含中文、verify 通过；页面内容为 `q {ops_base}Q 1 0 0 1 x y cm BT … ET` 且挂了 `tiro`、`noto`；表单流按逆 CTM 写回；共享表单；`long` 在 30 s 内；错误样例的错误码。
+- `shared/types`、`translate/providers`（URL、鉴权头、请求体、extraBody、空 system）、`translate/response`、`translate/errors`、`translate/keys`、`translate/pool`、`settings/atomic-write`、`library`、`jobs/scheduler`：同 4.0.0。
+
+清单之外已有的单测：`app/`（dialogs、menu、notifications、protocol、proxy、window-state）、`ipc/handlers`、`ipc/documents-smoke`、`log/logger`、`pdf/inspect`、`pdf/verify`、`pdf/load-pdf-lib`、`pdf/dom-matrix`、`pdf/worker-host`、`pdf/compose/content-lexer`、`pdf/analyze/glyphs`、`settings/`（host、secrets、settings）、`translate/http`；`shared/`（errors、pdf-types、presets、text）；渲染进程的 `store/documents`（排序与方向键、按 seq 合并处理记录、换库后丢弃旧响应、推送与筛选计数、删除后选中相邻行、只采用最新的 `list()` 响应）、`store/ui`（`openSettings` 的默认页签、换库保留主题、`clearConfirm` 只清自己）、`lib/labels`、`api/errors`（`toDocflowError`）、`views/Document/progress`（阶段状态、用时）、`views/Library/virtual-list`；`tests/mock-provider/server.test.ts`。`tests/unit/placeholder.test.ts` 只是占位。
 
 ## 8.5 E2E 场景（`tests/e2e/*.spec.ts`）
 

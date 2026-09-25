@@ -1,6 +1,6 @@
 # PDF 测试 fixture
 
-由 `npm run fixtures`（`scripts/make-fixtures.mjs`）生成，全部提交。合成 PDF 每个小于 200 KB，使用 `@cantoo/pdf-lib` 与 14 种标准字体；`cid-font.pdf` 另外嵌入 Noto Sans SC 子集。
+由 `npm run fixtures`（`scripts/make-fixtures.mjs`）生成，全部提交。合成 PDF 每个小于 200 KB，使用 `@cantoo/pdf-lib` 与 14 种标准字体；`cid-font.pdf` 另外嵌入中文字体子集（现有文件用 4.0.0 的 Noto Sans SC 生成；2026-09-26 起脚本改用 `resources/fonts/SourceHanSerifCN-Regular.ttf`，重新生成后要重新导出 `pdf2zh/` 对照数据）。`pdf2zh/*.json` 是 PDFMathTranslate 1.9.11 在这些样例上的版面框与分段结果（08 章 §8.4）。
 
 加密文件口令：`encrypted.pdf` 的用户口令是 `secret`。
 

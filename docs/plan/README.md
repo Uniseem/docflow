@@ -18,7 +18,7 @@
 
 ## 一句话架构
 
-Electron 44 单应用：主进程（Node 24）负责文档库、任务调度、大模型请求（`net.fetch`）；PDF 解析与写回在 `worker_threads` 里用 pdf.js + pdf-lib 完成，处理逻辑参照 [PDFMathTranslate](https://github.com/PDFMathTranslate/PDFMathTranslate)：解释内容流得到逐字形信息，删除被翻译段落的文字指令，追加译文，公式用原字体在新位置重绘；渲染进程是 React 19 + HeroUI 3 的单页界面，通过 contextBridge 暴露的类型化 IPC 与主进程通信；数据全部是文件（JSON / JSONL / PDF）。
+Electron 44 单应用：主进程（Node 24）负责文档库、任务调度、大模型请求（`net.fetch`）；PDF 解析与写回在 `worker_threads` 里完成，处理逻辑照搬 [PDFMathTranslate](https://github.com/PDFMathTranslate/PDFMathTranslate) 1.9.11（ADR-0016）：MuPDF.js 渲染页面、DocLayout-YOLO（onnxruntime-web）检测版面，pdf.js 取逐字形信息，按 pdf2zh 的规则分段与识别公式，删除全部文字指令后用 pdf-lib 整页重绘译文与公式；渲染进程是 React 19 + HeroUI 3 的单页界面，通过 contextBridge 暴露的类型化 IPC 与主进程通信；数据全部是文件（JSON / JSONL / PDF）。
 
 ## 执行顺序（详见 09 章）
 

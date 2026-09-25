@@ -1,6 +1,6 @@
 # PDFMathTranslate（pdf2zh 1.x）处理逻辑笔记
 
-> 仓库：https://github.com/PDFMathTranslate/PDFMathTranslate（EMNLP 2025 Demo；AGPL-3.0 许可，我们只参考思路、用 TypeScript 重新实现，不复制代码）。读的是 2026-09 的 `main` 分支，以函数名为准。4.0 的 PDF 流水线（`docs/plan/03-pdf-pipeline.md`）以它为蓝本。
+> 仓库：https://github.com/PDFMathTranslate/PDFMathTranslate（EMNLP 2025 Demo；AGPL-3.0 许可，我们按它的行为用 TypeScript 重新实现，不复制代码）。读的是 2026-09 的 `main` 分支，以函数名为准。4.0 的 PDF 流水线（`docs/plan/03-pdf-pipeline.md`）以它为蓝本。
 
 ## 文件分工
 
@@ -47,6 +47,8 @@
 - 颜色：没有处理，新文字使用默认填充色。
 - 收尾：`doc_zh.subset_fonts(fallback=True)`；dual = 交替插入原页与译页。
 
-## 我们改了什么（见 03 章 §3.17）
+## 与 DocFlow 的关系
 
-只删除被翻译段落的文字指令而不重建整页；不需要原位重绘保留区域；几何规则代替版面模型；总是按框宽换行并保留颜色；表单在页面级追加而不做逆矩阵；分式横线暂不搬运。
+4.0.0 只「参照思路」：几何规则代替版面模型、只删被翻译段落的指令、按框宽换行并缩字号、保留颜色。真实论文里原文残留、与译文重叠，2026-09-26 起改为逐函数照搬本笔记描述的 1.9.11 行为（[ADR-0016](../adr/0016-port-pdfmathtranslate.md)，03 章），代码在 `src/main/pdf/pdf2zh/`，与 pdf2zh 的差异只剩实现层面，见 03 章 §3.13。pdf2zh 是 AGPL-3.0：移植按它的行为用 TypeScript 重写，不复制源码。
+
+对照方法：在开发机上建独立的 Python 虚拟环境装 `pdf2zh==1.9.11`（Python 3.13 需 `--ignore-requires-python`；`tencentcloud-sdk-python-tmt` 要锁到 3.0.1478，否则 import 失败），用假翻译器替换 `pdf2zh.converter.GoogleTranslator`，用 `sys.settrace` 在 `receive_layout` 返回时取 `sstk`、`pstk`、`var` 等局部变量，把 `OnnxModel.predict` 的输入图与输出框一起导出。`tests/fixtures/pdf2zh/*.json` 就是这样得到的（worklog 2026-09-26-pdf2zh-port）。
