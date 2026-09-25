@@ -24,6 +24,7 @@ describe('suggestedNames', () => {
       dual: 'My Paper-双语对照.pdf',
       bundle: 'My Paper-完整文件.zip',
       source: 'src.pdf',
+      glossary: 'My Paper-术语表.csv',
     })
   })
 })

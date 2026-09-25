@@ -31,6 +31,16 @@ export async function pickPdfs(dialog: DialogHost): Promise<{ paths: string[] }>
   }
 }
 
+export async function pickCsv(dialog: DialogHost): Promise<string | undefined> {
+  const result = await dialog.showOpenDialog({
+    title: '选择术语表',
+    properties: ['openFile'],
+    filters: [{ name: 'CSV', extensions: ['csv'] }],
+  })
+  if (result.canceled) return undefined
+  return result.filePaths[0]
+}
+
 export async function pickFolder(
   dialog: DialogHost,
   title: string,

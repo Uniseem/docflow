@@ -1,24 +1,34 @@
 import { describe, expect, test } from 'vitest'
-import type { LtChar, Pdf2zhFormula, Pdf2zhParagraph } from '../../../shared/pdf-types'
+import type {
+  LtChar,
+  OutputComp,
+  ParagraphItem,
+  Pdf2zhFormula,
+  Pdf2zhParagraph,
+} from '../../../shared/pdf-types'
+import { FontMapper } from '../babeldoc/fontmap'
 import {
   fixOverlappingParagraphs,
   preprocessDocument,
   renderPage,
+  type ReflowFonts,
   type ReflowPage,
   type ReflowParagraph,
 } from './reflow'
-import type { TypesetFonts } from './typeset'
 
-// Fixed-width stand-ins: tiro 0.5 em, noto 1 em; noto glyph ids are the code points.
-const fonts: TypesetFonts = {
-  tiroHas: (ch) => /^[\x20-\x7e]$/.test(ch),
-  tiroWidth: () => 0.5,
-  notoWidth: (_ch, size) => size,
-  notoHex: (text) => [...text].map((c) => c.codePointAt(0)!.toString(16).padStart(4, '0')).join(''),
+// Only Source Han Serif CN Regular has glyphs, so every regular serif character maps to it.
+// Fixed-width stand-ins: ASCII 0.5 em, the rest 1 em; glyph ids are the code points.
+const FONT = 'DocFlow-SourceHanSerifCN-Regular'
+const fonts: ReflowFonts = {
+  mapper: new FontMapper('auto', (file) => file === 'SourceHanSerifCN-Regular.ttf'),
+  width: (_file, ch, size) => (/^[\x20-\x7e]$/.test(ch) ? 0.5 : 1) * size,
+  hex: (_file, ch) => ch.codePointAt(0)!.toString(16).padStart(4, '0'),
 }
+const SERIF = { bold: false, italic: false, monospace: false, serif: true }
 
 type Box = { x0: number; x1: number; y0: number; y1: number }
 
+/** A translated paragraph: `text` with {vN} markers becomes BabelDOC compositions. */
 function paragraph(
   text: string,
   box: Box,
@@ -35,13 +45,40 @@ function paragraph(
     gstate: null,
     ...extra,
   }
+  const style = {
+    font: 'F1',
+    size: para.size,
+    gstate: extra.gstate === undefined ? '' : extra.gstate,
+  }
+  const comps: OutputComp[] = text
+    .split(/(\{v\d+\})/)
+    .filter(Boolean)
+    .map((part) => {
+      const marker = /^\{v(\d+)\}$/.exec(part)
+      return marker
+        ? { kind: 'formula', index: Number(marker[1]) }
+        : { kind: 'text', text: part, style }
+    })
   return {
     para,
     formulas,
-    text,
+    items: [],
+    styles: [{ font: 'F1', size: para.size, gstate: '' }],
+    fonts: { F1: SERIF },
+    comps,
     stream,
     box: { x: para.x0, y: para.y0, x2: para.x1, y2: para.y1 },
   }
+}
+
+/** An untranslated paragraph: its original items. */
+function original(
+  items: ParagraphItem[],
+  box: Box,
+  formulas: Pdf2zhFormula[] = [],
+): ReflowParagraph {
+  const p = paragraph('', box, {}, formulas)
+  return { ...p, items, comps: undefined }
 }
 
 function vchar(text: string, x0: number, y0: number, extra: Partial<LtChar> = {}): LtChar {
@@ -91,7 +128,7 @@ function drawn(ops: string): Drawn[] {
   for (const block of ops.matchAll(/(?:q (.*?) )?BT (.*?)ET/g)) {
     const state = block[1] ?? ''
     for (const [, font, size, tm, x, y, hex] of block[2]!.matchAll(tj)) {
-      const width = font === 'noto' ? 4 : 2
+      const width = font === FONT ? 4 : 2
       let text = ''
       for (let i = 0; i < hex!.length; i += width) {
         text += String.fromCodePoint(Number.parseInt(hex!.slice(i, i + width), 16))
@@ -152,7 +189,7 @@ describe('BabelDOC typesetting on pdf2zh paragraphs', () => {
     layout(latin, cjk)
     expect(lines(latin.ops!)).toEqual(['aaaa bbbb cccc ', 'dddd'])
     expect(lines(cjk.ops!)).toEqual(['中文', '中文', '中'])
-    expect(drawn(latin.ops!)[0]).toMatchObject({ font: 'tiro', x: 100, y: 700, size: 10 })
+    expect(drawn(latin.ops!)[0]).toMatchObject({ font: FONT, x: 100, y: 700, size: 10 })
   })
 
   test('closing punctuation hangs past the edge; an opening bracket never ends a line', () => {
@@ -169,13 +206,40 @@ describe('BabelDOC typesetting on pdf2zh paragraphs', () => {
     expect(drawn(p.ops!)[0]).toMatchObject({ x: 120, text: '中文' })
   })
 
-  test('the translation keeps the paragraph colour; mixed colours fall back to the default', () => {
+  test('the translation keeps its style colour; a base style without one uses the default', () => {
     const red = paragraph('中文', { x0: 100, x1: 300, y0: 700, y1: 710 }, { gstate: '1 0 0 rg' })
     const mixed = paragraph('中文', { x0: 100, x1: 300, y0: 600, y1: 610 }, { gstate: null })
     layout(red, mixed)
-    expect(red.ops).toMatch(/^q 1 0 0 rg BT \/noto /)
+    expect(red.ops).toMatch(new RegExp(`^q 1 0 0 rg BT /${FONT} `))
     expect(red.ops).toMatch(/ET Q $/)
-    expect(mixed.ops).toMatch(/^BT \/noto .* ET $/)
+    expect(mixed.ops).toMatch(new RegExp(`^BT /${FONT} .* ET $`))
+  })
+
+  test('styled spans keep their colour and size; original spans keep their glyphs', () => {
+    const p = paragraph('中文', { x0: 100, x1: 300, y0: 700, y1: 710 })
+    const c = {
+      kind: 'char',
+      text: 'A',
+      x0: 0,
+      y0: 0,
+      x1: 6,
+      y1: 10,
+      code: 65,
+      codeBytes: 1,
+      style: 0,
+    }
+    p.items = [c as ParagraphItem]
+    p.comps = [
+      { kind: 'text', text: '中', style: { font: 'F1', size: 10, gstate: '' } },
+      { kind: 'text', text: '文', style: { font: 'F1', size: 10, gstate: '0 0 1 rg' } },
+      { kind: 'original', from: 0, to: 1 },
+    ]
+    layout(p)
+    expect(drawn(p.ops!).map((r) => [r.state, r.font, r.text, r.x])).toEqual([
+      ['', FONT, '中', 100],
+      ['0 0 1 rg', FONT, '文', 110],
+      ['', 'F1', 'A', 120],
+    ])
   })
 
   test('formulas: placed after the text before them, scaled with it, in their own colour', () => {
@@ -186,10 +250,10 @@ describe('BabelDOC typesetting on pdf2zh paragraphs', () => {
     layout(p)
     const runs = drawn(p.ops!)
     expect(runs.map((r) => [r.state, r.font, r.text])).toEqual([
-      ['', 'noto', '中'],
+      ['', FONT, '中'],
       ['0 0 1 rg', 'F7', 'x'],
       ['0 0 1 rg', 'F7', 'i'],
-      ['', 'noto', '中'],
+      ['', FONT, '中'],
     ])
     // Baseline 700; the formula keeps pdf2zh's fix (text came before it) and relative offsets.
     expect(runs[1]).toMatchObject({ x: 110, y: 701, size: 8 })
@@ -197,20 +261,50 @@ describe('BabelDOC typesetting on pdf2zh paragraphs', () => {
     expect(runs[3]).toMatchObject({ x: 117 })
   })
 
-  test('a paragraph of formulas and spaces passes through at the original place', () => {
+  test('an untranslated paragraph passes through with its original glyphs', () => {
     const formula: Pdf2zhFormula = { chars: [vchar('y', 250, 420)], lines: [], fix: 3, len: 4 }
-    const p = paragraph('{v0} ', { x0: 250, x1: 254, y0: 420, y1: 428 }, {}, [formula])
+    const space = {
+      kind: 'char',
+      text: ' ',
+      x0: 254,
+      y0: 420,
+      x1: 257,
+      y1: 430,
+      code: -1,
+      codeBytes: 0,
+      style: 0,
+      dummy: true,
+    }
+    const b = {
+      kind: 'char',
+      text: 'b',
+      x0: 257,
+      y0: 420,
+      x1: 262,
+      y1: 430,
+      code: 98,
+      codeBytes: 1,
+      style: 0,
+    }
+    const p = original(
+      [{ kind: 'formula', index: 0 }, space as ParagraphItem, b as ParagraphItem],
+      { x0: 250, x1: 262, y0: 420, y1: 430 },
+      [formula],
+    )
     layout(p)
     expect(p.passthrough).toBe(true)
     expect(drawn(p.ops!)).toEqual([
       { state: '', font: 'F7', size: 8, tm: '1 0 0 1', x: 250, y: 420, text: 'y' },
+      { state: '', font: 'F1', size: 10, tm: '1 0 0 1', x: 257, y: 420, text: 'b' },
     ])
   })
 
   test('a glyph turned by 90° is redrawn turned (0 1 -1 0 x2 y Tm)', () => {
     const turned = vchar('t', 50, 300, { vertical: true, angle: 90, x1: 60, y1: 305, size: 10 })
     const formula: Pdf2zhFormula = { chars: [turned], lines: [], fix: 0, len: 10 }
-    const p = paragraph('{v0}', { x0: 50, x1: 60, y0: 300, y1: 305 }, {}, [formula])
+    const p = original([{ kind: 'formula', index: 0 }], { x0: 50, x1: 60, y0: 300, y1: 305 }, [
+      formula,
+    ])
     layout(p)
     expect(drawn(p.ops!)).toMatchObject([{ tm: '0 1 -1 0', x: 60, y: 300, size: 10 }])
   })

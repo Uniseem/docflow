@@ -121,6 +121,61 @@ export const PageLayout = z.object({
 })
 export type PageLayout = z.infer<typeof PageLayout>
 
+// BabelDOC PdfStyle of a character: font resource name, size and graphic state (ADR-0018).
+export const CharStyle = z.object({ font: z.string(), size: z.number(), gstate: z.string() })
+export type CharStyle = z.infer<typeof CharStyle>
+
+// A paragraph's base style (StylesAndFormulas._calculate_base_style): gstate is null when its
+// characters disagree.
+export const BaseStyle = z.object({
+  font: z.string(),
+  size: z.number(),
+  gstate: z.string().nullable(),
+})
+export type BaseStyle = z.infer<typeof BaseStyle>
+
+// A text character of a paragraph, kept so that untranslated text can be drawn with its
+// original glyph (BabelDOC passthrough). `style` indexes LayoutUnit.styles. A dummy character
+// is a space pdf2zh inserted between glyphs: it has no glyph to draw.
+export const TextChar = z.object({
+  text: z.string(),
+  x0: z.number(),
+  y0: z.number(),
+  x1: z.number(),
+  y1: z.number(),
+  code: z.number().int(),
+  codeBytes: z.number().int(),
+  style: z.number().int(),
+  dummy: z.boolean().optional(),
+})
+export type TextChar = z.infer<typeof TextChar>
+
+export const ParagraphItem = z.discriminatedUnion('kind', [
+  TextChar.extend({ kind: z.literal('char') }),
+  z.object({ kind: z.literal('formula'), index: z.number().int() }),
+])
+export type ParagraphItem = z.infer<typeof ParagraphItem>
+
+// Per paragraph (parallel to LayoutUnit.paragraphs): what BabelDOC keeps next to the text.
+export const ParagraphInfo = z.object({
+  /** Name of the DocLayout-YOLO box the paragraph started in; null outside any text box. */
+  label: z.string().nullable(),
+  /** That box in page space (x0, y0, x1, y1), for the OCR workaround's white background. */
+  layoutBox: Rect.nullable(),
+  items: z.array(ParagraphItem),
+})
+export type ParagraphInfo = z.infer<typeof ParagraphInfo>
+
+// BabelDOC reads these four flags from the embedded font program through MuPDF (a font that is
+// not embedded counts as MuPDF's Noto Serif); null when the program cannot be loaded (ADR-0018).
+export const FontFlags = z.object({
+  bold: z.boolean().nullable(),
+  italic: z.boolean().nullable(),
+  monospace: z.boolean().nullable(),
+  serif: z.boolean().nullable(),
+})
+export type FontFlags = z.infer<typeof FontFlags>
+
 // One receive_layout call: the page itself (formPath '') or one drawing of a form XObject.
 export const LayoutUnit = z.object({
   id: z.string(),
@@ -130,14 +185,20 @@ export const LayoutUnit = z.object({
   paragraphs: z.array(Pdf2zhParagraph), // pstk
   formulas: z.array(Pdf2zhFormula),
   lines: z.array(LtLine), // lstk
+  infos: z.array(ParagraphInfo),
+  styles: z.array(CharStyle),
+  /** Font resource name → style flags of the stream's fonts that draw text characters. */
+  fonts: z.record(z.string(), FontFlags),
 })
 export type LayoutUnit = z.infer<typeof LayoutUnit>
 
 export const AnalysisResult = z.object({
-  version: z.literal(4),
+  version: z.literal(5),
   pages: z.number().int(),
   pageSizes: z.array(z.tuple([z.number(), z.number()])),
   units: z.array(LayoutUnit),
+  /** BabelDOC's OCR workaround is on: a scan with an OCR text layer (§3.3). */
+  ocrWorkaround: z.boolean().default(false),
   stats: z.object({
     chars: z.number(),
     paragraphs: z.number(),
@@ -147,12 +208,38 @@ export const AnalysisResult = z.object({
 })
 export type AnalysisResult = z.infer<typeof AnalysisResult>
 
+// A translated paragraph's compositions (BabelDOC parse_translate_output): text in a style,
+// one of the unit's formulas, or items [from, to) of the paragraph drawn with their original
+// glyphs (a rich-text span the translation left as it was).
+export const OutputComp = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('text'), text: z.string(), style: BaseStyle }),
+  z.object({ kind: z.literal('formula'), index: z.number().int() }),
+  z.object({ kind: z.literal('original'), from: z.number().int(), to: z.number().int() }),
+])
+export type OutputComp = z.infer<typeof OutputComp>
+
 export const TranslatedParagraph = z.object({
   id: z.string(),
+  /** The translation as the model returned it (or the source text when kept). */
   text: z.string(),
+  /** Not translated: the paragraph is drawn with its original glyphs. */
   kept: z.boolean(),
+  comps: z.array(OutputComp).optional(),
 })
 export type TranslatedParagraph = z.infer<typeof TranslatedParagraph>
+
+// What BabelDOC's TranslationConfig decides for the write-back (ADR-0018).
+export const ComposeOptions = z.object({
+  /** primary_font_family ('auto' = None) */
+  fontFamily: z.enum(['auto', 'serif', 'sans-serif', 'script']).default('auto'),
+  dualMode: z.enum(['side-by-side', 'alternating']).default('side-by-side'),
+  dualTranslateFirst: z.boolean().default(false),
+  /** 0-based pages that are translated (pages option); null for every page. */
+  pages: z.array(z.number().int()).nullable().default(null),
+  /** only_include_translated_page */
+  onlyTranslatedPages: z.boolean().default(false),
+})
+export type ComposeOptions = z.infer<typeof ComposeOptions>
 
 export const ComposeRequest = z.object({
   sourcePath: z.string(),
@@ -160,9 +247,13 @@ export const ComposeRequest = z.object({
   dualPath: z.string().nullable(),
   analysis: AnalysisResult,
   translations: z.array(TranslatedParagraph),
-  fonts: z.object({ noto: z.string() }),
+  /** Directory with the bundled fonts (src/main/pdf/babeldoc/fonts.json). */
+  fonts: z.object({ dir: z.string() }),
+  options: ComposeOptions.default(ComposeOptions.parse({})),
 })
 export type ComposeRequest = z.infer<typeof ComposeRequest>
+/** What callers pass: options and their fields may be left to their defaults. */
+export type ComposeRequestInput = z.input<typeof ComposeRequest>
 
 export const ComposeResult = z.object({
   monoBytes: z.number(),

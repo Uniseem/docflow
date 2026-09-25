@@ -271,3 +271,60 @@ describe('BabelDOC rules (parseLayout without strict)', () => {
     expect(mixed.paragraphs[0]!.gstate).toBeNull()
   })
 })
+
+describe('paragraph compositions (ADR-0018)', () => {
+  test('text characters carry their style, pdf2zh spaces become dummy characters', () => {
+    const bold = { font: 'F2', fontname: 'ABCDEF+Times-Bold' }
+    const unit = parseLayout(
+      [...word('ab', 10, 700), ...word('cd', 30, 700, bold), ...word('ef', 0, 685)],
+      flat(),
+      600,
+    )
+    expect(unit.texts).toEqual(['ab cd ef'])
+    const items = unit.infos[0]!.items
+    expect(items.map((item) => (item.kind === 'char' ? item.text : `{v${item.index}}`))).toEqual([
+      'a', 'b', ' ', 'c', 'd', ' ', 'e', 'f',
+    ]) // prettier-ignore
+    expect(unit.styles).toEqual([
+      { font: 'F1', size: 10, gstate: '' },
+      { font: 'F2', size: 10, gstate: '' },
+    ])
+    const styles = items.map((item) => (item.kind === 'char' ? item.style : -1))
+    expect(styles).toEqual([0, 0, 0, 1, 1, 1, 0, 0])
+    const gap = items[2]!
+    // The gap space spans from the previous glyph to the next one.
+    expect(gap).toMatchObject({ dummy: true, x0: 20, x1: 30, code: -1 })
+    // The line-break space gets BabelDOC's newline width: min(|distance|, median gap).
+    const newline = items[5]!
+    expect(newline).toMatchObject({ dummy: true, x0: 40 })
+    expect(newline.kind === 'char' ? newline.x1 - newline.x0 : 0).toBe(10)
+  })
+
+  test('formulas appear where pdf2zh puts their {vN} marker', () => {
+    const unit = parseLayout(
+      [
+        ...word('ab', 10, 700),
+        char('x', 25, 700, { fontname: 'CMMI10', font: 'F3' }),
+        ...word('cd', 40, 700),
+      ],
+      flat(),
+      600,
+    )
+    expect(unit.texts).toEqual(['ab {v0} cd'])
+    const kinds = unit.infos[0]!.items.map((item) =>
+      item.kind === 'char' ? (item.dummy ? '_' : item.text) : `{v${item.index}}`,
+    )
+    expect(kinds).toEqual(['a', 'b', '_', '{v0}', '_', 'c', 'd'])
+  })
+
+  test('the paragraph keeps the name and page-space box of its layout box', () => {
+    const map = buildLayoutMap({
+      width: 600,
+      height: 800,
+      boxes: [{ name: 'title', conf: 0.9, xyxy: [5, 50, 300, 120] }],
+    })
+    const unit = parseLayout([...word('Title', 10, 700), ...word('body', 10, 100)], map, 600)
+    expect(unit.infos.map((info) => info.label)).toEqual(['title', null])
+    expect(unit.infos[0]!.layoutBox).toEqual([5, 680, 300, 750])
+  })
+})

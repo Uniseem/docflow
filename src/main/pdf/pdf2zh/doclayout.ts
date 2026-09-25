@@ -197,6 +197,8 @@ export type LayoutMap = {
   height: number
   /** Row-major; row y counts from the bottom of the page like pdfminer coordinates. */
   cls: Int32Array
+  /** The boxes behind the classes: class i + 2 is boxes[i]. */
+  boxes?: readonly LayoutBox[]
 }
 
 /** high_level.translate_patch: `box = np.ones((h, w))`, text boxes i + 2, preserved boxes 0. */
@@ -218,5 +220,5 @@ export function buildLayoutMap(page: PageLayout): LayoutMap {
   page.boxes.forEach((box) => {
     if (PRESERVED_CLASSES.includes(box.name)) fill(box, 0)
   })
-  return { width: w, height: h, cls }
+  return { width: w, height: h, cls, boxes: page.boxes }
 }

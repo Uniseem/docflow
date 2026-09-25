@@ -6,10 +6,12 @@ export async function analyzeStage(
   path: string,
   layouts: PageLayout[],
   pages: number,
+  selected: number[] | null,
+  autoOcr: boolean,
   signal: AbortSignal,
 ): Promise<AnalysisResult> {
   return host.request<AnalysisResult>(
-    { kind: 'analyze', path, layouts },
+    { kind: 'analyze', path, layouts, pages: selected, autoOcr },
     TIMEOUT.analyze(pages),
     signal,
   )

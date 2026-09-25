@@ -6,6 +6,7 @@ import { ERROR_CODES, UserError } from '../../shared/errors'
 import { newDocumentId } from '../../shared/text'
 import {
   DocumentManifest,
+  type DocumentOptions,
   type DocumentSummary,
   type TranslatorChoice,
   type TranslationRuntime,
@@ -27,6 +28,7 @@ export type CreateDocumentInput = {
   title?: string
   translator: TranslatorChoice & { label: string }
   settingsSnapshot: TranslationRuntime
+  options?: DocumentOptions
   now?: Date
   randomHex?: string
 }
@@ -78,6 +80,7 @@ export class DocumentLibrary {
       hasSource: true,
       hasMono: Boolean(manifest.outputs.mono),
       hasDual: Boolean(manifest.outputs.dual),
+      hasGlossary: Boolean(manifest.outputs.glossary),
     })
   }
 
@@ -139,6 +142,7 @@ export class DocumentLibrary {
         pages: null,
         translator: input.translator,
         settingsSnapshot: input.settingsSnapshot,
+        ...(input.options ? { options: input.options } : {}),
         status: 'queued',
         stage: 'received',
         progress: 2,
@@ -245,10 +249,11 @@ export class DocumentLibrary {
     }
   }
 
-  pathFor(id: string, kind: 'source' | 'mono' | 'dual' | 'folder'): string {
+  pathFor(id: string, kind: 'source' | 'mono' | 'dual' | 'glossary' | 'folder'): string {
     this.require(id)
     if (kind === 'folder') return documentDir(this.libraryDir, id)
     if (kind === 'source') return sourcePath(this.libraryDir, id)
+    if (kind === 'glossary') return join(outputDir(this.libraryDir, id), 'glossary.csv')
     return join(outputDir(this.libraryDir, id), `${kind}.pdf`)
   }
 }

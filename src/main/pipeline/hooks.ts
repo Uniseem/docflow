@@ -21,7 +21,7 @@ export function createPipelineHooks(input: {
   analyze: PdfWorkerHost
   compose: PdfWorkerHost
   env?: NodeJS.Dict<string>
-  /** Directory holding the bundled Source Han Serif CN font. */
+  /** Directory holding the bundled fonts (src/main/pdf/babeldoc/fonts.json). */
   fontsDir?: string
   /** Directory holding the DocLayout-YOLO model. */
   modelsDir?: string
@@ -31,29 +31,34 @@ export function createPipelineHooks(input: {
   return {
     ...(input.onChanged ? { onChanged: input.onChanged } : {}),
     inspect: (path, signal) => inspectStage(input.analyze, path, signal),
-    layout: (path, pages, signal, onPage) =>
+    layout: (path, pages, selected, signal, onPage) =>
       layoutStage({
         host: input.analyze,
         modelPath: bundledModel(input.modelsDir),
         path,
         pages,
+        selected,
         signal,
         onPage,
       }),
-    analyze: (path, layouts, pages, signal) =>
-      analyzeStage(input.analyze, path, layouts, pages, signal),
+    analyze: (path, layouts, pages, selected, autoOcr, signal) =>
+      analyzeStage(input.analyze, path, layouts, pages, selected, autoOcr, signal),
     translate: async ({ analysis, manifest, workDir, signal, onProgress }) => {
       const provider = resolveProvider(
         input.settings.snapshot.providers,
         manifest.translator.providerId,
         env,
       )
+      const settings = input.settings.snapshot
       return translateStage({
         analysis,
         manifest,
         workDir,
+        libraryDir: input.library.dir,
         provider,
         pools: input.pools,
+        pdf: settings.pdf,
+        glossaries: settings.glossaries,
         signal,
         onProgress,
         onEvent: async (event) => {
@@ -71,6 +76,7 @@ export function createPipelineHooks(input: {
           analysis: args.analysis,
           translations: args.translations,
           fonts: args.fonts,
+          options: args.options,
         },
         args.analysis.pages,
         args.signal,
@@ -85,11 +91,21 @@ export function createPipelineHooks(input: {
           dualPath: args.dualPath,
           pages: args.pages,
           writtenPages: args.writtenPages,
+          dualMode: args.dualMode,
         },
         args.signal,
       ),
     fonts: bundledFonts(input.fontsDir),
     bilingual: () => input.settings.snapshot.pdf.bilingual,
+    pdfOptions: () => {
+      const pdf = input.settings.snapshot.pdf
+      return {
+        fontFamily: pdf.fontFamily,
+        dualMode: pdf.dualMode,
+        dualTranslateFirst: pdf.dualTranslateFirst,
+      }
+    },
+    autoOcr: () => input.settings.snapshot.pdf.ocrWorkaround,
   }
 }
 

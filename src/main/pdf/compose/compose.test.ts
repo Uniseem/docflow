@@ -5,18 +5,19 @@ import { PDFDict, PDFDocument, PDFName, StandardFonts, degrees, rgb } from '@can
 import * as mupdf from 'mupdf'
 import { describe, expect, test } from 'vitest'
 import { ERROR_CODES } from '../../../shared/errors'
-import type { AnalysisResult, TranslatedParagraph } from '../../../shared/pdf-types'
+import type { AnalysisResult, ComposeOptions, TranslatedParagraph } from '../../../shared/pdf-types'
+import { fakeTranslations } from '../../../../tests/unit/fake-translations'
 import {
-  NOTO_FONT,
+  FONTS_DIR,
   fixture,
   fixturesDir,
   referenceLayouts,
 } from '../../../../tests/unit/pdf2zh-reference'
+import { buildParagraphs } from '../../translate/babeldoc/paragraphs'
 import { analyzePdf } from '../analyze'
 import { inspectPdf } from '../inspect'
 import { loadPdfLib } from '../load-pdf-lib'
 import { openPdfDocument } from '../pdfjs'
-import { segmentsOf } from '../pdf2zh/segments'
 import { verifyPdf } from '../verify'
 import { composePdf } from './index'
 import { streamBytes } from './streams'
@@ -25,16 +26,18 @@ const ERROR_FILES: Record<string, string> = {
   encrypted: ERROR_CODES.pdf_encrypted,
   scanned: ERROR_CODES.scanned_pdf,
   empty: ERROR_CODES.pdf_empty,
-  'invisible-text': ERROR_CODES.scanned_pdf,
 }
 
-/** Chinese stand-in for a translation that keeps the {vN} markers in place. */
-function fakeTranslations(analysis: AnalysisResult): TranslatedParagraph[] {
-  return segmentsOf(analysis).map((segment) => ({
-    id: segment.id,
-    text: segment.text.replace(/[A-Za-z]+/g, '译文'),
-    kept: false,
-  }))
+/** Words the output may still show: formulas and paragraphs left untranslated. */
+function keptText(analysis: AnalysisResult, translations: readonly TranslatedParagraph[]): string {
+  const done = new Set(translations.map((t) => t.id))
+  const formulas = analysis.units.flatMap((unit) =>
+    unit.formulas.flatMap((f) => f.chars.map((c) => c.text)),
+  )
+  const kept = buildParagraphs(analysis)
+    .filter((p) => !done.has(p.id))
+    .map((p) => p.unicode)
+  return `${formulas.join('')}\n${kept.join('\n')}`
 }
 
 async function pageText(path: string): Promise<string[]> {
@@ -48,19 +51,27 @@ async function pageText(path: string): Promise<string[]> {
   return out
 }
 
-async function compose(name: string) {
+async function compose(name: string, options?: Partial<ComposeOptions>) {
   const sourcePath = fixture(name)
   const analysis = await analyzePdf(sourcePath, referenceLayouts(name))
   const dir = await mkdtemp(join(tmpdir(), 'df-compose-'))
+  const translations = fakeTranslations(analysis)
   const result = await composePdf({
     sourcePath,
     monoPath: join(dir, 'mono.pdf'),
     dualPath: join(dir, 'dual.pdf'),
     analysis,
-    translations: fakeTranslations(analysis),
-    fonts: { noto: NOTO_FONT },
+    translations,
+    fonts: { dir: FONTS_DIR },
+    options: options ?? {},
   })
-  return { analysis, result, mono: join(dir, 'mono.pdf'), dual: join(dir, 'dual.pdf') }
+  return {
+    analysis,
+    translations,
+    result,
+    mono: join(dir, 'mono.pdf'),
+    dual: join(dir, 'dual.pdf'),
+  }
 }
 
 describe('composePdf (pdf2zh write-back)', () => {
@@ -74,17 +85,15 @@ describe('composePdf (pdf2zh write-back)', () => {
     '%s: the original text is gone, translations and formulas are drawn',
     { timeout: 60_000 },
     async (name) => {
-      const { analysis, result, mono, dual } = await compose(name)
-      expect(result.paragraphsWritten).toBe(analysis.stats.translatable)
+      const { analysis, translations, result, mono, dual } = await compose(name)
+      expect(result.paragraphsWritten).toBe(translations.length)
+      expect(result.paragraphsWritten).toBeGreaterThan(0)
       expect(result.opsRemoved).toBeGreaterThan(0)
       const text = (await pageText(mono)).join('\n')
-      // Every translated paragraph was redrawn as 译文; only formula characters stay Latin.
-      const formulaText = analysis.units
-        .flatMap((unit) => unit.formulas.flatMap((f) => f.chars.map((c) => c.text)))
-        .join('')
-      const leftover = (text.match(/[A-Za-z]{4,}/g) ?? []).filter(
-        (word) => !formulaText.includes(word),
-      )
+      // Every translated paragraph was redrawn as 译文; only formulas and paragraphs BabelDOC
+      // leaves alone (short, numeric) keep Latin words, with their original glyphs.
+      const kept = keptText(analysis, translations)
+      const leftover = (text.match(/[A-Za-z]{4,}/g) ?? []).filter((word) => !kept.includes(word))
       expect(leftover).toEqual([])
       expect(text).toContain('译文')
       const verified = await verifyPdf({
@@ -92,13 +101,15 @@ describe('composePdf (pdf2zh write-back)', () => {
         dualPath: dual,
         pages: analysis.pages,
         writtenPages: result.writtenPages,
+        dualMode: 'side-by-side',
       })
-      expect(verified.dualPages).toBe(analysis.pages * 2)
+      expect(verified.dualPages).toBe(analysis.pages)
+      expect(verified.sizeMismatches).toBe(0)
       expect(verified.translatedPagesWithoutCjk).toEqual([])
     },
   )
 
-  test('page contents are q {ops_base}Q 1 0 0 1 x0 y0 cm {ops_new} with tiro and noto mounted', async () => {
+  test('page contents are q {ops_base}Q 1 0 0 1 x0 y0 cm {ops_new} with the used fonts mounted', async () => {
     const { mono } = await compose('single-column')
     const doc = await loadPdfLib(await readFile(mono))
     // ops_new: text objects, wrapped in q {graphic state} … Q when the text has a colour.
@@ -115,8 +126,9 @@ describe('composePdf (pdf2zh write-back)', () => {
       const base = content.slice(0, content.search(prefix))
       expect(base).not.toMatch(/\bT[jJ]\b/)
       const fonts = page.node.Resources()?.lookup(PDFName.of('Font'), PDFDict)
-      expect(fonts?.has(PDFName.of('tiro'))).toBe(true)
-      expect(fonts?.has(PDFName.of('noto'))).toBe(true)
+      // Times-Roman is not embedded, so it maps like Noto Serif Regular: Source Han Serif.
+      expect(fonts?.has(PDFName.of('DocFlow-SourceHanSerifCN-Regular'))).toBe(true)
+      expect(fonts?.has(PDFName.of('tiro'))).toBe(false)
     }
   })
 
@@ -134,14 +146,12 @@ describe('composePdf (pdf2zh write-back)', () => {
   })
 
   test('shared form: body text translated, the form redrawn as pdf2zh keeps it', async () => {
-    const { analysis, result, mono } = await compose('shared-form')
+    const { analysis, translations, result, mono } = await compose('shared-form')
     expect(result.writtenPages).toEqual([0, 1])
-    const formulaText = analysis.units
-      .flatMap((unit) => unit.formulas.flatMap((f) => f.chars.map((c) => c.text)))
-      .join('')
+    const kept = keptText(analysis, translations)
     for (const page of await pageText(mono)) {
       const words = page.match(/[A-Za-z]{4,}/g) ?? []
-      expect(words.filter((word) => !formulaText.includes(word))).toEqual([])
+      expect(words.filter((word) => !kept.includes(word))).toEqual([])
     }
   })
 
@@ -153,8 +163,8 @@ describe('composePdf (pdf2zh write-back)', () => {
     ).toString('latin1')
     // BabelDOC passthrough: the translated red title keeps its colour, and so does the blue
     // line pdf2zh keeps as a formula ({v0}), redrawn in its own font.
-    expect(content).toMatch(/q [^B]*\b0\.8 0\.1 0\.1 rg BT \/noto /)
-    expect(content).toMatch(/q [^B]*\b0\.1 0\.2 0\.7 rg BT \/(?!noto|tiro)\S+ 11\.000000 Tf /)
+    expect(content).toMatch(/q [^B]*\b0\.8 0\.1 0\.1 rg BT \/DocFlow-/)
+    expect(content).toMatch(/q [^B]*\b0\.1 0\.2 0\.7 rg BT \/(?!DocFlow-)\S+ 11\.000000 Tf /)
   })
 
   test('a /Rotate 90 page: upright translation in place, inline image and colours kept', async () => {
@@ -196,7 +206,7 @@ describe('composePdf (pdf2zh write-back)', () => {
       dualPath: null,
       analysis,
       translations: fakeTranslations(analysis),
-      fonts: { noto: NOTO_FONT },
+      fonts: { dir: FONTS_DIR },
     })
     const out = mupdf.Document.openDocument(await readFile(mono), 'application/pdf')
     const stext = JSON.parse(out.loadPage(0).toStructuredText().asJSON()) as {
@@ -219,7 +229,7 @@ describe('composePdf (pdf2zh write-back)', () => {
       streamBytes(doc.context.lookup(doc.getPages()[0]!.node.get(PDFName.of('Contents')))),
     ).toString('latin1')
     expect(content).toContain('BI /W 2 /H 2 /BPC 8 /CS /G ID \x00\xff\xff\x00 EI')
-    expect(content).toMatch(/q [^B]*\b0\.8 0\.1 0\.1 rg BT \/noto /)
+    expect(content).toMatch(/q [^B]*\b0\.8 0\.1 0\.1 rg BT \/DocFlow-/)
   })
 
   test('long fixture compose+dual+verify stays within 30 s', { timeout: 120_000 }, async () => {
@@ -230,6 +240,7 @@ describe('composePdf (pdf2zh write-back)', () => {
       dualPath: dual,
       pages: analysis.pages,
       writtenPages: result.writtenPages,
+      dualMode: 'side-by-side',
     })
     expect(verified.monoPages).toBe(analysis.pages)
     expect(Date.now() - started).toBeLessThan(30_000)

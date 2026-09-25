@@ -34,10 +34,13 @@ export const EXTRA_BODY_FORBIDDEN = [
 ] as const
 
 /**
- * Default prompt template: pdf2zh's BaseTranslator.prompt (string.Template variables
- * $lang_in, $lang_out, $text). Stored in settings as `translation.systemPrompt`.
+ * `translation.systemPrompt` is BabelDOC's custom_system_prompt: it replaces the role line of
+ * the translation prompts. Empty keeps BabelDOC's role (ADR-0018).
  */
-export const DEFAULT_SYSTEM_PROMPT =
+export const DEFAULT_SYSTEM_PROMPT = ''
+
+/** The 4.0.1 default: pdf2zh's BaseTranslator.prompt template, cleared on load since 4.1.0. */
+export const PDF2ZH_PROMPT_TEMPLATE =
   'You are a professional, authentic machine translation engine. ' +
   'Only Output the translated text, do not include any other text.' +
   '\n\n' +

@@ -28,13 +28,15 @@ jobs:
           node-version-file: .nvmrc
           cache: npm
       - run: npm ci
-      - name: 缓存版面模型
+      - name: 缓存版面模型与字体
         uses: actions/cache@v4
         with:
-          path: resources/models
-          key: doclayout-${{ hashFiles('scripts/fetch-model.mjs') }}
-      - name: 下载版面模型（DocLayout-YOLO，75 MB）
-        run: npm run model
+          path: |
+            resources/models
+            resources/fonts/*.ttf
+          key: assets-${{ hashFiles('scripts/fetch-assets.mjs', 'src/main/pdf/babeldoc/fonts.json') }}
+      - name: 下载版面模型与 BabelDOC 字体（约 170 MB）
+        run: npm run assets
       - run: npm run check
 
   package:
@@ -62,13 +64,15 @@ jobs:
             ~/AppData/Local/electron-builder/Cache
           key: electron-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
       - run: npm ci
-      - name: 缓存版面模型
+      - name: 缓存版面模型与字体
         uses: actions/cache@v4
         with:
-          path: resources/models
-          key: doclayout-${{ hashFiles('scripts/fetch-model.mjs') }}
-      - name: 下载版面模型（DocLayout-YOLO，75 MB）
-        run: npm run model
+          path: |
+            resources/models
+            resources/fonts/*.ttf
+          key: assets-${{ hashFiles('scripts/fetch-assets.mjs', 'src/main/pdf/babeldoc/fonts.json') }}
+      - name: 下载版面模型与 BabelDOC 字体（约 170 MB）
+        run: npm run assets
       - run: npm run build
       - name: electron-builder（只打目录，不做安装包）
         run: npx electron-builder --dir --publish never

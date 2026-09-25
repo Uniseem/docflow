@@ -30,6 +30,8 @@ export function referenceLayouts(name: string): PageLayout[] {
 }
 
 export const NOTO_FONT = join(process.cwd(), 'resources/fonts/SourceHanSerifCN-Regular.ttf')
+/** The bundled fonts (npm run assets). */
+export const FONTS_DIR = join(process.cwd(), 'resources/fonts')
 export const LAYOUT_MODEL = join(
   process.cwd(),
   'resources/models/doclayout_yolo_docstructbench_imgsz1024.onnx',

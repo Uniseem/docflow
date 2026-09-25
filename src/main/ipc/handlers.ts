@@ -1,11 +1,16 @@
+import { randomBytes } from 'node:crypto'
 import { existsSync } from 'node:fs'
-import { mkdir } from 'node:fs/promises'
-import { join, resolve } from 'node:path'
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { basename, dirname, join, resolve } from 'node:path'
 import { ERROR_CODES, UserError, isUserError } from '../../shared/errors'
 import { MAX_PROVIDERS } from '../../shared/constants'
 import type { ChannelRequest, ChannelResponse } from '../../shared/ipc'
-import { translatorLabel, ProviderConfig } from '../../shared/types'
-import { pickFolder, pickPdfs, saveExport, type DialogHost } from '../app/dialogs'
+import { pageRangeProblem } from '../../shared/pages'
+import { translatorLabel, ProviderConfig, type DocumentOptions } from '../../shared/types'
+import { pickCsv, pickFolder, pickPdfs, saveExport, type DialogHost } from '../app/dialogs'
+import { glossaryPath } from '../pipeline/stages/translate'
+import { glossaryFromCsv, GlossaryFormatError } from '../translate/babeldoc/glossary'
+import { LANG_OUT } from '../translate/babeldoc/prompts'
 import { exportBundle } from '../library/export'
 import type { DocumentLibrary } from '../library/library'
 import type { Scheduler } from '../jobs/scheduler'
@@ -82,12 +87,21 @@ export async function handleDocumentsCreate(
   }
   const created: ChannelResponse<'documents:create'>['created'] = []
   const failed: ChannelResponse<'documents:create'>['failed'] = []
+  const pages = req.pages?.trim() ?? ''
+  const problem = pageRangeProblem(pages)
+  if (problem) throw new UserError(ERROR_CODES.pages_out_of_range, problem)
+  const options: DocumentOptions = {
+    ...(pages ? { pages } : {}),
+    ...(pages && req.onlyTranslatedPages ? { onlyTranslatedPages: true } : {}),
+    glossaryIds: ctx.settings.snapshot.glossaries.filter((g) => g.enabled).map((g) => g.id),
+  }
   for (const path of req.paths) {
     try {
       const item = await ctx.library.create({
         path,
         translator,
         settingsSnapshot: ctx.settings.snapshot.translation,
+        options,
         ...(req.title ? { title: req.title } : {}),
       })
       created.push(item)
@@ -198,8 +212,9 @@ export async function handleDocumentsExport(
   return result
 }
 
-const MISSING_FILE: Record<'mono' | 'dual' | 'source' | 'folder', string> = {
+const MISSING_FILE: Record<'mono' | 'dual' | 'source' | 'glossary' | 'folder', string> = {
   mono: '中文 PDF 不存在，可能已被删除。请重新处理这篇文档。',
+  glossary: '这篇文档没有术语表：处理时没有开启自动抽取术语，或者没有抽到术语。',
   dual: '这篇文档没有双语对照 PDF（处理时没有开启「同时生成双语对照 PDF」，或文件已被删除）。',
   source: '文档库里的源文件副本不存在，请删除这篇文档后重新添加。',
   folder: '文档文件夹不存在，可能已被删除。',
@@ -379,6 +394,61 @@ export async function handleProvidersCheck(
   const provider = draftFromRequest(ctx, req)
   const key = req.key ?? (req.providerId ? ctx.secrets.get(req.providerId) : undefined)
   return checkModel(provider, key, req.model, ctx.fetch, ctx.version)
+}
+
+export async function handleGlossariesImport(
+  ctx: HandlerContext,
+): Promise<ChannelResponse<'glossaries:import'>> {
+  const path = ctx.env.DOCFLOW_E2E_GLOSSARY_PATH ?? (await pickCsv(ctx.dialog))
+  if (!path) return { cancelled: true }
+  if (ctx.settings.snapshot.glossaries.length >= 100) {
+    throw new UserError(ERROR_CODES.internal, '最多导入 100 个术语表，请先删除不用的术语表。', true)
+  }
+  const bytes = await readFile(path).catch(() => {
+    throw new UserError(ERROR_CODES.not_found, '无法读取这个文件。')
+  })
+  // BabelDOC names a glossary after its CSV file.
+  const name =
+    basename(path)
+      .replace(/\.csv$/i, '')
+      .slice(0, 200) || '术语表'
+  let entries: number
+  try {
+    entries = glossaryFromCsv(name, bytes, LANG_OUT).entries.length
+  } catch (error) {
+    const message = error instanceof GlossaryFormatError ? error.message : '无法解析这个 CSV 文件。'
+    throw new UserError(ERROR_CODES.internal, `${message}（需要 source、target 两列）`, true)
+  }
+  const id = randomBytes(8).toString('hex')
+  const target = glossaryPath(ctx.getLibraryDir(), id)
+  await mkdir(dirname(target), { recursive: true })
+  await writeFile(target, bytes)
+  const glossary = { id, name, enabled: true, entries }
+  await ctx.settings.update({ glossaries: [...ctx.settings.snapshot.glossaries, glossary] })
+  return { glossary }
+}
+
+export async function handleGlossariesUpdate(
+  ctx: HandlerContext,
+  req: ChannelRequest<'glossaries:update'>,
+): Promise<ChannelResponse<'glossaries:update'>> {
+  const list = ctx.settings.snapshot.glossaries
+  if (!list.some((g) => g.id === req.id))
+    throw new UserError(ERROR_CODES.not_found, '找不到这个术语表。')
+  await ctx.settings.update({
+    glossaries: list.map((g) => (g.id === req.id ? { ...g, enabled: req.enabled } : g)),
+  })
+  return {}
+}
+
+export async function handleGlossariesDelete(
+  ctx: HandlerContext,
+  req: ChannelRequest<'glossaries:delete'>,
+): Promise<ChannelResponse<'glossaries:delete'>> {
+  const list = ctx.settings.snapshot.glossaries
+  await ctx.settings.update({ glossaries: list.filter((g) => g.id !== req.id) })
+  await rm(glossaryPath(ctx.getLibraryDir(), req.id), { force: true })
+  return {}
 }
 
 export async function handleDialogPickPdfs(

@@ -1,7 +1,11 @@
 import { mkdir, readFile, rename } from 'node:fs/promises'
 import { join } from 'node:path'
 import { Settings, defaultSettings, type ProviderConfig } from '../../shared/types'
-import { DEFAULT_SYSTEM_PROMPT, LEGACY_SYSTEM_PROMPT } from '../../shared/constants'
+import {
+  DEFAULT_SYSTEM_PROMPT,
+  LEGACY_SYSTEM_PROMPT,
+  PDF2ZH_PROMPT_TEMPLATE,
+} from '../../shared/constants'
 import { writeJsonAtomic } from './atomic-write'
 
 export type SettingsHooks = {
@@ -85,9 +89,20 @@ export class SettingsStore {
   }
 }
 
-/** The 4.0.0 default prompt was for batched requests; 4.0.1 sends pdf2zh's prompt instead. */
-function upgradePrompt(settings: Settings): Settings {
-  if (settings.translation.systemPrompt !== LEGACY_SYSTEM_PROMPT) return settings
+/**
+ * 4.1.0 sends BabelDOC's prompts, where the setting is only the role line. The 4.0.0 system
+ * prompt and pdf2zh's templates of 4.0.1 (anything with a $text slot) are cleared.
+ */
+export function isStalePrompt(prompt: string): boolean {
+  return (
+    prompt === LEGACY_SYSTEM_PROMPT ||
+    prompt === PDF2ZH_PROMPT_TEMPLATE ||
+    /\$(\{text\}|text\b)/.test(prompt)
+  )
+}
+
+export function upgradePrompt(settings: Settings): Settings {
+  if (!isStalePrompt(settings.translation.systemPrompt)) return settings
   return {
     ...settings,
     translation: { ...settings.translation, systemPrompt: DEFAULT_SYSTEM_PROMPT },

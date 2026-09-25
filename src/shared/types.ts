@@ -88,7 +88,14 @@ export type LlmRuntime = z.infer<typeof LlmRuntime>
 export const TranslationRuntime = z.object({
   llm: LlmRuntime,
   perDocumentConcurrency: z.number().int().min(1).max(1000).default(100),
+  /** BabelDOC custom_system_prompt: replaces the role line of its prompts; '' keeps the default. */
   systemPrompt: z.string().max(12_000),
+  /** BabelDOC min_text_length: shorter paragraphs are not translated. */
+  minTextLength: z.number().int().min(1).max(1000).default(5),
+  /** BabelDOC auto_extract_glossary (on by default in pdf2zh-next). */
+  autoExtractGlossary: z.boolean().default(true),
+  /** Not disable_rich_text_translate: styled spans get <style> placeholders. */
+  richText: z.boolean().default(true),
 })
 export type TranslationRuntime = z.infer<typeof TranslationRuntime>
 
@@ -102,6 +109,36 @@ export const ProxyConfig = z.discriminatedUnion('mode', [
 ])
 export type ProxyConfig = z.infer<typeof ProxyConfig>
 
+export const GlossaryInfo = z
+  .object({
+    id: z.string().regex(/^[a-z0-9-]{1,64}$/),
+    name: z.string().min(1).max(200),
+    enabled: z.boolean(),
+    entries: z.number().int().min(0),
+  })
+  .strict()
+export type GlossaryInfo = z.infer<typeof GlossaryInfo>
+
+/** BabelDOC primary_font_family ('auto' = None). */
+export const FontFamily = z.enum(['auto', 'serif', 'sans-serif', 'script'])
+export type FontFamily = z.infer<typeof FontFamily>
+
+export const DualMode = z.enum(['side-by-side', 'alternating'])
+export type DualMode = z.infer<typeof DualMode>
+
+export const PdfSettings = z.object({
+  minFontScale: z.number().min(0.4).max(1).default(0.6),
+  bilingual: z.boolean().default(true),
+  /** BabelDOC: side by side (default) or use_alternating_pages_dual. */
+  dualMode: DualMode.default('side-by-side'),
+  /** BabelDOC dual_translate_first */
+  dualTranslateFirst: z.boolean().default(false),
+  fontFamily: FontFamily.default('auto'),
+  /** BabelDOC auto_enable_ocr_workaround: translate scans that carry an OCR text layer. */
+  ocrWorkaround: z.boolean().default(false),
+})
+export type PdfSettings = z.infer<typeof PdfSettings>
+
 export const Settings = z
   .object({
     version: z.literal(1),
@@ -110,10 +147,8 @@ export const Settings = z
     workerConcurrency: z.number().int().min(1).max(4).default(2),
     translation: TranslationRuntime,
     proxy: ProxyConfig,
-    pdf: z.object({
-      minFontScale: z.number().min(0.4).max(1).default(0.6),
-      bilingual: z.boolean().default(true),
-    }),
+    pdf: PdfSettings,
+    glossaries: z.array(GlossaryInfo).max(100).default([]),
     notifications: z.boolean().default(true),
     checkUpdates: z.boolean().default(true),
   })
@@ -181,6 +216,17 @@ export const Stage = z.enum([
 ])
 export type Stage = z.infer<typeof Stage>
 
+/** Per-document choices made in 新建翻译 (BabelDOC pages / only_include_translated_page). */
+export const DocumentOptions = z
+  .object({
+    pages: z.string().max(200).optional(),
+    onlyTranslatedPages: z.boolean().optional(),
+    /** User glossaries enabled when the document was added. */
+    glossaryIds: z.array(z.string()).optional(),
+  })
+  .strict()
+export type DocumentOptions = z.infer<typeof DocumentOptions>
+
 export const DocumentManifest = z
   .object({
     version: z.literal(1),
@@ -193,6 +239,7 @@ export const DocumentManifest = z
     pages: z.number().int().nullable(),
     translator: z.object({ providerId: z.string(), model: z.string(), label: z.string() }),
     settingsSnapshot: TranslationRuntime,
+    options: DocumentOptions.optional(),
     status: DocumentStatus,
     stage: Stage,
     progress: z.number().min(0).max(100),
@@ -213,6 +260,8 @@ export const DocumentManifest = z
     outputs: z.object({
       mono: z.object({ bytes: z.number() }).nullable(),
       dual: z.object({ bytes: z.number() }).nullable(),
+      /** The automatic glossary BabelDOC saves next to the PDFs. */
+      glossary: z.object({ bytes: z.number() }).nullable().optional(),
     }),
     createdAt: z.string().datetime(),
     updatedAt: z.string().datetime(),
@@ -239,6 +288,7 @@ export const DocumentFiles = z.object({
   source: z.string().optional(),
   mono: z.string().optional(),
   dual: z.string().optional(),
+  glossary: z.string().optional(),
 })
 export type DocumentFiles = z.infer<typeof DocumentFiles>
 
@@ -247,6 +297,7 @@ export const SuggestedNames = z.object({
   dual: z.string(),
   bundle: z.string(),
   source: z.string(),
+  glossary: z.string(),
 })
 export type SuggestedNames = z.infer<typeof SuggestedNames>
 

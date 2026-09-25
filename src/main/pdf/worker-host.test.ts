@@ -68,11 +68,14 @@ describe('PdfWorkerHost', () => {
     const host = new PdfWorkerHost(scripted, 'analyze', 15_000, memoryLogger())
     const ac = new AbortController()
     const cancelled = host.request(
-      { kind: 'analyze', path: 'never', layouts: [] },
+      { kind: 'analyze', path: 'never', layouts: [], pages: null, autoOcr: false },
       5_000,
       ac.signal,
     )
-    const other = host.request({ kind: 'analyze', path: 'slow:150', layouts: [] }, 5_000)
+    const other = host.request(
+      { kind: 'analyze', path: 'slow:150', layouts: [], pages: null, autoOcr: false },
+      5_000,
+    )
     await new Promise((resolve) => setTimeout(resolve, 30))
     ac.abort()
     await expect(cancelled).rejects.toMatchObject({ code: ERROR_CODES.cancelled })
@@ -93,7 +96,10 @@ describe('PdfWorkerHost', () => {
     const logger = memoryLogger()
     const host = new PdfWorkerHost(scripted, 'analyze', 15_000, logger)
     const error = await host
-      .request({ kind: 'analyze', path: 'internal', layouts: [] }, 5_000)
+      .request(
+        { kind: 'analyze', path: 'internal', layouts: [], pages: null, autoOcr: false },
+        5_000,
+      )
       .then(
         () => undefined,
         (reason: unknown) => reason,

@@ -14,13 +14,14 @@ export function sanitizeFilename(input: string): string {
 export function suggestedNames(
   title: string,
   originalFilename: string,
-): { mono: string; dual: string; bundle: string; source: string } {
+): { mono: string; dual: string; bundle: string; source: string; glossary: string } {
   const stem = sanitizeFilename(title)
   return {
     mono: `${stem}-中文译文.pdf`,
     dual: `${stem}-双语对照.pdf`,
     bundle: `${stem}-完整文件.zip`,
     source: originalFilename,
+    glossary: `${stem}-术语表.csv`,
   }
 }
 

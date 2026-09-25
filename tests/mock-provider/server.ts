@@ -5,7 +5,6 @@ import { resolve } from 'node:path'
 export const MOCK_MARK = '〔测试译文〕'
 export const DEFAULT_MOCK_PORT = 38_111
 const TRUNCATE_ABOVE = 3_000
-const SEGMENT_RE = /<segment\s+id\s*=\s*["']?([^"'>\s]+)["']?\s*>([\s\S]*?)<\/segment\s*>/gi
 const MARKER_RE = /DOCFLOWKEEP\d{6}TOKEN/g
 const OPENAI_MODELS = ['mock-chat', 'mock-model', 'mock-reasoner']
 /** Models each chat API accepts: everything its `/models` endpoint lists (Gemini accepts any). */
@@ -262,12 +261,10 @@ export function translateText(text: string): string {
   return `${text}${MOCK_MARK}`
 }
 
-// pdf2zh's prompt: the paragraph follows "Source Text: " and ends before "Translated Text:".
-const PDF2ZH_SOURCE_RE = /Source Text: ([\s\S]*)\n\nTranslated Text:\s*$/
-
-function unwrapSegment(text: string): string {
-  return text.replace(/^\n/, '').replace(/\n$/, '')
-}
+// BabelDOC's prompts (04 §4.9): a JSON batch, one paragraph, or term extraction.
+const BATCH_MARKER = '## Here is the input:\n\n'
+const SINGLE_MARKER = 'Now translate the following text:\n\n'
+const TERMS_MARKER = 'Input Text:\n```\n'
 
 export function replyFor(
   user: string,
@@ -277,33 +274,50 @@ export function replyFor(
     state.refused += 1
     return { text: '', finish: 'content_filter' }
   }
-  SEGMENT_RE.lastIndex = 0
-  const segments = [...user.matchAll(SEGMENT_RE)].map((match) => ({
-    id: match[1] ?? '',
-    text: unwrapSegment(match[2] ?? ''),
-  }))
   let text: string
-  const pdf2zh = PDF2ZH_SOURCE_RE.exec(user)
-  if (pdf2zh) {
-    text = applyFaults(pdf2zh[1] ?? '', state)
-  } else if (segments.length > 0) {
-    const parts: string[] = []
-    for (const segment of segments) {
-      if (segment.text.includes('DROP_ME') && segments.length > 1) {
+  let source: string
+  const batch = user.indexOf(BATCH_MARKER)
+  const single = user.indexOf(SINGLE_MARKER)
+  if (batch >= 0) {
+    const items = parseBatch(user.slice(batch + BATCH_MARKER.length))
+    source = items.map((item) => item.input).join('\n')
+    const out: Array<{ id: unknown; output: string }> = []
+    for (const item of items) {
+      if (item.input.includes('DROP_ME') && items.length > 1) {
         state.dropped += 1
         continue
       }
-      parts.push(`<segment id="${segment.id}">\n${applyFaults(segment.text, state)}\n</segment>`)
+      out.push({ id: item.id, output: applyFaults(item.input, state) })
     }
-    text = parts.join('\n')
+    text = JSON.stringify(out, null, 2)
+  } else if (single >= 0) {
+    source = user.slice(single + SINGLE_MARKER.length)
+    text = applyFaults(source, state)
+  } else if (user.includes(TERMS_MARKER)) {
+    source = ''
+    text = '[]'
   } else {
+    source = user
     text = applyFaults(user, state)
   }
-  if (user.length > TRUNCATE_ABOVE) {
+  if (source.length > TRUNCATE_ABOVE) {
     state.truncated += 1
     return { text: text.slice(0, Math.floor(text.length / 2)), finish: 'length' }
   }
   return { text, finish: 'stop' }
+}
+
+function parseBatch(json: string): Array<{ id: unknown; input: string }> {
+  try {
+    const parsed = JSON.parse(json) as unknown
+    if (!Array.isArray(parsed)) return []
+    return parsed.flatMap((item) => {
+      const rec = asRecord(item)
+      return rec && typeof rec.input === 'string' ? [{ id: rec.id, input: rec.input }] : []
+    })
+  } catch {
+    return []
+  }
 }
 
 function applyFaults(source: string, state: MockProviderState): string {

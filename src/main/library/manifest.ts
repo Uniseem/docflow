@@ -36,7 +36,13 @@ export function fileUrl(kind: 'source' | 'mono' | 'dual', id: string): string {
 
 export function toSummary(
   manifest: DocumentManifest,
-  options: { running: boolean; hasMono: boolean; hasDual: boolean; hasSource: boolean },
+  options: {
+    running: boolean
+    hasMono: boolean
+    hasDual: boolean
+    hasSource: boolean
+    hasGlossary?: boolean
+  },
 ): DocumentSummary {
   const rest: Record<string, unknown> = { ...manifest }
   delete rest.settingsSnapshot
@@ -46,6 +52,8 @@ export function toSummary(
       ...(options.hasSource ? { source: fileUrl('source', manifest.id) } : {}),
       ...(options.hasMono ? { mono: fileUrl('mono', manifest.id) } : {}),
       ...(options.hasDual ? { dual: fileUrl('dual', manifest.id) } : {}),
+      // Not served by docflow://: the renderer only uses it to know that it exists.
+      ...(options.hasGlossary ? { glossary: 'glossary.csv' } : {}),
     },
     suggestedNames: suggestedNames(manifest.title, manifest.originalFilename),
     running: options.running,

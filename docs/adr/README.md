@@ -20,4 +20,5 @@
 | [0014](0014-pdf-workers-exit-when-idle.md)       | PDF worker 线程按需启动，空闲 15 秒后退出                                | 已采纳                     |
 | [0015](0015-deletion-set-by-geometry.md)         | 写回的删除集合按几何位置与数量确定，不按算子序号逐个匹配                 | 已废弃（被 0016 取代）     |
 | [0016](0016-port-pdfmathtranslate.md)            | PDF 处理逐步照搬 PDFMathTranslate 1.9.11                                 | 已采纳（部分由 0017 修订） |
-| [0017](0017-babeldoc-fixes.md)                   | 在 pdf2zh 移植上按 BabelDOC 0.6.4 修正 pdf2zh 自身的问题                 | 已采纳                     |
+| [0017](0017-babeldoc-fixes.md)                   | 在 pdf2zh 移植上按 BabelDOC 0.6.4 修正 pdf2zh 自身的问题                 | 已采纳（由 0018 扩展）     |
+| [0018](0018-port-babeldoc-features.md)           | 照搬 pdf2zh 后继版本（pdf2zh-next 2.9.0 / BabelDOC 0.6.4）的其余优点     | 已采纳                     |

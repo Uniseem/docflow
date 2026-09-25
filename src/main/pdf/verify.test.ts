@@ -2,10 +2,10 @@ import { mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, test } from 'vitest'
-import { NOTO_FONT, fixture, referenceLayouts } from '../../../tests/unit/pdf2zh-reference'
+import { fakeTranslations } from '../../../tests/unit/fake-translations'
+import { FONTS_DIR, fixture, referenceLayouts } from '../../../tests/unit/pdf2zh-reference'
 import { analyzePdf } from './analyze'
 import { composePdf } from './compose'
-import { segmentsOf } from './pdf2zh/segments'
 import { verifyPdf } from './verify'
 
 describe('verifyPdf', () => {
@@ -18,18 +18,16 @@ describe('verifyPdf', () => {
       monoPath: join(dir, 'mono.pdf'),
       dualPath: join(dir, 'dual.pdf'),
       analysis,
-      translations: segmentsOf(analysis).map((segment) => ({
-        id: segment.id,
-        text: `译${segment.text}`,
-        kept: false,
-      })),
-      fonts: { noto: NOTO_FONT },
+      translations: fakeTranslations(analysis),
+      fonts: { dir: FONTS_DIR },
+      options: { dualMode: 'alternating' },
     })
     const verified = await verifyPdf({
       monoPath: join(dir, 'mono.pdf'),
       dualPath: join(dir, 'dual.pdf'),
       pages: analysis.pages,
       writtenPages: result.writtenPages,
+      dualMode: 'alternating',
     })
     expect(verified.monoPages).toBe(3)
     expect(verified.dualPages).toBe(6)

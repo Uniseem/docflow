@@ -21,13 +21,13 @@ export function cacheFingerprint(
   model: string,
   runtime: TranslationRuntime,
 ): string {
+  // Entries are keyed by the whole prompt (BabelDOC llm_translate), which already holds the
+  // role prompt, glossary and context; the fingerprint covers what is not in it.
   return sha256(
     JSON.stringify({
-      version: 1,
+      version: 2,
       translator: translatorId(provider, model),
-      chunkChars: runtime.llm.chunkChars,
-      maxSegmentsPerRequest: runtime.llm.maxSegmentsPerRequest,
-      maxRequestChars: runtime.llm.maxRequestChars,
+      maxOutputTokens: runtime.llm.maxOutputTokens,
       systemPrompt: runtime.systemPrompt,
     }),
   )
@@ -79,13 +79,13 @@ export class TranslationCache {
     this.#timer = undefined
   }
 
-  /** pdf2zh TranslationCache.get: whatever was stored for this source text. */
-  get(segmentText: string): string | undefined {
-    return this.#entries.get(sha256(segmentText))?.text
+  /** BabelDOC TranslationCache.get: whatever was stored for this prompt. */
+  get(prompt: string): string | undefined {
+    return this.#entries.get(sha256(prompt))?.text
   }
 
-  set(segmentText: string, text: string): void {
-    this.#entries.set(sha256(segmentText), { text, at: new Date().toISOString() })
+  set(prompt: string, text: string): void {
+    this.#entries.set(sha256(prompt), { text, at: new Date().toISOString() })
     this.#dirty += 1
     if (this.#dirty >= CACHE_FLUSH_EVERY) void this.flush()
   }

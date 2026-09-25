@@ -41,7 +41,13 @@ function doc(id: string, patch: Partial<DocumentSummary> = {}): DocumentSummary 
     startedAt: null,
     completedAt: null,
     files: {},
-    suggestedNames: { mono: 'm.pdf', dual: 'd.pdf', bundle: 'b.zip', source: 's.pdf' },
+    suggestedNames: {
+      mono: 'm.pdf',
+      dual: 'd.pdf',
+      bundle: 'b.zip',
+      source: 's.pdf',
+      glossary: 'g.csv',
+    },
     running: false,
     ...patch,
   }

@@ -4,23 +4,28 @@ import { ERROR_CODES, UserError } from '../../shared/errors'
 import {
   AnalysisResult,
   PageLayout,
+  type ComposeOptions,
   type ComposeResult,
   type PdfInspection,
   type TranslatedParagraph,
   type VerifyResult,
 } from '../../shared/pdf-types'
+import { selectedPages } from '../../shared/pages'
 import { DOCLAYOUT_MODEL_FILE } from '../pdf/pdf2zh/doclayout'
 import { needsTranslation } from '../pdf/pdf2zh/segments'
 import type { DocumentManifest, ProcessingEvent, Stage } from '../../shared/types'
 import type { DocumentLibrary } from '../library/library'
 import { sourcePath, workDir } from '../library/manifest'
 import { writeJsonAtomic } from '../settings/atomic-write'
+import { GLOSSARY_FILE } from './stages/translate'
 
 export type TranslateOutcome = {
   translations: TranslatedParagraph[]
   usage: { input: number; output: number }
   kept: number
   translated: number
+  /** Entries of the automatic glossary written to work/glossary.csv, or null. */
+  glossaryEntries?: number | null
 }
 
 export type PipelineHooks = {
@@ -29,6 +34,7 @@ export type PipelineHooks = {
   layout: (
     path: string,
     pages: number,
+    selected: number[] | null,
     signal: AbortSignal,
     onPage: (done: number, total: number) => Promise<void>,
   ) => Promise<PageLayout[]>
@@ -36,6 +42,8 @@ export type PipelineHooks = {
     path: string,
     layouts: PageLayout[],
     pages: number,
+    selected: number[] | null,
+    autoOcr: boolean,
     signal: AbortSignal,
   ) => Promise<AnalysisResult>
   translate: (input: {
@@ -51,18 +59,24 @@ export type PipelineHooks = {
     dualPath: string | null
     analysis: AnalysisResult
     translations: TranslatedParagraph[]
-    fonts: { noto: string }
+    fonts: { dir: string }
+    options: ComposeOptions
     signal: AbortSignal
-  }) => Promise<ComposeResult & { writtenPages?: number[] }>
+  }) => Promise<ComposeResult & { writtenPages?: number[]; monoPages?: number }>
   verify: (input: {
     monoPath: string
     dualPath: string | null
     pages: number
     writtenPages: number[]
+    dualMode: ComposeOptions['dualMode']
     signal: AbortSignal
   }) => Promise<VerifyResult>
-  fonts: { noto: string }
+  fonts: { dir: string }
   bilingual: (manifest: DocumentManifest) => boolean
+  /** The PDF settings compose uses (read when the stage runs, like `bilingual`). */
+  pdfOptions: () => Pick<ComposeOptions, 'fontFamily' | 'dualMode' | 'dualTranslateFirst'>
+  /** auto_enable_ocr_workaround */
+  autoOcr: () => boolean
   onChanged?: (manifest: DocumentManifest) => void
 }
 
@@ -119,13 +133,17 @@ export async function runPipeline(
     { stage: 'inspect', progress: 9, pages: inspection.pages },
   )
 
+  const selected = selectedPages(manifest.options?.pages, inspection.pages)
+  if (selected && selected.length === 0) throw new UserError(ERROR_CODES.pages_out_of_range)
+  // Checkpoints hold the chosen pages only: another choice computes them again.
+  const scope = `${manifest.sourceSha256}:${selected ? selected.join(',') : 'all'}`
   await enterStage('analyze', 10)
   const layouts = await withCheckpoint(
     join(work, 'layout.json'),
-    manifest.sourceSha256,
+    scope,
     async () => {
       throwIfAborted(signal)
-      return hooks.layout(src, inspection.pages, signal, async (done, total) => {
+      return hooks.layout(src, inspection.pages, selected, signal, async (done, total) => {
         const progress = 10 + Math.round((done / Math.max(1, total)) * 15)
         await emit(
           {
@@ -144,15 +162,23 @@ export async function runPipeline(
   )
   const analysis = await withCheckpoint(
     join(work, 'analysis.json'),
-    manifest.sourceSha256,
+    `${scope}:${hooks.autoOcr() ? 'ocr' : ''}`,
     async () => {
       throwIfAborted(signal)
-      return hooks.analyze(src, layouts, inspection.pages, signal)
+      return hooks.analyze(src, layouts, inspection.pages, selected, hooks.autoOcr(), signal)
     },
     (data) => AnalysisResult.safeParse(data).success,
   )
+  if (analysis.ocrWorkaround) {
+    await emit({
+      stage: 'analyze',
+      level: 'info',
+      message: '这是带文字层的扫描件：译文用黑色写在白底上（OCR workaround）',
+    })
+  }
   const pagesWithout = new Set<number>()
   for (let i = 0; i < analysis.pages; i += 1) {
+    if (selected && !selected.includes(i)) continue
     const texts = analysis.units.filter((unit) => unit.page === i).flatMap((unit) => unit.texts)
     if (!texts.some(needsTranslation)) pagesWithout.add(i)
   }
@@ -212,7 +238,7 @@ export async function runPipeline(
       stage: 'translate',
       level: 'success',
       progress: 79,
-      message: `翻译完成：${translation.translated} 段，保留原文 ${translation.kept} 段，用量 输入 ${translation.usage.input} / 输出 ${translation.usage.output} tokens`,
+      message: `翻译完成：${translation.translated} 段，保留原文 ${translation.kept} 段，用量 输入 ${translation.usage.input} / 输出 ${translation.usage.output} tokens${translation.glossaryEntries ? `，术语表 ${translation.glossaryEntries} 条` : ''}`,
     },
     {
       stage: 'translate',
@@ -231,6 +257,7 @@ export async function runPipeline(
 
   const current = library.require(id)
   const bilingual = hooks.bilingual(current)
+  const composeOptions = hooks.pdfOptions()
   const monoWork = join(work, 'mono.pdf')
   const dualWork = join(work, 'dual.pdf')
   await enterStage('compose', 80)
@@ -241,6 +268,11 @@ export async function runPipeline(
     analysis,
     translations: translation.translations,
     fonts: hooks.fonts,
+    options: {
+      ...composeOptions,
+      pages: selected,
+      onlyTranslatedPages: Boolean(current.options?.onlyTranslatedPages && selected),
+    },
     signal,
   })
   for (const warning of composed.warnings) {
@@ -272,8 +304,9 @@ export async function runPipeline(
   const verified = await hooks.verify({
     monoPath: monoWork,
     dualPath: bilingual ? dualWork : null,
-    pages: analysis.pages,
+    pages: composed.monoPages ?? analysis.pages,
     writtenPages: composed.writtenPages ?? [],
+    dualMode: composeOptions.dualMode,
     signal,
   })
   await emit(
@@ -282,7 +315,7 @@ export async function runPipeline(
       level: 'success',
       progress: 93,
       message: bilingual
-        ? `校验通过：中文 PDF ${verified.monoPages} 页，双语 PDF ${verified.dualPages ?? verified.monoPages * 2} 页`
+        ? `校验通过：中文 PDF ${verified.monoPages} 页，双语 PDF ${verified.dualPages ?? verified.monoPages} 页`
         : `校验通过：中文 PDF ${verified.monoPages} 页`,
     },
     { stage: 'verify', progress: 93 },
@@ -301,6 +334,11 @@ export async function runPipeline(
     dualBytes = (await stat(join(outDir, 'dual.pdf'))).size
   }
   const monoBytes = (await stat(join(outDir, 'mono.pdf'))).size
+  let glossaryBytes: number | null = null
+  if (translation.glossaryEntries) {
+    await rename(join(work, GLOSSARY_FILE), join(outDir, GLOSSARY_FILE))
+    glossaryBytes = (await stat(join(outDir, GLOSSARY_FILE))).size
+  }
   await rm(work, { recursive: true, force: true })
   await library.events.append(id, {
     stage: 'archive',
@@ -315,6 +353,7 @@ export async function runPipeline(
     outputs: {
       mono: { bytes: monoBytes },
       dual: dualBytes === null ? null : { bytes: dualBytes },
+      glossary: glossaryBytes === null ? null : { bytes: glossaryBytes },
     },
   })
   hooks.onChanged?.(archived)
@@ -362,8 +401,8 @@ function throwIfAborted(signal: AbortSignal): void {
 }
 
 /** `root` is `<resources>/fonts` in a packaged app; tests and scripts run from the repo root. */
-export function bundledFonts(root = join(process.cwd(), 'resources/fonts')): { noto: string } {
-  return { noto: join(root, 'SourceHanSerifCN-Regular.ttf') }
+export function bundledFonts(root = join(process.cwd(), 'resources/fonts')): { dir: string } {
+  return { dir: root }
 }
 
 /** DocLayout-YOLO; `root` is `<resources>/models` in a packaged app. */

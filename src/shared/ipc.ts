@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import {
   DocumentSummary,
+  GlossaryInfo,
   ModelInfo,
   ProcessingEvent,
   ProviderConfig,
@@ -95,6 +96,9 @@ export const channels = {
       paths: z.array(z.string()),
       title: z.string().optional(),
       translator: TranslatorChoice,
+      /** BabelDOC pages / only_include_translated_page for these documents. */
+      pages: z.string().max(200).optional(),
+      onlyTranslatedPages: z.boolean().optional(),
     }),
     response: z.object({
       created: z.array(DocumentSummary),
@@ -147,7 +151,7 @@ export const channels = {
   'documents:export': {
     request: z.object({
       id: z.string(),
-      kind: z.enum(['mono', 'dual', 'source', 'bundle']),
+      kind: z.enum(['mono', 'dual', 'source', 'bundle', 'glossary']),
     }),
     response: z.union([z.object({ cancelled: z.literal(true) }), z.object({ path: z.string() })]),
   },
@@ -162,6 +166,19 @@ export const channels = {
     request: z.object({ id: z.string(), kind: z.enum(['mono', 'dual', 'source']) }),
     response: empty,
   },
+  /** Imports a user glossary CSV (source,target[,tgt_lng]) picked in a file dialog. */
+  'glossaries:import': {
+    request: empty,
+    response: z.union([
+      z.object({ cancelled: z.literal(true) }),
+      z.object({ glossary: GlossaryInfo }),
+    ]),
+  },
+  'glossaries:update': {
+    request: z.object({ id: z.string(), enabled: z.boolean() }),
+    response: empty,
+  },
+  'glossaries:delete': { request: z.object({ id: z.string() }), response: empty },
   'dialog:pickPdfs': {
     request: empty,
     response: z.object({ paths: z.array(z.string()) }),

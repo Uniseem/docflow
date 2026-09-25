@@ -5,11 +5,11 @@ import { access } from 'node:fs/promises'
 import { describe, expect, test } from 'vitest'
 import type { AnalysisResult } from '../../shared/pdf-types'
 import { defaultTranslationRuntime } from '../../shared/types'
+import { fakeTranslations } from '../../../tests/unit/fake-translations'
 import { fixture, referenceLayouts } from '../../../tests/unit/pdf2zh-reference'
 import { analyzePdf } from '../pdf/analyze'
 import { composePdf } from '../pdf/compose'
 import { inspectPdf } from '../pdf/inspect'
-import { segmentsOf } from '../pdf/pdf2zh/segments'
 import { verifyPdf } from '../pdf/verify'
 import { DocumentLibrary } from '../library/library'
 import { bundledFonts, composeWarningEvent, runPipeline, type PipelineHooks } from './run'
@@ -31,17 +31,13 @@ describe('runPipeline', () => {
     await lib.update(created.id, { status: 'processing' })
     await runPipeline(lib, created.id, new AbortController().signal, {
       inspect: (path) => inspectPdf(path),
-      layout: async (_path, pages, _signal, onPage) => {
+      layout: async (_path, pages, _selected, _signal, onPage) => {
         for (let i = 1; i <= pages; i += 1) await onPage(i, pages)
         return referenceLayouts('colored-text')
       },
       analyze: (path, layouts) => analyzePdf(path, layouts),
       translate: ({ analysis }) => {
-        const translations = segmentsOf(analysis).map((segment) => ({
-          id: segment.id,
-          text: `译${segment.text}`,
-          kept: false,
-        }))
+        const translations = fakeTranslations(analysis)
         return Promise.resolve({
           translations,
           usage: { input: 1, output: 1 },
@@ -57,6 +53,7 @@ describe('runPipeline', () => {
           analysis: input.analysis,
           translations: input.translations,
           fonts: input.fonts,
+          options: input.options,
         }),
       verify: (input) =>
         verifyPdf({
@@ -64,9 +61,16 @@ describe('runPipeline', () => {
           dualPath: input.dualPath,
           pages: input.pages,
           writtenPages: input.writtenPages,
+          dualMode: input.dualMode,
         }),
       fonts,
       bilingual: () => true,
+      pdfOptions: () => ({
+        fontFamily: 'auto',
+        dualMode: 'side-by-side',
+        dualTranslateFirst: false,
+      }),
+      autoOcr: () => false,
     })
     await access(join(dir, 'documents', created.id, 'output', 'mono.pdf'))
     await access(join(dir, 'documents', created.id, 'output', 'dual.pdf'))
@@ -131,6 +135,70 @@ describe('runPipeline', () => {
   })
 })
 
+describe('page selection (BabelDOC pages)', () => {
+  test('only the chosen pages are laid out, and a range past the end fails at once', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'df-pages-'))
+    const lib = new DocumentLibrary()
+    await lib.open(dir)
+    const pdf = join(dir, 'in.pdf')
+    await writeFile(pdf, '%PDF-1.4')
+    const created = await lib.create({
+      path: pdf,
+      translator,
+      settingsSnapshot: defaultTranslationRuntime(),
+      options: { pages: '2-' },
+    })
+    await lib.update(created.id, { status: 'processing' })
+    const seen: Array<number[] | null> = []
+    let composed: unknown
+    const hooks = fakeHooks(() => undefined)
+    await runPipeline(lib, created.id, new AbortController().signal, {
+      ...hooks,
+      inspect: () =>
+        Promise.resolve({
+          pages: 3,
+          pageSizes: [
+            [612, 792],
+            [612, 792],
+            [612, 792],
+          ],
+          rotations: [0, 0, 0],
+          textChars: 5,
+          visibleTextChars: 5,
+          hasTextLayer: true,
+        }),
+      layout: (_path, pages, selected) => {
+        seen.push(selected)
+        return Promise.resolve(
+          Array.from({ length: pages }, () => ({ width: 612, height: 792, boxes: [] })),
+        )
+      },
+      compose: (input) => {
+        composed = input.options
+        return hooks.compose(input)
+      },
+    })
+    expect(seen).toEqual([[1, 2]])
+    expect(composed).toMatchObject({ pages: [1, 2], onlyTranslatedPages: false })
+
+    const outside = await lib.create({
+      path: pdf,
+      translator,
+      settingsSnapshot: defaultTranslationRuntime(),
+      options: { pages: '9' },
+    })
+    await lib.update(outside.id, { status: 'processing' })
+    await expect(
+      runPipeline(
+        lib,
+        outside.id,
+        new AbortController().signal,
+        fakeHooks(() => undefined),
+      ),
+    ).rejects.toMatchObject({ code: 'pages_out_of_range' })
+  })
+})
+
 describe('composeWarningEvent', () => {
   test('every warning code reads as Chinese', () => {
     for (const code of ['font_unmapped', 'paragraph_not_fit', 'something_new']) {
@@ -154,8 +222,9 @@ describe('composeWarningEvent', () => {
 
 function fakeHooks(onChanged: NonNullable<PipelineHooks['onChanged']>): PipelineHooks {
   const analysis: AnalysisResult = {
-    version: 4,
+    version: 5,
     pages: 1,
+    ocrWorkaround: false,
     pageSizes: [[612, 792]],
     units: [
       {
@@ -178,6 +247,9 @@ function fakeHooks(onChanged: NonNullable<PipelineHooks['onChanged']>): Pipeline
         ],
         formulas: [],
         lines: [],
+        infos: [{ label: 'plain text', layoutBox: null, items: [] }],
+        styles: [],
+        fonts: {},
       },
     ],
     stats: { chars: 5, paragraphs: 1, translatable: 1, formulas: 0 },
@@ -224,6 +296,8 @@ function fakeHooks(onChanged: NonNullable<PipelineHooks['onChanged']>): Pipeline
       }),
     fonts,
     bilingual: () => true,
+    pdfOptions: () => ({ fontFamily: 'auto', dualMode: 'side-by-side', dualTranslateFirst: false }),
+    autoOcr: () => false,
     onChanged,
   }
 }

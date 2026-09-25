@@ -3,7 +3,15 @@
 // Unless `strict`, these rules come from BabelDOC 0.6.4 instead (ADR-0017): its formula-font
 // lists, whitespace normalisation, "a space is a formula only inside a formula", and spaces
 // neither open a paragraph in another layout box nor widen a paragraph's box.
-import type { LtChar, LtLine, Pdf2zhFormula, Pdf2zhParagraph } from '../../../shared/pdf-types'
+import type {
+  CharStyle,
+  LtChar,
+  LtLine,
+  ParagraphInfo,
+  ParagraphItem,
+  Pdf2zhFormula,
+  Pdf2zhParagraph,
+} from '../../../shared/pdf-types'
 import type { LayoutMap } from './doclayout'
 
 export type LtItem = ({ kind: 'char' } & LtChar) | ({ kind: 'line' } & LtLine)
@@ -17,6 +25,10 @@ export type ParsedUnit = {
   formulas: Pdf2zhFormula[]
   /** lstk: lines outside formulas, redrawn in place. */
   lines: LtLine[]
+  /** Per paragraph: layout label and composition (ADR-0018). */
+  infos: ParagraphInfo[]
+  /** Character styles the compositions refer to. */
+  styles: CharStyle[]
 }
 
 export type ParseOptions = {
@@ -149,8 +161,58 @@ export function parseLayout(
   let prevCurV = false
   // Paragraphs whose style a text character has seeded (BabelDOC _merge_styles).
   const styled = new Set<Pdf2zhParagraph>()
+  // BabelDOC's view of each paragraph next to sstk: characters with their style, and formulas.
+  const infos: ParagraphInfo[] = []
+  const styles: CharStyle[] = []
+  const styleIds = new Map<string, number>()
+  const styleOf = (c: LtChar): number => {
+    const key = `${c.font}\u0000${c.size}\u0000${c.gstate}`
+    let id = styleIds.get(key)
+    if (id === undefined) {
+      id = styles.length
+      styles.push({ font: c.font, size: c.size, gstate: c.gstate })
+      styleIds.set(key, id)
+    }
+    return id
+  }
+  const paraItems = (): ParagraphItem[] => infos[infos.length - 1]!.items
+  const pushChar = (c: LtChar) => {
+    paraItems().push({
+      kind: 'char',
+      text: c.text,
+      x0: c.x0,
+      y0: c.y0,
+      x1: c.x1,
+      y1: c.y1,
+      code: c.code,
+      codeBytes: c.codeBytes,
+      style: styleOf(c),
+    })
+  }
+  // A space pdf2zh inserts: BabelDOC's dummy space char, styled like the character before it.
+  const pushSpace = (prev: LtChar, x1: number) => {
+    paraItems().push({
+      kind: 'char',
+      text: ' ',
+      x0: prev.x1,
+      y0: prev.y0,
+      x1,
+      y1: prev.y1,
+      code: -1,
+      codeBytes: 0,
+      style: styleOf(prev),
+      dummy: true,
+    })
+  }
+  const labelOf = (cls: number): Pick<ParagraphInfo, 'label' | 'layoutBox'> => {
+    const box = cls >= 2 ? layout.boxes?.[cls - 2] : undefined
+    if (!box) return { label: null, layoutBox: null }
+    const [bx0, by0, bx1, by1] = box.xyxy
+    return { label: box.name, layoutBox: [bx0, layout.height - by1, bx1, layout.height - by0] }
+  }
 
   const pushFormula = () => {
+    paraItems().push({ kind: 'formula', index: formulas.length })
     formulas.push({ chars: vstk, lines: vlstk, fix: vfix, len: 0 })
   }
 
@@ -212,12 +274,15 @@ export function parseLayout(
         if (cls === xtCls && xt) {
           if (child.x0 > xt.x1 + 1) {
             sstk[sstk.length - 1] += ' '
+            pushSpace(xt, child.x0)
           } else if (child.x1 < xt.x0) {
             sstk[sstk.length - 1] += ' '
+            pushSpace(xt, xt.x1)
             pstk[pstk.length - 1]!.brk = true
           }
         } else {
           sstk.push('')
+          infos.push({ ...labelOf(cls), items: [] })
           pstk.push({
             y: child.y0,
             x: child.x0,
@@ -241,6 +306,7 @@ export function parseLayout(
           para.size = child.size
         }
         sstk[sstk.length - 1] += child.text
+        pushChar(child)
         if (!styled.has(para)) {
           styled.add(para)
           para.gstate = child.gstate
@@ -277,5 +343,30 @@ export function parseLayout(
     const first = formula.chars[0]
     formula.len = Math.max(...formula.chars.map((vch) => vch.x1)) - (first?.x0 ?? 0)
   }
-  return { texts: sstk, paragraphs: pstk, formulas, lines: lstk }
+  for (const info of infos) sizeLineBreakSpaces(info.items)
+  return { texts: sstk, paragraphs: pstk, formulas, lines: lstk, infos, styles }
+}
+
+/**
+ * A space pdf2zh puts at a line break has no gap to measure: give it BabelDOC's width for a
+ * newline dummy, min(|distance|, median distance) (layout_helper._add_space_dummy_chars_to_list,
+ * where the "median" is the second smallest distinct gap > 1, or the only one, or 1).
+ */
+function sizeLineBreakSpaces(items: ParagraphItem[]): void {
+  const chars = items.filter((item) => item.kind === 'char')
+  const glyphs = chars.filter((c) => !c.dummy)
+  const gaps = new Set<number>()
+  for (let i = 0; i + 1 < glyphs.length; i += 1) {
+    const distance = glyphs[i + 1]!.x0 - glyphs[i]!.x1
+    if (distance > 1) gaps.add(distance)
+  }
+  const distinct = [...gaps].sort((a, b) => a - b)
+  const median = distinct.length === 0 ? 1 : distinct.length === 1 ? distinct[0]! : distinct[1]!
+  for (let i = 0; i < chars.length; i += 1) {
+    const space = chars[i]!
+    if (!space.dummy || space.x1 !== space.x0) continue
+    const next = chars.slice(i + 1).find((c) => !c.dummy)
+    const distance = next ? Math.abs(next.x0 - space.x0) : median
+    space.x1 = space.x0 + Math.min(distance, median)
+  }
 }

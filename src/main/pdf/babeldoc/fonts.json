@@ -1,0 +1,167 @@
+[
+  {
+    "file": "SourceHanSerifCN-Bold.ttf",
+    "bold": true,
+    "italic": false,
+    "monospace": false,
+    "serif": true,
+    "ascent": 1150,
+    "descent": -286,
+    "sha3_256": "77816a54957616e140e25a36a41fc061ddb505a1107de4e6a65f561e5dcf8310",
+    "size": 14134156
+  },
+  {
+    "file": "SourceHanSerifCN-Regular.ttf",
+    "bold": false,
+    "italic": false,
+    "monospace": false,
+    "serif": true,
+    "ascent": 1150,
+    "descent": -286,
+    "sha3_256": "c8bf74da2c3b7457c9d887465b42fb6f80d3d84f361cfe5b0673a317fb1f85ad",
+    "size": 14047768
+  },
+  {
+    "file": "SourceHanSansCN-Bold.ttf",
+    "bold": true,
+    "italic": false,
+    "monospace": false,
+    "serif": false,
+    "ascent": 1160,
+    "descent": -288,
+    "sha3_256": "82314c11016a04ef03e7afd00abe0ccc8df54b922dee79abf6424f3002a31825",
+    "size": 10174460
+  },
+  {
+    "file": "SourceHanSansCN-Regular.ttf",
+    "bold": false,
+    "italic": false,
+    "monospace": false,
+    "serif": false,
+    "ascent": 1160,
+    "descent": -288,
+    "sha3_256": "b45a80cf3650bfc62aa014e58243c6325e182c4b0c5819e41a583c699cce9a8f",
+    "size": 10397552
+  },
+  {
+    "file": "NotoSerif-Regular.ttf",
+    "bold": false,
+    "italic": false,
+    "monospace": false,
+    "serif": true,
+    "ascent": 1069,
+    "descent": -293,
+    "sha3_256": "c2bbe984e65bafd3bcd38b3cb1e1344f3b7b79d6beffc7a3d883b57f8358559d",
+    "size": 504932
+  },
+  {
+    "file": "NotoSerif-Bold.ttf",
+    "bold": true,
+    "italic": false,
+    "monospace": false,
+    "serif": true,
+    "ascent": 1069,
+    "descent": -293,
+    "sha3_256": "28d88d924285eadb9f9ce49f2d2b95473f89a307b226c5f6ebed87a654898312",
+    "size": 506864
+  },
+  {
+    "file": "NotoSans-Regular.ttf",
+    "bold": false,
+    "italic": false,
+    "monospace": false,
+    "serif": false,
+    "ascent": 1069,
+    "descent": -293,
+    "sha3_256": "7dfe2bbf97dc04c852d1223b220b63430e6ad03b0dbb28ebe6328a20a2d45eb8",
+    "size": 629024
+  },
+  {
+    "file": "NotoSans-Bold.ttf",
+    "bold": true,
+    "italic": false,
+    "monospace": false,
+    "serif": false,
+    "ascent": 1069,
+    "descent": -293,
+    "sha3_256": "ecd38d472c1cad07d8a5dffd2b5a0f72edcd40fff2b4e68d770da8f2ef343a82",
+    "size": 630964
+  },
+  {
+    "file": "LXGWWenKaiGB-Regular.1.520.ttf",
+    "bold": false,
+    "italic": false,
+    "monospace": false,
+    "serif": false,
+    "ascent": 928,
+    "descent": -256,
+    "sha3_256": "0671656b00992e317f9e20610e7145b024e664ada9f272d4f8e497196af98005",
+    "size": 24903712
+  },
+  {
+    "file": "NotoSans-Italic.ttf",
+    "bold": false,
+    "italic": true,
+    "monospace": false,
+    "serif": false,
+    "ascent": 1069,
+    "descent": -293,
+    "sha3_256": "830652f61724c017e5a29a96225b484a2ccbd25f69a1b3f47e5f466a2dbed1ad",
+    "size": 642344
+  },
+  {
+    "file": "NotoSans-BoldItalic.ttf",
+    "bold": true,
+    "italic": true,
+    "monospace": false,
+    "serif": false,
+    "ascent": 1069,
+    "descent": -293,
+    "sha3_256": "0b6c690a4a6b7d605b2ecbde00c7ac1a23e60feb17fa30d8b972d61ec3ff732b",
+    "size": 644340
+  },
+  {
+    "file": "NotoSerif-Italic.ttf",
+    "bold": false,
+    "italic": true,
+    "monospace": false,
+    "serif": true,
+    "ascent": 1069,
+    "descent": -293,
+    "sha3_256": "9b7773c24ab8a29e3c1c03efa4ab652d051e4c209134431953463aa946d62868",
+    "size": 535340
+  },
+  {
+    "file": "NotoSerif-BoldItalic.ttf",
+    "bold": true,
+    "italic": true,
+    "monospace": false,
+    "serif": true,
+    "ascent": 1069,
+    "descent": -293,
+    "sha3_256": "b69ee56af6351b2fb4fbce623f8e1c1f9fb19170686a9e5db2cf260b8cf24ac7",
+    "size": 535724
+  },
+  {
+    "file": "GoNotoKurrent-Regular.ttf",
+    "bold": false,
+    "italic": false,
+    "monospace": false,
+    "serif": false,
+    "ascent": 1069,
+    "descent": -293,
+    "sha3_256": "4324a60d507c691e6efc97420647f4d2c2d86d9de35009d1c769861b76074ae6",
+    "size": 15515760
+  },
+  {
+    "file": "GoNotoKurrent-Bold.ttf",
+    "bold": true,
+    "italic": false,
+    "monospace": false,
+    "serif": false,
+    "ascent": 1069,
+    "descent": -293,
+    "sha3_256": "000b37f592477945b27b7702dcad39f73e23e140e66ddff9847eb34f32389566",
+    "size": 15303772
+  }
+]

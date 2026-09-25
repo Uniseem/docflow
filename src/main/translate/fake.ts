@@ -14,30 +14,30 @@ export function fakeProvider(): ProviderConfig {
 }
 
 export const FAKE_MARK = '〔测试译文〕'
-const SEGMENT_RE = /<segment\s+id\s*=\s*["']?([^"'>\s]+)["']?\s*>([\s\S]*?)<\/segment\s*>/gi
 
 function translateBody(text: string): string {
   if (!text.trim()) return text
   return `${text}${FAKE_MARK}`
 }
 
-// pdf2zh's prompt: the paragraph follows "Source Text: " and ends before "Translated Text:".
-const PDF2ZH_SOURCE_RE = /Source Text: ([\s\S]*)\n\nTranslated Text:\s*$/
+const BATCH_MARKER = '## Here is the input:\n\n'
+const SINGLE_MARKER = 'Now translate the following text:\n\n'
+const TERMS_MARKER = 'Input Text:\n```\n'
 
+/** Answers BabelDOC's prompts: a JSON batch, one paragraph, or term extraction (none). */
 function translateUser(user: string): string {
-  const pdf2zh = PDF2ZH_SOURCE_RE.exec(user)
-  if (pdf2zh) return translateBody(pdf2zh[1] ?? '')
-  SEGMENT_RE.lastIndex = 0
-  const parts = [...user.matchAll(SEGMENT_RE)]
-  if (parts.length === 0) return translateBody(user)
-  return parts
-    .map((match) => {
-      let body = match[2] ?? ''
-      if (body.startsWith('\n')) body = body.slice(1)
-      if (body.endsWith('\n')) body = body.slice(0, -1)
-      return `<segment id="${match[1]}">\n${translateBody(body)}\n</segment>`
-    })
-    .join('\n')
+  const batch = user.indexOf(BATCH_MARKER)
+  if (batch >= 0) {
+    const items = JSON.parse(user.slice(batch + BATCH_MARKER.length)) as Array<{
+      id: number
+      input: string
+    }>
+    return JSON.stringify(items.map((item) => ({ id: item.id, output: translateBody(item.input) })))
+  }
+  const single = user.indexOf(SINGLE_MARKER)
+  if (single >= 0) return translateBody(user.slice(single + SINGLE_MARKER.length))
+  if (user.includes(TERMS_MARKER)) return '[]'
+  return translateBody(user)
 }
 
 function userFromBody(body: unknown): string {

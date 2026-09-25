@@ -13,7 +13,7 @@ import { analyzePdf } from '../pdf/analyze'
 import { composePdf } from '../pdf/compose'
 import { inspectPdf } from '../pdf/inspect'
 import { detectPage } from '../pdf/pdf2zh/detect'
-import { segmentsOf } from '../pdf/pdf2zh/segments'
+import { fakeTranslations } from '../../../tests/unit/fake-translations'
 import { LAYOUT_MODEL } from '../../../tests/unit/pdf2zh-reference'
 import { verifyPdf } from '../pdf/verify'
 import { bundledFonts, runPipeline, type PipelineHooks } from '../pipeline/run'
@@ -26,7 +26,7 @@ function inProcessHooks(): PipelineHooks {
   return {
     inspect: (path) => inspectPdf(path),
     // The real layout model in-process: MuPDF.js renders, onnxruntime-web detects.
-    layout: async (path, pages, _signal, onPage) => {
+    layout: async (path, pages, _selected, _signal, onPage) => {
       const layouts = []
       for (let i = 0; i < pages; i += 1) {
         layouts.push(await detectPage(path, i, LAYOUT_MODEL))
@@ -36,11 +36,7 @@ function inProcessHooks(): PipelineHooks {
     },
     analyze: (path, layouts) => analyzePdf(path, layouts),
     translate: ({ analysis }) => {
-      const translations = segmentsOf(analysis).map((segment) => ({
-        id: segment.id,
-        text: `译${segment.text}`,
-        kept: false,
-      }))
+      const translations = fakeTranslations(analysis)
       return Promise.resolve({
         translations,
         usage: { input: 1, output: 1 },
@@ -56,6 +52,7 @@ function inProcessHooks(): PipelineHooks {
         analysis: input.analysis,
         translations: input.translations,
         fonts: input.fonts,
+        options: input.options,
       }),
     verify: (input) =>
       verifyPdf({
@@ -63,9 +60,12 @@ function inProcessHooks(): PipelineHooks {
         dualPath: input.dualPath,
         pages: input.pages,
         writtenPages: input.writtenPages,
+        dualMode: input.dualMode,
       }),
     fonts,
     bilingual: () => true,
+    pdfOptions: () => ({ fontFamily: 'auto', dualMode: 'side-by-side', dualTranslateFirst: false }),
+    autoOcr: () => false,
   }
 }
 

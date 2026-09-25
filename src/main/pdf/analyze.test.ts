@@ -25,7 +25,7 @@ describe('analyzePdf matches pdf2zh receive_layout', () => {
   test.each(PARITY)('%s', { timeout: 120_000 }, async (name) => {
     const ref = reference(name)
     const result = await analyzePdf(fixture(name), referenceLayouts(name), { strict: true })
-    expect(result.version).toBe(4)
+    expect(result.version).toBe(5)
     ref.pages.forEach((page, index) => {
       const pageUnit = page.units.find((unit) => unit.kind === 'page')
       const ours = result.units.find((unit) => unit.page === index && unit.formPath === '')

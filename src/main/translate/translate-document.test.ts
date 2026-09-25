@@ -2,21 +2,27 @@ import { mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, test } from 'vitest'
-import { DEFAULT_SYSTEM_PROMPT, SUBMIT_ATTEMPTS } from '../../shared/constants'
+import { SUBMIT_ATTEMPTS } from '../../shared/constants'
 import { UserError } from '../../shared/errors'
-import type { ProviderConfig, TranslationRuntime } from '../../shared/types'
+import type { AnalysisResult } from '../../shared/pdf-types'
+import { defaultTranslationRuntime, type ProviderConfig } from '../../shared/types'
+import { analysisOf, stackedUnit } from '../../../tests/unit/layout-units'
 import { listenMockProvider, MOCK_MARK, type MockServer } from '../../../tests/mock-provider/server'
 import { cacheFingerprint, TranslationCache } from './cache'
 import { ProviderError } from './errors'
 import { fakeFetch } from './fake'
 import type { FetchFn } from './http'
 import { TranslationPools } from './pool'
-import { translateDocument } from './translate-document'
+import { translateDocument, type TranslateOptions } from './translate-document'
 
-const runtime: TranslationRuntime = {
-  llm: { chunkChars: 4000, maxSegmentsPerRequest: 8, maxRequestChars: 8000, maxOutputTokens: 0 },
-  perDocumentConcurrency: 4,
-  systemPrompt: DEFAULT_SYSTEM_PROMPT,
+const runtime = { ...defaultTranslationRuntime(), perDocumentConcurrency: 4 }
+
+const options: TranslateOptions = {
+  minTextLength: 5,
+  disableRichText: false,
+  fontFamily: 'auto',
+  userGlossaries: [],
+  autoExtractGlossary: false,
 }
 
 function provider(url: string): ProviderConfig {
@@ -29,6 +35,10 @@ function provider(url: string): ProviderConfig {
     models: [{ id: 'mock-chat' }],
     concurrency: 8,
   }
+}
+
+function doc(...texts: string[]): AnalysisResult {
+  return analysisOf([stackedUnit(texts)])
 }
 
 async function setup() {
@@ -44,6 +54,25 @@ async function setup() {
   return { server, cache, pools, config }
 }
 
+async function offline(fetchFn: FetchFn, url = 'https://provider.example.com') {
+  const dir = await mkdtemp(join(tmpdir(), 'df-offline-'))
+  const config = provider(url)
+  const cache = new TranslationCache(
+    join(dir, 'c.json'),
+    cacheFingerprint(config, 'mock-chat', runtime),
+  )
+  return { config, cache, pools: new TranslationPools(fetchFn, () => 'test-key') }
+}
+
+function reply(content: string): Promise<Response> {
+  return Promise.resolve(
+    new Response(JSON.stringify({ choices: [{ message: { content }, finish_reason: 'stop' }] }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    }),
+  )
+}
+
 const hooks = { delay: () => Promise.resolve(), jitterMs: () => 0 }
 
 describe('translateDocument against mock provider', () => {
@@ -52,121 +81,60 @@ describe('translateDocument against mock provider', () => {
     for (const server of servers.splice(0)) await server.close()
   })
 
-  test('translates normally and hits cache on the second run', async () => {
+  test('translates in one batch and hits the cache on the second run', async () => {
     const ctx = await setup()
     servers.push(ctx.server)
-    const segments = [
-      { id: 'p1', text: 'Hello, world.' },
-      { id: 'p2', text: 'Second {v1}' },
-    ]
-    const first = await translateDocument({
-      segments,
-      provider: ctx.config,
-      model: 'mock-chat',
-      runtime,
-      pools: ctx.pools,
-      cache: ctx.cache,
-      signal: new AbortController().signal,
-      onProgress: () => undefined,
-      onEvent: () => undefined,
-      hooks,
-    })
-    expect(first.results[0]?.text).toBe(`Hello, world.${MOCK_MARK}`)
-    expect(first.results[1]?.text).toContain('{v1}')
-    await ctx.cache.flush()
-    await fetch(`${ctx.server.url}/reset`, { method: 'POST' })
-    const second = await translateDocument({
-      segments,
-      provider: ctx.config,
-      model: 'mock-chat',
-      runtime,
-      pools: ctx.pools,
-      cache: ctx.cache,
-      signal: new AbortController().signal,
-      onProgress: () => undefined,
-      onEvent: () => undefined,
-      hooks,
-    })
-    expect(second.results[0]?.text).toBe(first.results[0]?.text)
-    const stats = (await (await fetch(`${ctx.server.url}/stats`)).json()) as {
-      requests: Record<string, number>
-    }
-    expect(stats.requests.openai ?? 0).toBe(0)
-  })
-
-  test("each paragraph is its own request carrying pdf2zh's prompt", async () => {
-    const bodies: Array<Record<string, unknown>> = []
-    const pools = new TranslationPools(
-      (_url, init) => {
-        bodies.push(
-          JSON.parse(typeof init?.body === 'string' ? init.body : '{}') as Record<string, unknown>,
-        )
-        return Promise.resolve(
-          new Response(
-            JSON.stringify({
-              choices: [
-                {
-                  message: { content: '<think>plan</think>\n\n  你好 {v0} ' },
-                  finish_reason: 'stop',
-                },
-              ],
-            }),
-            { status: 200, headers: { 'content-type': 'application/json' } },
-          ),
-        )
-      },
-      () => 'test-key',
-    )
-    const dir = await mkdtemp(join(tmpdir(), 'df-prompt-'))
-    const config = provider('https://provider.example.com')
-    const result = await translateDocument({
-      segments: [
-        { id: 'a', text: 'Hello {v0}' },
-        { id: 'b', text: 'World' },
-      ],
-      provider: config,
-      model: 'mock-chat',
-      runtime,
-      pools,
-      cache: new TranslationCache(
-        join(dir, 'c.json'),
-        cacheFingerprint(config, 'mock-chat', runtime),
-      ),
-      signal: new AbortController().signal,
-      onProgress: () => undefined,
-      onEvent: () => undefined,
-      hooks,
-    })
-    expect(bodies).toHaveLength(2)
-    const messages = bodies.map((body) => body.messages)
-    expect(messages).toContainEqual([
-      {
-        role: 'user',
-        content:
-          'You are a professional, authentic machine translation engine. Only Output the translated text, do not include any other text.\n\nTranslate the following markdown source text to zh. Keep the formula notation {v*} unchanged. Output translation directly without any additional text.\n\nSource Text: Hello {v0}\n\nTranslated Text:',
-      },
-    ])
-    // strip, think filter, strip (OpenAITranslator.do_translate)
-    expect(result.results[0]).toEqual({ id: 'a', text: '你好 {v0}', kept: false })
-  })
-
-  test('REFUSE keeps original; mostly_untranslated when enough chars are kept', async () => {
-    const ctx = await setup()
-    servers.push(ctx.server)
-    await expect(
+    const analysis = doc('Hello, world.', 'Second paragraph')
+    const run = () =>
       translateDocument({
-        segments: [{ id: 'r', text: 'REFUSE_ME '.repeat(50) }],
+        analysis,
         provider: ctx.config,
         model: 'mock-chat',
         runtime,
+        options,
         pools: ctx.pools,
         cache: ctx.cache,
         signal: new AbortController().signal,
         onProgress: () => undefined,
         onEvent: () => undefined,
         hooks,
-      }),
-    ).rejects.toBeInstanceOf(UserError)
+      })
+    const first = await run()
+    expect(first.results.map((r) => r.text)).toEqual([
+      `Hello, world.${MOCK_MARK}`,
+      `Second paragraph${MOCK_MARK}`,
+    ])
+    await ctx.cache.flush()
+    await fetch(`${ctx.server.url}/reset`, { method: 'POST' })
+    const second = await run()
+    expect(second.results).toEqual(first.results)
+    const stats = (await (await fetch(`${ctx.server.url}/stats`)).json()) as {
+      requests: Record<string, number>
+    }
+    expect(stats.requests.openai ?? 0).toBe(0)
+  })
+
+  test('a refused batch falls back per paragraph; only the refused one keeps its original', async () => {
+    const ctx = await setup()
+    servers.push(ctx.server)
+    const outcome = await translateDocument({
+      analysis: doc('REFUSE_ME please', 'Normal text here'),
+      provider: ctx.config,
+      model: 'mock-chat',
+      runtime,
+      options,
+      pools: ctx.pools,
+      cache: ctx.cache,
+      signal: new AbortController().signal,
+      onProgress: () => undefined,
+      onEvent: () => undefined,
+      hooks,
+    })
+    expect(outcome.results).toEqual([
+      expect.objectContaining({ id: '0#1', text: `Normal text here${MOCK_MARK}`, kept: false }),
+      { id: '0#0', text: 'REFUSE_ME please', kept: true },
+    ])
+    expect(outcome.keptChars).toBe(16)
   })
 
   test('abort cancels in-flight work', async () => {
@@ -176,10 +144,11 @@ describe('translateDocument against mock provider', () => {
     controller.abort()
     await expect(
       translateDocument({
-        segments: [{ id: 'a', text: 'Hello' }],
+        analysis: doc('Hello there'),
         provider: ctx.config,
         model: 'mock-chat',
         runtime,
+        options,
         pools: ctx.pools,
         cache: ctx.cache,
         signal: controller.signal,
@@ -189,31 +158,107 @@ describe('translateDocument against mock provider', () => {
       }),
     ).rejects.toMatchObject({ code: 'cancelled' })
   })
+})
 
+describe('requests', () => {
+  test('one user message with BabelDOC’s batch prompt; the reply loses its <think> block', async () => {
+    const bodies: Array<{ messages: Array<{ role: string; content: string }> }> = []
+    const ctx = await offline((_url, init) => {
+      bodies.push(
+        JSON.parse(typeof init?.body === 'string' ? init.body : '{}') as (typeof bodies)[number],
+      )
+      return reply(
+        '<think>plan</think>\n[{"id": 0, "output": "你好世界"}, {"id": 1, "output": "第二段"}]',
+      )
+    })
+    const result = await translateDocument({
+      analysis: doc('Hello world', 'Second one'),
+      provider: ctx.config,
+      model: 'mock-chat',
+      runtime,
+      options,
+      pools: ctx.pools,
+      cache: ctx.cache,
+      signal: new AbortController().signal,
+      onProgress: () => undefined,
+      onEvent: () => undefined,
+      hooks,
+    })
+    expect(bodies).toHaveLength(1)
+    expect(bodies[0]!.messages).toHaveLength(1)
+    expect(bodies[0]!.messages[0]!.role).toBe('user')
+    expect(bodies[0]!.messages[0]!.content).toMatch(
+      /^You are a professional zh-CN native translator who needs to fluently translate text into zh-CN\.\n\nFollow all rules strictly\.\n\n## Structure Rules/,
+    )
+    expect(result.results.map((r) => r.text)).toEqual(['你好世界', '第二段'])
+  })
+
+  test('term extraction runs first and its terms reach the batch prompt', async () => {
+    const prompts: string[] = []
+    const ctx = await offline((_url, init) => {
+      const prompt = (
+        JSON.parse(typeof init?.body === 'string' ? init.body : '{}') as {
+          messages: Array<{ content: string }>
+        }
+      ).messages[0]!.content
+      prompts.push(prompt)
+      if (prompt.includes('terminologist')) return reply('[{"src": "world", "tgt": "世界"}]')
+      return reply('[{"id": 0, "output": "你好世界"}]')
+    })
+    const outcome = await translateDocument({
+      analysis: doc('Hello world'),
+      provider: ctx.config,
+      model: 'mock-chat',
+      runtime,
+      options: { ...options, autoExtractGlossary: true },
+      pools: ctx.pools,
+      cache: ctx.cache,
+      signal: new AbortController().signal,
+      onProgress: () => undefined,
+      onEvent: () => undefined,
+      hooks,
+    })
+    expect(prompts).toHaveLength(2)
+    expect(prompts[1]).toContain('| world | 世界 |')
+    expect(outcome.autoGlossary?.entries).toEqual([{ source: 'world', target: '世界' }])
+  })
+
+  test('fake fetch appends the test suffix without network', async () => {
+    const ctx = await offline(fakeFetch, 'http://127.0.0.1:9')
+    const result = await translateDocument({
+      analysis: doc('Hello there'),
+      provider: { ...ctx.config, models: [{ id: 'fake-model' }] },
+      model: 'fake-model',
+      runtime,
+      options,
+      pools: ctx.pools,
+      cache: ctx.cache,
+      signal: new AbortController().signal,
+      onProgress: () => undefined,
+      onEvent: () => undefined,
+      hooks,
+    })
+    expect(result.results[0]?.text).toContain('〔测试译文〕')
+  })
+})
+
+describe('submit retry ladder (injected fetch)', () => {
   test('cancelling during a retry wait ends at once, without another request', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'df-wait-'))
-    const config = provider('https://unavailable.example.com')
-    const cache = new TranslationCache(
-      join(dir, 'c.json'),
-      cacheFingerprint(config, 'mock-chat', runtime),
-    )
     let requests = 0
-    const pools = new TranslationPools(
-      () => {
-        requests += 1
-        return Promise.resolve(new Response('overloaded', { status: 503 }))
-      },
-      () => 'test-key',
-    )
+    const ctx = await offline(() => {
+      requests += 1
+      return Promise.resolve(new Response('overloaded', { status: 503 }))
+    }, 'https://unavailable.example.com')
     const controller = new AbortController()
     let waiting = false
     const pending = translateDocument({
-      segments: [{ id: 'a', text: 'Hello' }],
-      provider: config,
+      analysis: doc('Hello there'),
+      provider: ctx.config,
       model: 'mock-chat',
       runtime,
-      pools,
-      cache,
+      options,
+      pools: ctx.pools,
+      cache: ctx.cache,
       signal: controller.signal,
       onProgress: () => undefined,
       onEvent: () => undefined,
@@ -232,41 +277,6 @@ describe('translateDocument against mock provider', () => {
     expect(requests).toBe(1)
   })
 
-  test('fake fetch appends the test suffix without network', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'df-fake-'))
-    const config = provider('http://127.0.0.1:9')
-    const cache = new TranslationCache(
-      join(dir, 'c.json'),
-      cacheFingerprint(config, 'fake-model', runtime),
-    )
-    const pools = new TranslationPools(fakeFetch, () => 'test-key')
-    const result = await translateDocument({
-      segments: [{ id: 'a', text: 'Hello' }],
-      provider: { ...config, models: [{ id: 'fake-model' }] },
-      model: 'fake-model',
-      runtime,
-      pools,
-      cache,
-      signal: new AbortController().signal,
-      onProgress: () => undefined,
-      onEvent: () => undefined,
-      hooks,
-    })
-    expect(result.results[0]?.text).toContain('〔测试译文〕')
-  })
-})
-
-describe('submit retry ladder (injected fetch)', () => {
-  async function offline(fetchFn: FetchFn) {
-    const dir = await mkdtemp(join(tmpdir(), 'df-ladder-'))
-    const config = provider('https://provider.example.com')
-    const cache = new TranslationCache(
-      join(dir, 'c.json'),
-      cacheFingerprint(config, 'mock-chat', runtime),
-    )
-    return { config, cache, pools: new TranslationPools(fetchFn, () => 'test-key') }
-  }
-
   test('a provider that stays unavailable fails the document retryably after one exhausted request', async () => {
     let requests = 0
     const ctx = await offline(() => {
@@ -275,10 +285,11 @@ describe('submit retry ladder (injected fetch)', () => {
     })
     const events: string[] = []
     const error: unknown = await translateDocument({
-      segments: [{ id: 'a', text: 'The quick brown fox jumps over the lazy dog. '.repeat(15) }],
+      analysis: doc('The quick brown fox jumps over the lazy dog.'),
       provider: ctx.config,
       model: 'mock-chat',
       runtime,
+      options,
       pools: ctx.pools,
       cache: ctx.cache,
       signal: new AbortController().signal,
@@ -310,15 +321,18 @@ describe('submit retry ladder (injected fetch)', () => {
       }
       return Promise.resolve(new Response('overloaded', { status: 503 }))
     })
+    // Seven paragraphs: a batch of six (with the slow one) and a batch of one.
+    const texts = [
+      'slow paragraph here',
+      ...Array.from({ length: 5 }, (_, i) => `Filler ${i} text`),
+    ]
     await expect(
       translateDocument({
-        segments: [
-          { id: 'a', text: 'slow paragraph' },
-          { id: 'b', text: 'down paragraph' },
-        ],
+        analysis: doc(...texts, 'down paragraph'),
         provider: ctx.config,
         model: 'mock-chat',
         runtime,
+        options,
         pools: ctx.pools,
         cache: ctx.cache,
         signal: new AbortController().signal,
@@ -330,7 +344,7 @@ describe('submit retry ladder (injected fetch)', () => {
     expect(slowSignal?.aborted).toBe(true)
   })
 
-  test('a non-retryable error keeps that paragraph without a back-off', async () => {
+  test('a non-retryable error falls back to one request and then keeps the paragraph', async () => {
     let requests = 0
     const ctx = await offline(() => {
       requests += 1
@@ -339,10 +353,11 @@ describe('submit retry ladder (injected fetch)', () => {
     const delays: number[] = []
     const events: string[] = []
     const result = await translateDocument({
-      segments: [{ id: 'a', text: 'Hello' }],
+      analysis: doc('Hello there'),
       provider: ctx.config,
       model: 'mock-chat',
       runtime,
+      options,
       pools: ctx.pools,
       cache: ctx.cache,
       signal: new AbortController().signal,
@@ -356,9 +371,29 @@ describe('submit retry ladder (injected fetch)', () => {
         jitterMs: () => 0,
       },
     })
-    expect(result.results[0]).toEqual({ id: 'a', text: 'Hello', kept: true })
-    expect(events).toContain('第 1 段翻译失败，已保留原文')
+    expect(result.results).toEqual([{ id: '0#0', text: 'Hello there', kept: true }])
+    expect(events).toContain('第 1 页有一段翻译失败，已保留原文')
     expect(delays).toEqual([])
-    expect(requests).toBe(1)
+    // The batch and its single-paragraph fallback.
+    expect(requests).toBe(2)
+  })
+
+  test('mostly untranslated text ends the document', async () => {
+    const ctx = await offline(() => Promise.resolve(new Response('too large', { status: 413 })))
+    await expect(
+      translateDocument({
+        analysis: doc('A long paragraph that will not translate. '.repeat(12)),
+        provider: ctx.config,
+        model: 'mock-chat',
+        runtime,
+        options,
+        pools: ctx.pools,
+        cache: ctx.cache,
+        signal: new AbortController().signal,
+        onProgress: () => undefined,
+        onEvent: () => undefined,
+        hooks,
+      }),
+    ).rejects.toBeInstanceOf(UserError)
   })
 })

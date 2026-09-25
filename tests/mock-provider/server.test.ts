@@ -93,15 +93,24 @@ describe('mock provider', () => {
     expect(parseConfigPatch('{')).toBeNull()
   })
 
-  test('translates segments and single text', () => {
+  test('answers BabelDOC batch, single-paragraph and term prompts', () => {
     const state = new MockProviderState()
     expect(replyFor('Hello', state).text).toBe(`Hello${MOCK_MARK}`)
-    const batched = replyFor(
-      '<segment id="a">\none\n</segment>\n\n<segment id="b">\ntwo\n</segment>',
+    const batch = replyFor(
+      `role\n\n## Here is the input:\n\n${JSON.stringify([
+        { id: 0, input: 'one {v1}', layout_label: 'text' },
+        { id: 1, input: 'two', layout_label: 'text' },
+      ])}`,
       state,
     ).text
-    expect(batched).toContain(`<segment id="a">\none${MOCK_MARK}\n</segment>`)
-    expect(batched).toContain(`<segment id="b">\ntwo${MOCK_MARK}\n</segment>`)
+    expect(JSON.parse(batch)).toEqual([
+      { id: 0, output: `one {v1}${MOCK_MARK}` },
+      { id: 1, output: `two${MOCK_MARK}` },
+    ])
+    expect(replyFor('rules\n\nNow translate the following text:\n\nthree', state).text).toBe(
+      `three${MOCK_MARK}`,
+    )
+    expect(replyFor('Input Text:\n```\nterms\n```', state).text).toBe('[]')
   })
 
   test('injects the 08.3 faults', async () => {
@@ -114,11 +123,13 @@ describe('mock provider', () => {
 
     const dropped = await chat(
       server,
-      '<segment id="1">\nkeep\n</segment>\n\n<segment id="2">\nDROP_ME gone\n</segment>',
+      `## Here is the input:\n\n${JSON.stringify([
+        { id: 0, input: 'keep' },
+        { id: 1, input: 'DROP_ME gone' },
+      ])}`,
     )
     const droppedText = ((await dropped.json()) as typeof okJson).choices[0]?.message.content ?? ''
-    expect(droppedText).toContain('id="1"')
-    expect(droppedText).not.toContain('id="2"')
+    expect((JSON.parse(droppedText) as Array<{ id: number }>).map((item) => item.id)).toEqual([0])
 
     const damaged = await chat(server, 'DAMAGE_MARKERS DOCFLOWKEEP000001TOKEN')
     expect(((await damaged.json()) as typeof okJson).choices[0]?.message.content).toContain(

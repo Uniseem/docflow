@@ -12,7 +12,15 @@ import { createLogger, type Logger } from '../log/logger'
 
 export type WorkerJob =
   | { kind: 'inspect'; path: string }
-  | { kind: 'analyze'; path: string; layouts: PageLayout[] }
+  | {
+      kind: 'analyze'
+      path: string
+      layouts: PageLayout[]
+      /** 0-based pages to analyse (BabelDOC pages option); null for all. */
+      pages: number[] | null
+      /** auto_enable_ocr_workaround */
+      autoOcr: boolean
+    }
   | { kind: 'detect'; path: string; index: number; modelPath: string }
   | {
       kind: 'verify'
@@ -20,6 +28,7 @@ export type WorkerJob =
       dualPath: string | null
       pages: number
       writtenPages: number[]
+      dualMode?: 'side-by-side' | 'alternating'
     }
   | { kind: 'compose'; request: ComposeRequest }
 

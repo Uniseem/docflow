@@ -3,6 +3,7 @@ import { PDF } from '../../shared/pdf-constants'
 import { PDFName, type PDFDict } from '@cantoo/pdf-lib'
 import {
   AnalysisResult,
+  type FontFlags,
   type Glyph,
   type LayoutUnit,
   type LtChar,
@@ -14,6 +15,7 @@ import { loadPdfLib } from './load-pdf-lib'
 import { openPdfDocument } from './pdfjs'
 import { alignTextOps, toLtChar } from './pdf2zh/chars'
 import { buildLayoutMap } from './pdf2zh/doclayout'
+import { fontFlagsReader } from './pdf2zh/font-flags'
 import { interpretPage } from './pdf2zh/interp'
 import { lookupDict, pageSource } from './pdf2zh/pages'
 import { parseLayout, type LtItem, type ParseOptions } from './pdf2zh/parse'
@@ -24,11 +26,20 @@ import { unicodeSource, type UnicodeSource } from './pdf2zh/unicode'
  * pdf2zh translate_patch without the translation: for every page, the layout matrix from the
  * DocLayout-YOLO boxes, then receive_layout part A for the page and each form it draws.
  */
+export type AnalyzeOptions = ParseOptions & {
+  /** 0-based pages to analyse; the others are left as they are (BabelDOC pages option). */
+  pages?: readonly number[] | null
+  /** auto_enable_ocr_workaround (DetectScannedFile). */
+  autoOcr?: boolean
+}
+
 export async function analyzePdf(
   path: string,
   layouts: readonly PageLayout[],
-  options: ParseOptions = {},
+  options: AnalyzeOptions = {},
 ) {
+  const wanted = options.pages ? new Set(options.pages) : null
+  const parse: ParseOptions = options.strict === undefined ? {} : { strict: options.strict }
   const inspection = await inspectPdf(path)
   const bytes = await readFile(path)
   const doc = await openPdfDocument(bytes)
@@ -37,10 +48,14 @@ export async function analyzePdf(
   const units: LayoutUnit[] = []
   let chars = 0
   const sources = new WeakMap<PDFDict, UnicodeSource>()
+  const flagsOf = await fontFlagsReader(lib)
+  const fontDict = (resources: unknown, font: string): PDFDict | undefined => {
+    const fonts = lookupDict(lib, (resources as PDFDict | undefined)?.get(PDFName.of('Font')))
+    return fonts ? lookupDict(lib, fonts.get(PDFName.of(font))) : undefined
+  }
   // pdfminer's text for a glyph: to_unichr through the font the operator selected.
   const textOf = (glyph: Glyph, resources: unknown, font: string): string => {
-    const fonts = lookupDict(lib, (resources as PDFDict | undefined)?.get(PDFName.of('Font')))
-    const dict = fonts ? lookupDict(lib, fonts.get(PDFName.of(font))) : undefined
+    const dict = fontDict(resources, font)
     const fallback = glyph.unicode || `(cid:${glyph.code})`
     if (!dict) return fallback
     let source = sources.get(dict)
@@ -53,6 +68,7 @@ export async function analyzePdf(
   }
 
   for (let i = 0; i < doc.numPages; i += 1) {
+    if (wanted && !wanted.has(i)) continue
     const page = await doc.getPage(i + 1)
     const { glyphs } = await extractPageGraphics(page, i)
     page.cleanup()
@@ -102,12 +118,19 @@ export async function analyzePdf(
       }
       for (const char of unaligned.get(unit.formPath) ?? []) items.push({ kind: 'char', ...char })
       chars += items.filter((item) => item.kind === 'char').length
-      const parsed = parseLayout(items, layout, unit.width, options)
+      const parsed = parseLayout(items, layout, unit.width, parse)
+      const fonts: Record<string, FontFlags> = {}
+      for (const style of parsed.styles) {
+        if (style.font && !(style.font in fonts)) {
+          fonts[style.font] = flagsOf(fontDict(unit.resources, style.font))
+        }
+      }
       units.push({
         id: unit.formPath ? `${i}/${unit.formPath}` : String(i),
         page: i,
         formPath: unit.formPath,
         ...parsed,
+        fonts,
       })
     }
   }
@@ -115,7 +138,7 @@ export async function analyzePdf(
 
   const texts = units.flatMap((unit) => unit.texts)
   return AnalysisResult.parse({
-    version: 4,
+    version: 5,
     pages: inspection.pages,
     pageSizes: inspection.pageSizes,
     units,

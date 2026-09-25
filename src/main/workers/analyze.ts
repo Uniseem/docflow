@@ -18,7 +18,7 @@ async function handle(msg: WorkerRequest): Promise<void> {
         result = await inspectPdf(msg.path)
         break
       case 'analyze':
-        result = await analyzePdf(msg.path, msg.layouts)
+        result = await analyzePdf(msg.path, msg.layouts, { pages: msg.pages, autoOcr: msg.autoOcr })
         break
       case 'detect':
         result = await detectPage(msg.path, msg.index, msg.modelPath)

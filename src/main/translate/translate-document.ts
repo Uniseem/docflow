@@ -1,9 +1,15 @@
 import { REJECTED_STREAK_LIMIT, RETRY_NOTICES, SUBMIT_ATTEMPTS } from '../../shared/constants'
 import { ERROR_CODES, UserError } from '../../shared/errors'
+import type { AnalysisResult, TranslatedParagraph } from '../../shared/pdf-types'
 import type { ProviderConfig, TranslationRuntime } from '../../shared/types'
+import { FontMapper, type PrimaryFontFamily } from '../pdf/babeldoc/fontmap'
+import type { Glossary } from './babeldoc/glossary'
+import { buildParagraphs } from './babeldoc/paragraphs'
+import { extractTerms, glossariesForTranslation } from './babeldoc/terms'
+import { cleanLlmReply, pyLen } from './babeldoc/text'
+import { translateParagraphs } from './babeldoc/translator'
 import type { TranslationCache } from './cache'
 import { ProviderError, RetriesExhaustedError } from './errors'
-import { cleanReply, pdf2zhPrompt } from './pdf2zh-prompt'
 import type { TranslationPools } from './pool'
 
 export type EventInput = {
@@ -16,33 +22,10 @@ export type EventInput = {
   total?: number
 }
 
-export type Segment = { id: string; text: string }
-
-export type TranslatedParagraph = { id: string; text: string; kept: boolean }
-
 export type TranslateHooks = {
   /** Retry wait; resolves early (or never) when `signal` aborts — the caller races it. */
   delay?: (ms: number, signal?: AbortSignal) => Promise<void>
   jitterMs?: () => number
-}
-
-export function createLimit(max: number): <T>(fn: () => Promise<T>) => Promise<T> {
-  let active = 0
-  const waiting: Array<() => void> = []
-  return async <T>(fn: () => Promise<T>): Promise<T> => {
-    if (active >= max) {
-      await new Promise<void>((resolve) => {
-        waiting.push(resolve)
-      })
-    }
-    active += 1
-    try {
-      return await fn()
-    } finally {
-      active -= 1
-      waiting.shift()?.()
-    }
-  }
 }
 
 function throwIfAborted(signal: AbortSignal): void {
@@ -54,38 +37,50 @@ function throwIfAborted(signal: AbortSignal): void {
  * cancellation and the rejected streak (`UserError`), a bad key or model, and a provider that
  * stayed unavailable through every `submit()` attempt.
  */
-function endsDocument(error: unknown): boolean {
+export function endsDocument(error: unknown): boolean {
   if (error instanceof UserError || error instanceof RetriesExhaustedError) return true
   return error instanceof ProviderError && (error.kind === 'fatal' || error.kind === 'credential')
 }
 
-function charCount(text: string): number {
-  return [...text].length
+export type TranslateOptions = {
+  minTextLength: number
+  disableRichText: boolean
+  fontFamily: PrimaryFontFamily
+  /** User glossaries of the document (loaded from their CSV files). */
+  userGlossaries: readonly Glossary[]
+  autoExtractGlossary: boolean
+  /** The glossary extracted by an earlier run of this document; undefined to extract it. */
+  savedAutoGlossary?: Glossary | null
+}
+
+export type TranslateOutcome = {
+  results: TranslatedParagraph[]
+  keptChars: number
+  totalChars: number
+  usage: { input: number; output: number }
+  autoGlossary: Glossary | null
 }
 
 /**
- * pdf2zh converter part "B. 段落翻译": every paragraph string goes to the translator on its
- * own, with pdf2zh's prompt as the only (user) message; the reply is used as it is.
+ * BabelDOC's translation stages over the analysed document (ADR-0018): automatic term
+ * extraction, then ILTranslatorLLMOnly (batched JSON requests with per-paragraph fallback).
+ * Requests go through DocFlow's pools, retries and cache (keyed by the whole prompt).
  */
 export async function translateDocument(input: {
-  segments: Segment[]
+  analysis: AnalysisResult
   provider: ProviderConfig
   model: string
   runtime: TranslationRuntime
+  options: TranslateOptions
   pools: TranslationPools
   cache: TranslationCache
   signal: AbortSignal
   onProgress(done: number, total: number): void
   onEvent(event: EventInput): void
+  /** Called once the automatic glossary is known, before translation starts (checkpoint). */
+  onAutoGlossary?(glossary: Glossary | null): Promise<void>
   hooks?: TranslateHooks
-}): Promise<{
-  results: TranslatedParagraph[]
-  keptChars: number
-  totalChars: number
-  usage: { input: number; output: number }
-}> {
-  const total = input.segments.length
-  const totalChars = input.segments.reduce((sum, segment) => sum + charCount(segment.text), 0)
+}): Promise<TranslateOutcome> {
   const usage = { input: 0, output: 0 }
   // The first error that ends the document also stops the requests still running.
   const stop = new AbortController()
@@ -98,60 +93,160 @@ export async function translateDocument(input: {
     delay: input.hooks?.delay ?? defaultDelay,
     jitterMs: input.hooks?.jitterMs ?? defaultJitter,
   }
-  const limit = createLimit(input.runtime.perDocumentConcurrency)
-  const results = new Map<string, TranslatedParagraph>()
-  let done = 0
   let cacheHits = 0
-  let failure: { error: unknown } | undefined
+  const llm = async (prompt: string): Promise<string> => {
+    throwIfAborted(ctx.signal)
+    const hit = ctx.cache.get(prompt)
+    if (hit !== undefined) {
+      cacheHits += 1
+      return hit
+    }
+    const maxTokens = ctx.runtime.llm.maxOutputTokens
+    const reply = await submit(
+      { model: ctx.model, system: '', user: prompt, ...(maxTokens > 0 ? { maxTokens } : {}) },
+      ctx,
+    )
+    // A content-filter stop leaves no message content.
+    if (reply.finish === 'refused') throw new ProviderError('refused', '服务商拒绝翻译这一段')
+    const text = cleanLlmReply(reply.text)
+    ctx.cache.set(prompt, text)
+    return text
+  }
+  const onFatal = () => stop.abort()
+  const paragraphs = buildParagraphs(input.analysis)
+  const concurrency = input.runtime.perDocumentConcurrency
 
-  await Promise.all(
-    input.segments.map((segment, index) =>
-      limit(async () => {
-        throwIfAborted(ctx.signal)
-        const hit = ctx.cache.get(segment.text)
-        let result: TranslatedParagraph
-        if (hit !== undefined) {
-          cacheHits += 1
-          result = { id: segment.id, text: hit, kept: false }
-        } else {
-          result = await translateSegment(segment, index + 1, ctx)
-        }
-        results.set(segment.id, result)
-        done += 1
-        input.onProgress(done, total)
+  // AutomaticTermExtractor
+  let autoGlossary: Glossary | null = null
+  if (input.options.autoExtractGlossary) {
+    if (input.options.savedAutoGlossary !== undefined) {
+      autoGlossary = input.options.savedAutoGlossary
+    } else {
+      input.onEvent({ stage: 'translate', level: 'info', message: '抽取术语…' })
+      let failures = 0
+      let done = 0
+      const total = paragraphs.length
+      const extracted = await extractTerms(paragraphs, input.options.userGlossaries, concurrency, {
+        llm,
+        isFatal: endsDocument,
+        onFatal,
+        onBatchDone: (n) => {
+          done += n
+          input.onProgress(Math.min(done, total), total * 2)
+        },
+        onError: () => {
+          failures += 1
+        },
+      }).catch((error: unknown) => {
+        stop.abort()
+        throw error
+      })
+      autoGlossary = extracted.glossary
+      input.onEvent({
+        stage: 'translate',
+        level: 'info',
+        message: autoGlossary
+          ? `抽取术语：${autoGlossary.entries.length} 条`
+          : '抽取术语：没有得到术语',
+        ...(failures > 0 ? { detail: `${failures} 批术语抽取失败，不影响翻译` } : {}),
+      })
+    }
+    await input.onAutoGlossary?.(autoGlossary)
+  }
+  const glossaries = glossariesForTranslation(
+    input.options.userGlossaries,
+    autoGlossary,
+    input.options.autoExtractGlossary,
+  )
+
+  // ILTranslatorLLMOnly
+  let planned = 0
+  let done = 0
+  let fallbacks = 0
+  const kept = new Set<string>()
+  // With term extraction, the first half of the stage's progress was the extraction.
+  const offset = input.options.autoExtractGlossary ? 1 : 0
+  const results = await translateParagraphs(
+    paragraphs,
+    {
+      minTextLength: input.options.minTextLength,
+      disableRichText: input.options.disableRichText,
+      customPrompt: input.runtime.systemPrompt,
+      mapper: new FontMapper(input.options.fontFamily, () => true),
+      glossaries,
+      concurrency,
+    },
+    {
+      llm,
+      isFatal: endsDocument,
+      onFatal,
+      onPlanned: (count, batches) => {
+        planned = count
         input.onEvent({
           stage: 'translate',
           level: 'info',
-          message: `已翻译 ${done} / ${total} 段`,
-          current: done,
-          total,
+          message: `开始翻译：${count} 段，合并为 ${batches} 个请求`,
         })
-      }).catch((error: unknown) => {
-        failure ??= { error }
-        stop.abort()
-        throw error
-      }),
-    ),
-  ).catch(() => {
-    // Requests stopped by `stop` reject with a cancellation: report the error that ended the
-    // document.
-    throw failure?.error
+      },
+      onParagraphDone: () => {
+        done += 1
+        input.onProgress(offset * planned + done, (offset + 1) * planned)
+        input.onEvent({
+          stage: 'translate',
+          level: 'info',
+          message: `已翻译 ${done} / ${planned} 段`,
+          current: done,
+          total: planned,
+        })
+      },
+      onFallback: () => {
+        fallbacks += 1
+      },
+      onKept: (p, error) => {
+        kept.add(p.id)
+        input.onEvent({
+          stage: 'translate',
+          level: 'warning',
+          message: `第 ${p.page + 1} 页有一段翻译失败，已保留原文`,
+          detail: error instanceof Error ? error.message : String(error),
+        })
+      },
+    },
+  ).catch((error: unknown) => {
+    stop.abort()
+    throw error
   })
   if (cacheHits > 0) {
-    input.onEvent({ stage: 'translate', level: 'info', message: `缓存命中 ${cacheHits} 段` })
+    input.onEvent({ stage: 'translate', level: 'info', message: `缓存命中 ${cacheHits} 个请求` })
+  }
+  if (fallbacks > 0) {
+    input.onEvent({
+      stage: 'translate',
+      level: 'info',
+      message: `${fallbacks} 段的批量译文未通过检查，已逐段重译`,
+    })
   }
 
-  const ordered = input.segments.map(
-    (segment) => results.get(segment.id) ?? { id: segment.id, text: segment.text, kept: true },
-  )
-  const keptChars = ordered.reduce(
-    (sum, result, index) => sum + (result.kept ? charCount(input.segments[index]?.text ?? '') : 0),
-    0,
-  )
+  const byId = new Map(paragraphs.map((p) => [p.id, p]))
+  const rows: TranslatedParagraph[] = []
+  let totalChars = 0
+  let keptChars = 0
+  for (const result of results.values()) {
+    rows.push({ id: result.id, text: result.text, kept: false, comps: result.comps })
+    totalChars += pyLen(byId.get(result.id)?.unicode ?? '')
+  }
+  for (const id of kept) {
+    const p = byId.get(id)
+    if (!p || results.has(id)) continue
+    rows.push({ id, text: p.unicode, kept: true })
+    const chars = pyLen(p.unicode)
+    totalChars += chars
+    keptChars += chars
+  }
   if (keptChars > 400 && keptChars * 5 > totalChars) {
     throw new UserError(ERROR_CODES.mostly_untranslated)
   }
-  return { results: ordered, keptChars, totalChars, usage }
+  return { results: rows, keptChars, totalChars, usage, autoGlossary }
 }
 
 type TranslateContext = {
@@ -167,41 +262,6 @@ type TranslateContext = {
   notices: number
   delay: (ms: number, signal?: AbortSignal) => Promise<void>
   jitterMs: () => number
-}
-
-async function translateSegment(
-  segment: Segment,
-  n: number,
-  ctx: TranslateContext,
-): Promise<TranslatedParagraph> {
-  try {
-    const reply = await submit(
-      {
-        model: ctx.model,
-        system: '',
-        user: pdf2zhPrompt(segment.text, ctx.runtime.systemPrompt),
-        ...(ctx.runtime.llm.maxOutputTokens > 0
-          ? { maxTokens: ctx.runtime.llm.maxOutputTokens }
-          : {}),
-      },
-      ctx,
-    )
-    // A content-filter stop leaves no message content (pdf2zh's `.strip()` would raise).
-    if (reply.finish === 'refused') throw new ProviderError('refused', '服务商拒绝翻译这一段')
-    const text = cleanReply(reply.text)
-    ctx.cache.set(segment.text, text)
-    return { id: segment.id, text, kept: false }
-  } catch (error) {
-    if (endsDocument(error)) throw error
-    const message = error instanceof Error ? error.message : String(error)
-    ctx.onEvent({
-      stage: 'translate',
-      level: 'warning',
-      message: `第 ${n} 段翻译失败，已保留原文`,
-      detail: message,
-    })
-    return { id: segment.id, text: segment.text, kept: true }
-  }
 }
 
 async function submit(

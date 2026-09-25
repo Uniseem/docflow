@@ -12,20 +12,38 @@
 // - a formula unit is pdf2zh's {vN}: its box is the union of its LTChar boxes, and its glyphs
 //   keep pdf2zh's vertical offset (`fix`, applied after text like pdf2zh does) instead of
 //   BabelDOC's x_offset/y_offset;
-// - output fonts stay pdf2zh's (tiro for WinAnsi characters, noto for the rest), and runs of
-//   same-style glyphs on one line share one TJ instead of one Tj per glyph;
-// - a paragraph with nothing but formulas and whitespace passes through at its original place.
-import type { LtLine, Pdf2zhFormula, Pdf2zhParagraph } from '../../../shared/pdf-types'
-import { NOTO, TIRO, codeHex, type TypesetFonts } from './typeset'
+// - runs of same-style glyphs on one line share one TJ instead of one Tj per glyph.
+// Since ADR-0018 the units are BabelDOC's three kinds: translated characters in the font
+// FontMapper picks for their style, original glyphs (text that was not translated), and
+// formulas; a paragraph of original glyphs and formulas only is drawn where it was.
+import type {
+  CharStyle,
+  FontFlags,
+  LtLine,
+  OutputComp,
+  ParagraphItem,
+  Pdf2zhFormula,
+  Pdf2zhParagraph,
+  TextChar,
+} from '../../../shared/pdf-types'
+import type { FontMapper } from '../babeldoc/fontmap'
+import { FONT_FAMILY, fontResourceName } from '../babeldoc/fonts'
+import { codeHex } from './typeset'
 
 export type Box = { x: number; y: number; x2: number; y2: number }
 
 export type ReflowParagraph = {
   para: Pdf2zhParagraph
-  /** The unit's formulas, indexed by the {vN} markers. */
+  /** The unit's formulas, indexed by ParagraphItem / OutputComp formula indexes. */
   formulas: readonly Pdf2zhFormula[]
-  /** Translation, or the original text when nothing replaces it. */
-  text: string
+  /** The original composition (analysis) of the paragraph. */
+  items: readonly ParagraphItem[]
+  styles: readonly CharStyle[]
+  fonts: Readonly<Record<string, FontFlags>>
+  /** The translation's compositions; undefined draws the original. */
+  comps?: readonly OutputComp[] | undefined
+  /** OCR workaround: every character is drawn black (BabelDOC il_creater). */
+  ocr?: boolean
   /** BabelDOC xobj_id: paragraphs of different streams never cut each other's boxes. */
   stream: string
   box: Box
@@ -46,11 +64,34 @@ export type ReflowPage = {
   paragraphs: ReflowParagraph[]
 }
 
+/** Font access for typesetting: bundled font files, by BabelDOC font id (file name). */
+export type ReflowFonts = {
+  mapper: FontMapper
+  /** `font.char_lengths(ch, size)[0]` */
+  width(file: string, ch: string, size: number): number
+  /** Hex glyph code of `ch` in the embedded font. */
+  hex(file: string, ch: string): string
+}
+
+/** A translated character (TypesettingUnit(unicode=…)). */
 type TextUnit = {
   kind: 'text'
   ch: string
-  font: typeof TIRO | typeof NOTO
+  /** Bundled font file FontMapper chose. */
+  font: string
   fontSize: number
+  gstate: string
+  width: number
+  height: number
+}
+
+/** An original glyph (TypesettingUnit(char=…)): passthrough, or moved by the typesetter. */
+type CharUnit = {
+  kind: 'char'
+  ch: string
+  char: TextChar
+  style: CharStyle
+  gstate: string
   width: number
   height: number
 }
@@ -65,18 +106,17 @@ type FormulaUnit = {
   maxY: number
   width: number
   height: number
+  /** OCR workaround: drawn black. */
+  ocr: boolean
 }
 
-type Unit = TextUnit | FormulaUnit
+type Unit = TextUnit | CharUnit | FormulaUnit
 
 type Placed = { unit: Unit; x: number; y: number; scale: number; box: Box }
 
 // LANG_LINEHEIGHT line_skip for a CJK target (zh).
 const LINE_SKIP = 1.5
 const MIN_SCALE = 0.1
-
-// \{\s*v([\d\s]+)\} with re.IGNORECASE (pdf2zh's marker syntax).
-const MARKER_RE = /\{\s*v([\p{Nd}\s]+)\}/iuy
 
 // typesetting.LINE_BREAK_REGEX: characters that must not be split from their neighbours.
 // The class lists combining marks (U+0300–036F) on purpose.
@@ -129,8 +169,9 @@ const LINE_END_PROHIBITED = new Set([
   '“', '‘', '「', '『', '(', '[', '{', '（', '〔', '〈', '《', '〖', '〘', '〚',
 ]) // prettier-ignore
 
+/** try_get_unicode */
 function textOf(unit: Unit): string | undefined {
-  return unit.kind === 'text' ? unit.ch : undefined
+  return unit.kind === 'formula' ? undefined : unit.ch
 }
 
 function canBreakLine(unit: Unit): boolean {
@@ -172,80 +213,98 @@ function f(value: number): string {
   return value.toFixed(6)
 }
 
-function charWidth(fonts: TypesetFonts, font: TextUnit['font'], ch: string, size: number): number {
-  return font === NOTO ? fonts.notoWidth(ch, size) : fonts.tiroWidth(ch) * size
-}
+// BabelDOC style_helper.BLACK: the OCR workaround draws every character in it.
+const BLACK = '0 g 0 G'
 
-/** Text outside the {vN} markers pdf2zh would typeset. */
-function splitMarkers(
-  text: string,
-  formulas: readonly Pdf2zhFormula[],
-): Array<string | Pdf2zhFormula> {
-  const out: Array<string | Pdf2zhFormula> = []
-  let pos = 0
-  while (pos < text.length) {
-    MARKER_RE.lastIndex = pos
-    const match = MARKER_RE.exec(text)
-    if (match) {
-      pos += match[0].length
-      const digits = (match[1] ?? '').replace(/\s/g, '').normalize('NFKC')
-      const formula = /^\d+$/.test(digits) ? formulas[Number.parseInt(digits, 10)] : undefined
-      // 翻译器可能会自动补个越界的公式标记
-      if (formula && formula.chars.length > 0) out.push(formula)
-      continue
-    }
-    const ch = String.fromCodePoint(text.codePointAt(pos) ?? 0)
-    out.push(ch)
-    pos += ch.length
-  }
-  return out
-}
-
-/** create_typesetting_units */
-export function createUnits(p: ReflowParagraph, fonts: TypesetFonts): Unit[] {
-  const parts = splitMarkers(p.text, p.formulas)
-  p.passthrough = parts.every((part) => typeof part !== 'string' || part.trim() === '')
-  const size = p.para.size
+/** create_typesetting_units: from the translation's compositions, or the original ones. */
+export function createUnits(p: ReflowParagraph, fonts: ReflowFonts): Unit[] {
   const units: Unit[] = []
   let seenText = false
-  for (const part of parts) {
-    if (typeof part === 'string') {
-      if (part === '\n' || p.passthrough) continue
-      const font = fonts.tiroHas(part) ? TIRO : NOTO
-      units.push({
-        kind: 'text',
-        ch: part,
-        font,
-        fontSize: size,
-        width: charWidth(fonts, font, part, size),
-        height: size,
-      })
-      seenText = true
-      continue
-    }
-    const first = part.chars[0]!
-    const minX = Math.min(...part.chars.map((c) => c.x0))
-    const maxX = Math.max(...part.chars.map((c) => c.x1))
-    const minY = Math.min(...part.chars.map((c) => c.y0))
-    const maxY = Math.max(...part.chars.map((c) => c.y1))
+  const pushChar = (char: TextChar) => {
+    const style = p.styles[char.style]!
     units.push({
-      kind: 'formula',
-      formula: part,
-      fix: seenText ? part.fix : 0,
-      minX,
-      first: { x0: first.x0, y0: first.y0 },
-      maxY,
-      width: maxX - minX,
-      height: maxY - minY,
+      kind: 'char',
+      ch: char.text,
+      char,
+      style,
+      gstate: p.ocr ? BLACK : style.gstate,
+      width: char.x1 - char.x0,
+      height: char.y1 - char.y0,
     })
+    seenText = true
   }
+  const pushFormula = (index: number) => {
+    const formula = p.formulas[index]
+    // 翻译器可能会自动补个越界的公式标记
+    if (!formula || formula.chars.length === 0) return
+    units.push(formulaUnit(formula, seenText, p.ocr ?? false))
+  }
+  if (!p.comps) {
+    for (const item of p.items) {
+      if (item.kind === 'formula') pushFormula(item.index)
+      else pushChar(item)
+    }
+  } else {
+    for (const comp of p.comps) {
+      if (comp.kind === 'formula') {
+        pushFormula(comp.index)
+      } else if (comp.kind === 'original') {
+        for (const item of p.items.slice(comp.from, comp.to)) {
+          if (item.kind === 'char') pushChar(item)
+        }
+      } else {
+        const flags = p.fonts[comp.style.font]
+        const size = comp.style.size
+        for (const ch of comp.text) {
+          if (ch === '\n') continue
+          // Units whose character no font has are dropped.
+          const font = fonts.mapper.map(flags, ch)
+          if (!font) continue
+          units.push({
+            kind: 'text',
+            ch,
+            font,
+            fontSize: size,
+            gstate: p.ocr ? BLACK : (comp.style.gstate ?? ''),
+            width: fonts.width(font, ch, size),
+            height: size,
+          })
+          seenText = true
+        }
+      }
+    }
+  }
+  p.passthrough = units.every((unit) => unit.kind !== 'text')
   return units
 }
 
-function relocate(unit: Unit, x: number, y: number, scale: number, fonts: TypesetFonts): Placed {
+function formulaUnit(part: Pdf2zhFormula, seenText: boolean, ocr: boolean): FormulaUnit {
+  const first = part.chars[0]!
+  const minX = Math.min(...part.chars.map((c) => c.x0))
+  const maxX = Math.max(...part.chars.map((c) => c.x1))
+  const minY = Math.min(...part.chars.map((c) => c.y0))
+  const maxY = Math.max(...part.chars.map((c) => c.y1))
+  return {
+    kind: 'formula',
+    formula: part,
+    fix: seenText ? part.fix : 0,
+    minX,
+    first: { x0: first.x0, y0: first.y0 },
+    maxY,
+    width: maxX - minX,
+    height: maxY - minY,
+    ocr,
+  }
+}
+
+function relocate(unit: Unit, x: number, y: number, scale: number, fonts: ReflowFonts): Placed {
   if (unit.kind === 'text') {
     const size = unit.fontSize * scale
-    const box = { x, y, x2: x + charWidth(fonts, unit.font, unit.ch, size), y2: y + size }
+    const box = { x, y, x2: x + fonts.width(unit.font, unit.ch, size), y2: y + size }
+    return { unit, x, y, scale, box }
+  }
+  if (unit.kind === 'char') {
+    const box = { x, y, x2: x + unit.width * scale, y2: y + unit.height * scale }
     return { unit, x, y, scale, box }
   }
   const base = y + (unit.fix - unit.first.y0) * scale
@@ -278,12 +337,14 @@ function layoutUnits(
   scale: number,
   firstLineIndent: boolean,
   useEnglishLineBreak: boolean,
-  fonts: TypesetFonts,
+  fonts: ReflowFonts,
 ): { placed: Placed[]; fit: boolean } {
-  const fontSizes = units.flatMap((u) => (u.kind === 'text' ? [u.fontSize] : []))
+  const fontSizes = units.flatMap((u) =>
+    u.kind === 'text' ? [u.fontSize] : u.kind === 'char' ? [u.style.size] : [],
+  )
   fontSizes.sort((a, b) => a - b)
   const fontSize = pyMode(fontSizes)
-  const spaceWidth = fonts.notoWidth('你', fontSize * scale) * 0.5
+  const spaceWidth = fonts.width(FONT_FAMILY.base, '你', fontSize * scale) * 0.5
 
   const heights = units.map((u) => u.height)
   let avgHeight = 0
@@ -396,7 +457,7 @@ function findOptimalScaleAndLayout(
   initialScale: number,
   useEnglishLineBreak: boolean,
   applyLayout: boolean,
-  fonts: TypesetFonts,
+  fonts: ReflowFonts,
 ): { scale: number; placed: Placed[] | undefined } {
   let box = p.box
   let scale = initialScale
@@ -510,7 +571,7 @@ function unitCount(units: readonly Unit[]): number {
  * Typesetting.preprocess_document: every paragraph's optimal scale, then the document-wide
  * cap `min(statistics.multimode(scales))`, where each paragraph counts once per unit.
  */
-export function preprocessDocument(pages: readonly ReflowPage[], fonts: TypesetFonts): void {
+export function preprocessDocument(pages: readonly ReflowPage[], fonts: ReflowFonts): void {
   for (const page of pages) fixOverlappingParagraphs(page.paragraphs)
   const counts = new Map<number, number>()
   const all: ReflowParagraph[] = []
@@ -540,7 +601,7 @@ export function preprocessDocument(pages: readonly ReflowPage[], fonts: TypesetF
 }
 
 /** render_page: raise each box above the paragraph just below it, then lay every one out. */
-export function renderPage(page: ReflowPage, fonts: TypesetFonts): void {
+export function renderPage(page: ReflowPage, fonts: ReflowFonts): void {
   const indexed = page.paragraphs.map((p) => ({ p, box: { ...p.box } }))
   for (const upper of page.paragraphs) {
     const height = upper.box.y2 - upper.box.y
@@ -566,11 +627,15 @@ export function renderPage(page: ReflowPage, fonts: TypesetFonts): void {
   for (const p of page.paragraphs) renderParagraph(p, page, fonts)
 }
 
-function renderParagraph(p: ReflowParagraph, page: ReflowPage, fonts: TypesetFonts): void {
+function renderParagraph(p: ReflowParagraph, page: ReflowPage, fonts: ReflowFonts): void {
   const units = p.units ?? createUnits(p, fonts)
   const out = new OpsWriter(fonts)
   if (p.passthrough) {
-    for (const unit of units) if (unit.kind === 'formula') drawFormulaInPlace(out, unit.formula)
+    // create_passthrough_composition: every glyph where it was.
+    for (const unit of units) {
+      if (unit.kind === 'formula') drawFormulaInPlace(out, unit.formula, unit.ocr)
+      else if (unit.kind === 'char') drawChar(out, unit, unit.char.x0, unit.char.y0, 1)
+    }
     p.ops = out.finish()
     p.rendered = true
     return
@@ -589,12 +654,11 @@ function renderParagraph(p: ReflowParagraph, page: ReflowPage, fonts: TypesetFon
     p.rendered = false
     return
   }
-  const textState = p.para.gstate ?? ''
   for (const item of placed) {
     const unit = item.unit
     if (unit.kind === 'text') {
       out.glyphs(
-        textState,
+        unit.gstate,
         unit.font,
         unit.fontSize * item.scale,
         item.x,
@@ -602,6 +666,10 @@ function renderParagraph(p: ReflowParagraph, page: ReflowPage, fonts: TypesetFon
         unit.ch,
         item.box.x2,
       )
+      continue
+    }
+    if (unit.kind === 'char') {
+      drawChar(out, unit, item.x, item.y, item.scale)
       continue
     }
     drawFormula(out, unit, item)
@@ -617,7 +685,7 @@ function drawFormula(out: OpsWriter, unit: FormulaUnit, item: Placed): void {
     // A glyph whose operator could not be paired has no resource name to draw with.
     if (!ch.font) continue
     out.original(
-      ch.gstate,
+      unit.ocr ? BLACK : ch.gstate,
       ch.font,
       ch.size * scale,
       item.x + (ch.x0 - unit.minX) * scale,
@@ -639,11 +707,34 @@ function drawFormula(out: OpsWriter, unit: FormulaUnit, item: Placed): void {
   }
 }
 
-function drawFormulaInPlace(out: OpsWriter, formula: Pdf2zhFormula): void {
+/** An original glyph; a dummy space or a glyph without a resource name draws nothing. */
+function drawChar(out: OpsWriter, unit: CharUnit, x: number, y: number, scale: number): void {
+  const { char, style } = unit
+  if (char.dummy || !style.font) return
+  out.original(
+    unit.gstate,
+    style.font,
+    style.size * scale,
+    x,
+    y,
+    codeHex(char.code, char.codeBytes),
+    undefined,
+  )
+}
+
+function drawFormulaInPlace(out: OpsWriter, formula: Pdf2zhFormula, ocr: boolean): void {
   for (const ch of formula.chars) {
     if (!ch.font) continue
     const hex = codeHex(ch.code, ch.codeBytes)
-    out.original(ch.gstate, ch.font, ch.size, ch.x0, ch.y0, hex, isVertical(ch) ? ch.x1 : undefined)
+    out.original(
+      ocr ? BLACK : ch.gstate,
+      ch.font,
+      ch.size,
+      ch.x0,
+      ch.y0,
+      hex,
+      isVertical(ch) ? ch.x1 : undefined,
+    )
   }
   for (const line of formula.lines) {
     if (line.linewidth < 5) {
@@ -687,7 +778,7 @@ class OpsWriter {
   private run: Run | undefined
   private open: string | undefined // state of the open text object
 
-  constructor(private readonly fonts: TypesetFonts) {}
+  constructor(private readonly fonts: ReflowFonts) {}
 
   glyphs(state: string, font: string, size: number, x: number, y: number, ch: string, end: number) {
     const run = this.run
@@ -755,11 +846,11 @@ class OpsWriter {
       this.parts.push(run.state ? `q ${run.state} BT ` : 'BT ')
       this.open = run.state
     }
-    const hex = run.hex.length > 0 ? run.hex.join('') : this.textHex(run.font, run.text)
+    const bundled = run.hex.length === 0
+    const hex = bundled ? this.textHex(run.font, run.text) : run.hex.join('')
+    const name = bundled ? fontResourceName(run.font) : run.font
     const tm = run.vertical ? '0 1 -1 0' : '1 0 0 1'
-    this.parts.push(
-      `/${run.font} ${f(run.size)} Tf ${tm} ${f(run.x)} ${f(run.y)} Tm [<${hex}>] TJ `,
-    )
+    this.parts.push(`/${name} ${f(run.size)} Tf ${tm} ${f(run.x)} ${f(run.y)} Tm [<${hex}>] TJ `)
   }
 
   private closeText() {
@@ -768,9 +859,8 @@ class OpsWriter {
     this.open = undefined
   }
 
+  /** Glyph by glyph, like BabelDOC's one Tj per character (no shaping across characters). */
   private textHex(font: string, text: string): string {
-    if (font === NOTO) return this.fonts.notoHex(text)
-    // tiro is a simple font: one byte per character.
-    return [...text].map((c) => (c.codePointAt(0) ?? 0).toString(16).padStart(2, '0')).join('')
+    return [...text].map((c) => this.fonts.hex(font, c)).join('')
   }
 }

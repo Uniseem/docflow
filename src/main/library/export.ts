@@ -23,6 +23,13 @@ export async function exportBundle(
   } catch {
     /* optional */
   }
+  try {
+    files['output/glossary.csv'] = await readFile(
+      join(outputDir(libraryDir, manifest.id), 'glossary.csv'),
+    )
+  } catch {
+    /* optional */
+  }
   files['manifest.json'] = strToU8(`${JSON.stringify(manifest, null, 2)}\n`)
   try {
     files['events.jsonl'] = await readFile(eventsPath(libraryDir, manifest.id))
@@ -36,7 +43,7 @@ export async function exportBundle(
       `状态：${manifest.status}`,
       '',
       'source/  原始 PDF',
-      'output/  中文译文与双语对照（若已生成）',
+      'output/  中文译文、双语对照与自动抽取的术语表（若已生成）',
       'manifest.json  文档记录',
       'events.jsonl  处理记录',
       '',

@@ -9,6 +9,8 @@ export async function verifyPdf(input: {
   dualPath: string | null
   pages: number
   writtenPages: number[]
+  /** Side by side: one dual page per page; alternating: two. */
+  dualMode?: 'side-by-side' | 'alternating'
 }): Promise<VerifyResult> {
   const mono = await openPdfDocument(
     await (await import('node:fs/promises')).readFile(input.monoPath),
@@ -18,11 +20,14 @@ export async function verifyPdf(input: {
       throw verifyFailed(`中文 PDF 有 ${mono.numPages} 页，原文有 ${input.pages} 页`)
     }
     const monoSizes: Array<[number, number]> = []
+    const shownSizes: Array<[number, number]> = []
     const translatedPagesWithoutCjk: number[] = []
     for (let i = 0; i < mono.numPages; i += 1) {
       const page = await mono.getPage(i + 1)
       const viewport = page.getViewport({ scale: 1, rotation: 0 })
       monoSizes.push([viewport.width, viewport.height])
+      const shown = page.getViewport({ scale: 1 })
+      shownSizes.push([shown.width, shown.height])
       if (input.writtenPages.includes(i)) {
         await page.getOperatorList()
         const content = await page.getTextContent()
@@ -44,10 +49,20 @@ export async function verifyPdf(input: {
       )
       try {
         dualPages = dual.numPages
-        if (dual.numPages !== input.pages * 2) {
-          throw verifyFailed(`双语 PDF 有 ${dual.numPages} 页，应为 ${input.pages * 2} 页`)
+        const sideBySide = (input.dualMode ?? 'alternating') === 'side-by-side'
+        const expected = sideBySide ? input.pages : input.pages * 2
+        if (dual.numPages !== expected) {
+          throw verifyFailed(`双语 PDF 有 ${dual.numPages} 页，应为 ${expected} 页`)
         }
-        for (let i = 0; i < input.pages; i += 1) {
+        for (let i = 0; sideBySide && i < input.pages; i += 1) {
+          // Original and translation next to each other, both as displayed.
+          const page = await dual.getPage(i + 1)
+          const size = page.getViewport({ scale: 1 })
+          const [w, h] = shownSizes[i] ?? [0, 0]
+          if (Math.abs(size.width - 2 * w) > 2 || Math.abs(size.height - h) > 1) sizeMismatches += 1
+          page.cleanup()
+        }
+        for (let i = 0; !sideBySide && i < input.pages; i += 1) {
           const origPage = await dual.getPage(i * 2 + 1)
           const zhPage = await dual.getPage(i * 2 + 2)
           const orig = origPage.getViewport({ scale: 1, rotation: 0 })

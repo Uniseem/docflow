@@ -12,6 +12,8 @@ export async function layoutStage(input: {
   modelPath: string
   path: string
   pages: number
+  /** Pages to detect (BabelDOC only lays out the pages it translates); null for all. */
+  selected: number[] | null
   signal: AbortSignal
   onPage: (done: number, total: number) => Promise<void>
 }): Promise<PageLayout[]> {
@@ -20,8 +22,15 @@ export async function layoutStage(input: {
   } catch {
     throw new PermanentError(ERROR_CODES.layout_model_missing)
   }
+  const wanted = input.selected ? new Set(input.selected) : null
+  const total = wanted ? wanted.size : input.pages
   const layouts: PageLayout[] = []
+  let done = 0
   for (let index = 0; index < input.pages; index += 1) {
+    if (wanted && !wanted.has(index)) {
+      layouts.push({ width: 0, height: 0, boxes: [] })
+      continue
+    }
     layouts.push(
       await input.host.request<PageLayout>(
         { kind: 'detect', path: input.path, index, modelPath: input.modelPath },
@@ -29,7 +38,8 @@ export async function layoutStage(input: {
         input.signal,
       ),
     )
-    await input.onPage(index + 1, input.pages)
+    done += 1
+    await input.onPage(done, total)
   }
   return layouts
 }
