@@ -455,11 +455,7 @@ function AdvancedPanel() {
               className="font-mono"
               placeholder="You are a professional zh-CN native translator who needs to fluently translate text into zh-CN."
             />
-            <Description>
-              {prompt.length} / 12000。留空使用默认。填写后替换每个请求开头的角色说明（如“你是一名
-              化学领域的专业译者”），译文格式、占位符与术语表的要求不受影响。新任务使用新设置，
-              进行中的任务保持提交时的设置。
-            </Description>
+            <Description>{`${prompt.length} / 12000。${ROLE_PROMPT_HINT}`}</Description>
           </TextField>
           <div className="flex gap-2">
             <Button variant="secondary" onPress={() => setDraft(DEFAULT_SYSTEM_PROMPT)}>
@@ -525,8 +521,13 @@ function AdvancedPanel() {
   )
 }
 
+// One string: JSX joins wrapped lines with a space, which shows up between Chinese characters.
+const ROLE_PROMPT_HINT =
+  '留空使用默认。填写后替换每个请求开头的角色说明（如“你是一名化学领域的专业译者”），译文格式、占位符与术语表的要求不受影响。新任务使用新设置，进行中的任务保持提交时的设置。'
+
 function GlossaryCard() {
-  const glossaries = useSettingsStore((s) => s.view?.glossaries ?? [])
+  const view = useSettingsStore((s) => s.view)
+  const glossaries = view?.glossaries ?? []
   const [importing, setImporting] = useState(false)
   const [deleting, setDeleting] = useState<{ id: string; name: string } | null>(null)
 
@@ -598,7 +599,7 @@ function GlossaryCard() {
         key={deleting?.id ?? 'none'}
         isOpen={Boolean(deleting)}
         title={`删除术语表“${deleting?.name ?? ''}”？`}
-        body="已经添加的文档不受影响；删除后新建翻译不再使用它。"
+        body="删除后，新建翻译不再使用它；还在排队或之后重新处理的文档也不会再用到它。"
         confirmLabel="删除"
         danger
         onOpenChange={(open) => {

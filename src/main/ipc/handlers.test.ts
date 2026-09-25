@@ -306,7 +306,7 @@ describe('glossaries handlers', () => {
     await writeFile(csv, 'foo,bar\n1,2\n')
     ctx.env = { ...ctx.env, DOCFLOW_E2E_GLOSSARY_PATH: csv }
     await expect(handleGlossariesImport(ctx)).rejects.toMatchObject({
-      message: expect.stringContaining('需要 source、target 两列') as unknown,
+      message: '术语表 CSV 必须包含 source 和 target 两列。',
     })
     expect(ctx.settings.snapshot.glossaries).toEqual([])
     await ctx.scheduler.stop(0)

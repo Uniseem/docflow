@@ -416,8 +416,11 @@ export async function handleGlossariesImport(
   try {
     entries = glossaryFromCsv(name, bytes, LANG_OUT).entries.length
   } catch (error) {
-    const message = error instanceof GlossaryFormatError ? error.message : '无法解析这个 CSV 文件。'
-    throw new UserError(ERROR_CODES.internal, `${message}（需要 source、target 两列）`, true)
+    const message =
+      error instanceof GlossaryFormatError
+        ? `${error.message}。`
+        : '无法解析这个 CSV 文件，术语表需要 source、target 两列。'
+    throw new UserError(ERROR_CODES.internal, message, true)
   }
   const id = randomBytes(8).toString('hex')
   const target = glossaryPath(ctx.getLibraryDir(), id)
