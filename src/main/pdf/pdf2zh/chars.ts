@@ -5,13 +5,16 @@ import { applyMatrixPt, multMatrix, type TextOpInfo } from './interp'
 
 /**
  * pdfminer LTChar for a glyph: the (0, rise)–(adv, rise + size) box through the char matrix
- * (which includes the page CTM); `size` is the box height, or its width for a vertical font.
+ * (which includes the page CTM). `size` is the box width for a vertical font or a glyph
+ * turned by 90° (matrix[0] == 0), else its height (BabelDOC; pdfminer 20250416 only checks
+ * the font, so a turned glyph got its advance as size).
  */
 export function toLtChar(
   glyph: Glyph,
   pageCtm: Matrix,
   font: string,
   text = glyph.unicode || `(cid:${glyph.code})`,
+  gstate = '',
 ): LtChar {
   const [llx, lly, urx, ury] = glyph.corners
   const a = applyMatrixPt(pageCtm, llx, lly)
@@ -27,12 +30,14 @@ export function toLtChar(
     y0,
     x1,
     y1,
-    size: glyph.vertical ? x1 - x0 : y1 - y0,
+    size: glyph.vertical || matrix[0] === 0 ? x1 - x0 : y1 - y0,
     vertical: matrix[0] === 0 && matrix[3] === 0,
+    angle: (Math.atan2(matrix[1], matrix[0]) * 180) / Math.PI,
     fontname: glyph.fontName,
     font,
     code: glyph.code,
     codeBytes: glyph.codeBytes,
+    gstate,
   }
 }
 

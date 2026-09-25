@@ -1,7 +1,8 @@
-import { mkdtemp, readFile } from 'node:fs/promises'
+import { mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { PDFDict, PDFName } from '@cantoo/pdf-lib'
+import { PDFDict, PDFDocument, PDFName, StandardFonts, degrees, rgb } from '@cantoo/pdf-lib'
+import * as mupdf from 'mupdf'
 import { describe, expect, test } from 'vitest'
 import { ERROR_CODES } from '../../../shared/errors'
 import type { AnalysisResult, TranslatedParagraph } from '../../../shared/pdf-types'
@@ -97,19 +98,21 @@ describe('composePdf (pdf2zh write-back)', () => {
     },
   )
 
-  test('page contents are q {ops_base}Q 1 0 0 1 x0 y0 cm BT … ET with tiro and noto mounted', async () => {
+  test('page contents are q {ops_base}Q 1 0 0 1 x0 y0 cm {ops_new} with tiro and noto mounted', async () => {
     const { mono } = await compose('single-column')
     const doc = await loadPdfLib(await readFile(mono))
+    // ops_new: text objects, wrapped in q {graphic state} … Q when the text has a colour.
+    const prefix = /Q 1 0 0 1 [-\d.]+ [-\d.]+ cm (q [^B]*)?BT /
     for (const page of doc.getPages()) {
       // The stream as written (pdf-lib's normalize() would wrap it in another q/Q).
       const content = Buffer.from(
         streamBytes(doc.context.lookup(page.node.get(PDFName.of('Contents')))),
       ).toString('latin1')
       expect(content.startsWith('q ')).toBe(true)
-      expect(content).toMatch(/Q 1 0 0 1 [-\d.]+ [-\d.]+ cm BT /)
-      expect(content.trimEnd().endsWith('ET')).toBe(true)
+      expect(content).toMatch(prefix)
+      expect(content.trimEnd()).toMatch(/ET( Q)?$/)
       // Only the redraw draws text: Tf appears after the base stream's closing Q.
-      const base = content.slice(0, content.search(/Q 1 0 0 1 [-\d.]+ [-\d.]+ cm BT /))
+      const base = content.slice(0, content.search(prefix))
       expect(base).not.toMatch(/\bT[jJ]\b/)
       const fonts = page.node.Resources()?.lookup(PDFName.of('Font'), PDFDict)
       expect(fonts?.has(PDFName.of('tiro'))).toBe(true)
@@ -124,8 +127,9 @@ describe('composePdf (pdf2zh write-back)', () => {
     const [, ref] = [...(xobjects?.entries() ?? [])][0]!
     const form = Buffer.from(streamBytes(doc.context.lookup(ref))).toString('latin1')
     // do_Do: `q {ops_base}Q a b c d e f cm {ops_new}`
-    expect(form).toMatch(/^q .*Q [-\d.e]+ [-\d.e]+ [-\d.e]+ [-\d.e]+ [-\d.e]+ [-\d.e]+ cm BT /s)
-    const base = form.slice(0, form.lastIndexOf(' cm BT '))
+    const prefix = /^q .*Q [-\d.e]+ [-\d.e]+ [-\d.e]+ [-\d.e]+ [-\d.e]+ [-\d.e]+ cm (q [^B]*)?BT /s
+    expect(form).toMatch(prefix)
+    const base = form.slice(0, form.search(/ [-\d.e]+ cm (q [^B]*)?BT /))
     expect(base).not.toMatch(/\bT[jJ]\b/)
   })
 
@@ -139,6 +143,83 @@ describe('composePdf (pdf2zh write-back)', () => {
       const words = page.match(/[A-Za-z]{4,}/g) ?? []
       expect(words.filter((word) => !formulaText.includes(word))).toEqual([])
     }
+  })
+
+  test('colours of the original text carry over to the translation', async () => {
+    const { mono } = await compose('colored-text')
+    const doc = await loadPdfLib(await readFile(mono))
+    const content = Buffer.from(
+      streamBytes(doc.context.lookup(doc.getPages()[0]!.node.get(PDFName.of('Contents')))),
+    ).toString('latin1')
+    // BabelDOC passthrough: the translated red title keeps its colour, and so does the blue
+    // line pdf2zh keeps as a formula ({v0}), redrawn in its own font.
+    expect(content).toMatch(/q [^B]*\b0\.8 0\.1 0\.1 rg BT \/noto /)
+    expect(content).toMatch(/q [^B]*\b0\.1 0\.2 0\.7 rg BT \/(?!noto|tiro)\S+ 11\.000000 Tf /)
+  })
+
+  test('a /Rotate 90 page: upright translation in place, inline image and colours kept', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'df-rotate-'))
+    const src = join(dir, 'rotated.pdf')
+    const lib = await PDFDocument.create()
+    const font = await lib.embedFont(StandardFonts.TimesRoman)
+    const page = lib.addPage([612, 792])
+    page.setRotation(degrees(90))
+    // Drawn turned by 90° so that it reads upright once the viewer applies /Rotate.
+    const line = (text: string, x: number, y: number, color = rgb(0, 0, 0)) =>
+      page.drawText(text, { x: 612 - y, y: x, size: 11, font, rotate: degrees(90), color })
+    line('Landscape results of the catalysts compared here', 72, 560, rgb(0.8, 0.1, 0.1))
+    line('Each row gives the ammonia yield under visible light', 72, 500)
+    line('and the apparent quantum efficiency at 420 nm.', 72, 486)
+    const image = 'q 20 0 0 20 300 300 cm BI /W 2 /H 2 /BPC 8 /CS /G ID \x00\xff\xff\x00 EI Q'
+    page.node.addContentStream(lib.context.register(lib.context.stream(image)))
+    await writeFile(src, await lib.save())
+
+    // Display space is 792 × 612; boxes in pixels from the top-left like the model's.
+    const layout = {
+      width: 792,
+      height: 612,
+      boxes: [
+        { name: 'title', conf: 0.9, xyxy: [60, 40, 400, 62] as [number, number, number, number] },
+        {
+          name: 'plain text',
+          conf: 0.9,
+          xyxy: [60, 100, 420, 135] as [number, number, number, number],
+        },
+      ],
+    }
+    const analysis = await analyzePdf(src, [layout])
+    expect(analysis.units[0]!.texts).toHaveLength(2)
+    const mono = join(dir, 'mono.pdf')
+    await composePdf({
+      sourcePath: src,
+      monoPath: mono,
+      dualPath: null,
+      analysis,
+      translations: fakeTranslations(analysis),
+      fonts: { noto: NOTO_FONT },
+    })
+    const out = mupdf.Document.openDocument(await readFile(mono), 'application/pdf')
+    const stext = JSON.parse(out.loadPage(0).toStructuredText().asJSON()) as {
+      blocks: Array<{
+        lines?: Array<{ bbox: { x: number; y: number; w: number; h: number }; text: string }>
+      }>
+    }
+    const lines = stext.blocks.flatMap((block) => block.lines ?? [])
+    expect(lines.map((l) => l.text).join('')).toContain('译文')
+    expect(lines.map((l) => l.text).join('')).not.toMatch(/[A-Za-z]{4,}/)
+    for (const l of lines) {
+      // Upright (wider than tall) and inside the displayed boxes the text came from.
+      expect(l.bbox.w).toBeGreaterThan(l.bbox.h)
+      expect(l.bbox.x).toBeGreaterThanOrEqual(71)
+      expect(l.bbox.y).toBeGreaterThan(30)
+      expect(l.bbox.y + l.bbox.h).toBeLessThan(140)
+    }
+    const doc = await loadPdfLib(await readFile(mono))
+    const content = Buffer.from(
+      streamBytes(doc.context.lookup(doc.getPages()[0]!.node.get(PDFName.of('Contents')))),
+    ).toString('latin1')
+    expect(content).toContain('BI /W 2 /H 2 /BPC 8 /CS /G ID \x00\xff\xff\x00 EI')
+    expect(content).toMatch(/q [^B]*\b0\.8 0\.1 0\.1 rg BT \/noto /)
   })
 
   test('long fixture compose+dual+verify stays within 30 s', { timeout: 120_000 }, async () => {

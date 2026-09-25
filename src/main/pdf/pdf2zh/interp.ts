@@ -2,6 +2,8 @@
 // pdfminer.six 20250416 interpreter it subclasses. It rebuilds `ops_base` (the stream without
 // text), collects the lines pdf2zh hands to the converter (do_S), and recurses into form
 // XObjects like do_Do. Kept operators are copied byte for byte instead of re-serialised.
+// Two changes from pdf2zh follow BabelDOC 0.6.4 (ADR-0017): inline images stay in ops_base,
+// and every show-text operator records the colour/graphics-state operators in effect.
 import type { LtLine, Matrix, Rect } from '../../../shared/pdf-types'
 import { lexContent, tokenText } from '../compose/content-lexer'
 
@@ -30,6 +32,8 @@ export type TextOpInfo = {
    * text continues after glyphs whose widths are unknown here and only `start[1]` is exact.
    */
   positioned: boolean
+  /** BabelDOC passthrough_per_char_instruction at this operator ('' when empty). */
+  gstate: string
 }
 
 export type UnitEvent = { kind: 'text'; seq: number } | { kind: 'line'; line: LtLine }
@@ -119,6 +123,27 @@ function dropped(op: string, nargs: number): boolean {
   return ['BI', 'ID', 'EMC'].includes(op)
 }
 
+// BabelDOC il_creater_active: operators copied onto every glyph (is_passthrough_per_char_
+// operation, plus d). All but gs replace their previous occurrence
+// (can_remove_old_passthrough_per_char_instruction); gs accumulates.
+const PASSTHROUGH = new Set([
+  'sc', 'SC', 'scn', 'SCN', 'g', 'G', 'rg', 'RG', 'k', 'K', 'cs', 'CS', 'gs', 'ri', 'w', 'J',
+  'j', 'M', 'i', 'd',
+]) // prettier-ignore
+type Passthrough = ReadonlyArray<readonly [op: string, text: string]>
+
+/**
+ * replace_first_passthrough_operator / append_passthrough_instruction. A repeated gs of the
+ * same ExtGState also drops its earlier entry: each gs only sets its own keys, so the last
+ * occurrences in order give the same state, and pages that repeat `/A gs /B gs` around every
+ * drawing do not grow the list without bound.
+ */
+function withPassthrough(list: Passthrough, op: string, text: string): Passthrough {
+  const index = list.findIndex(([name, old]) => name === op && (op !== 'gs' || old === text))
+  if (index >= 0) return [...list.slice(0, index), ...list.slice(index + 1), [op, text]]
+  return [...list, [op, text]]
+}
+
 type PathSegment = [string, ...number[]]
 // Stroking colour: undefined = never set (pdfminer None), a number (G), a tuple (RG, K),
 // or 'list' for SC/SCN (pdf2zh stores the args list, which is_black never accepts).
@@ -137,6 +162,8 @@ type State = {
   rise: number
   tm: Matrix
   tlm: Matrix
+  /** Saved and restored by q/Q; a form starts with an empty list (on_xobj_begin). */
+  passthrough: Passthrough
 }
 
 const IDENTITY: Matrix = [1, 0, 0, 1, 0, 0]
@@ -145,8 +172,9 @@ const SHOW_TEXT = new Set(['Tj', 'TJ', "'", '"'])
 const OBJECT_KEYWORDS = new Set(['true', 'false', 'null'])
 const N_S = new TextEncoder().encode('n S ')
 
-// `start`: byte offset of the operand, so a kept operator can be copied with just its own.
-type Operand = { start: number } & (
+// `start`: byte offset of the operand, so a kept operator can be copied with just its own;
+// `index`: its first token.
+type Operand = { start: number; index: number } & (
   { kind: 'number'; value: number } | { kind: 'name'; value: string } | { kind: 'other' }
 )
 // pdf2zh's do_SC/do_SCN/do_sc/do_scn pop the colour components themselves and return them.
@@ -213,12 +241,14 @@ export function interpretPage(
       rise: 0,
       tm: IDENTITY,
       tlm: IDENTITY,
+      passthrough: [],
     }
     let curpath: PathSegment[] = []
     let formCount = 0
     let operands: Operand[] = []
     let depthBracket = 0
     let openStart = 0
+    let openIndex = 0
     // Numbers before the first string of the last TJ array: they move the first glyph.
     let arrayLead = 0
     let arrayLeadOpen = false
@@ -239,6 +269,7 @@ export function interpretPage(
         formPath,
         start: applyMatrixPt(trm, 0, 0),
         positioned,
+        gstate: state.passthrough.map(([, text]) => text).join(' '),
       })
       positioned = false
       unit.events.push({ kind: 'text', seq: textOps.length - 1 })
@@ -248,8 +279,9 @@ export function interpretPage(
       const token = tokens[i]!
       if (token.kind === 'space') continue
       if (token.kind === 'inline-image') {
-        // BI … ID … EI: EI is dropped with its image argument.
+        // pdf2zh drops EI with its image argument; BabelDOC keeps inline images.
         operands = []
+        out.push(bytes.subarray(token.start, token.end), space)
         continue
       }
       const isOperator =
@@ -257,7 +289,10 @@ export function interpretPage(
         depthBracket === 0 &&
         !OBJECT_KEYWORDS.has(tokenText(bytes, token))
       if (!isOperator) {
-        if (depthBracket === 0) openStart = token.start
+        if (depthBracket === 0) {
+          openStart = token.start
+          openIndex = i
+        }
         if (token.kind === 'lbracket' && depthBracket === 0) {
           arrayLead = 0
           arrayLeadOpen = true
@@ -268,15 +303,19 @@ export function interpretPage(
         if (token.kind === 'lbracket' || token.kind === 'ldict') depthBracket += 1
         else if (token.kind === 'rbracket' || token.kind === 'rdict') {
           depthBracket = Math.max(0, depthBracket - 1)
-          if (depthBracket === 0) operands.push({ start: openStart, kind: 'other' })
+          if (depthBracket === 0) {
+            operands.push({ start: openStart, index: openIndex, kind: 'other' })
+          }
         } else if (depthBracket === 0) {
           const start = token.start
           if (token.kind === 'number') {
-            operands.push({ start, kind: 'number', value: Number(tokenText(bytes, token)) })
+            const value = Number(tokenText(bytes, token))
+            operands.push({ start, index: i, kind: 'number', value })
           } else if (token.kind === 'name') {
-            operands.push({ start, kind: 'name', value: tokenText(bytes, token).slice(1) })
+            const value = tokenText(bytes, token).slice(1)
+            operands.push({ start, index: i, kind: 'name', value })
           } else {
-            operands.push({ start, kind: 'other' })
+            operands.push({ start, index: i, kind: 'other' })
           }
         }
         continue
@@ -289,6 +328,18 @@ export function interpretPage(
       if (nargs > 0 && args.length < nargs) continue // pop() came up short: not executed
       operands = args
       let output: Uint8Array | 'drop' | 'keep' = dropped(op, nargs) ? 'drop' : 'keep'
+      if (PASSTHROUGH.has(op)) {
+        const popped = SELF_POPPING.has(op) ? args : args.slice(args.length - nargs)
+        const first = popped[0]
+        if (first) {
+          const text = tokens
+            .slice(first.index, i + 1)
+            .filter((t) => t.kind !== 'space')
+            .map((t) => tokenText(bytes, t))
+            .join(' ')
+          state = { ...state, passthrough: withPassthrough(state.passthrough, op, text) }
+        }
+      }
 
       switch (op) {
         case 'q':

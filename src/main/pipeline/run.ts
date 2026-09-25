@@ -347,6 +347,8 @@ export function composeWarningEvent(warning: ComposeResult['warnings'][number]):
   switch (warning.code) {
     case 'font_unmapped':
       return { message: `${page}有公式字符找不到原字体，未能重画` }
+    case 'paragraph_not_fit':
+      return { message: `${page}有段落在任何字号下都放不下，没有写入译文` }
     default:
       return {
         message: warning.page === undefined ? '生成 PDF 时出现警告' : `${page}生成时出现警告`,

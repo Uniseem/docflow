@@ -39,7 +39,15 @@ function glyph(opSeq: number, x: number, y: number, extra: Partial<Glyph> = {}):
 }
 
 function op(seq: number, x: number, y: number, extra: Partial<TextOpInfo> = {}): TextOpInfo {
-  return { seq, font: `F${seq}`, formPath: '', start: [x, y], positioned: true, ...extra }
+  return {
+    seq,
+    font: `F${seq}`,
+    formPath: '',
+    start: [x, y],
+    positioned: true,
+    gstate: '',
+    ...extra,
+  }
 }
 
 describe('toLtChar', () => {
@@ -52,6 +60,17 @@ describe('toLtChar', () => {
   test('glyphs rotated by 90° are vertical for pdfminer (matrix[0] == matrix[3] == 0)', () => {
     const char = toLtChar(glyph(0, 100, 100, { trm: [0, -10, 10, 0, 100, 100] }), IDENTITY, 'F1')
     expect(char.vertical).toBe(true)
+    expect(char.angle).toBe(-90)
+  })
+
+  test('a turned glyph takes the box width as size (BabelDOC); the graphic state is kept', () => {
+    // 90°: the box is 10 wide (the font size) and 7 high (the advance).
+    const turned = glyph(0, 100, 100, {
+      trm: [0, 10, -10, 0, 100, 100],
+      corners: [90, 100, 100, 107],
+    })
+    const char = toLtChar(turned, IDENTITY, 'F1', 'A', '/CS0 cs 1 sc')
+    expect(char).toMatchObject({ size: 10, angle: 90, vertical: true, gstate: '/CS0 cs 1 sc' })
   })
 })
 

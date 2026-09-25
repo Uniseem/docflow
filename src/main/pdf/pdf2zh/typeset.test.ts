@@ -11,7 +11,18 @@ const fonts: TypesetFonts = {
 }
 
 function para(extra: Partial<Pdf2zhParagraph> = {}): Pdf2zhParagraph {
-  return { y: 700, x: 100, x0: 100, x1: 140, y0: 690, y1: 720, size: 10, brk: false, ...extra }
+  return {
+    y: 700,
+    x: 100,
+    x0: 100,
+    x1: 140,
+    y0: 690,
+    y1: 720,
+    size: 10,
+    brk: false,
+    gstate: null,
+    ...extra,
+  }
 }
 
 function vchar(text: string, x0: number, y0: number, extra: Partial<LtChar> = {}): LtChar {
@@ -23,10 +34,12 @@ function vchar(text: string, x0: number, y0: number, extra: Partial<LtChar> = {}
     y1: y0 + 8,
     size: 8,
     vertical: false,
+    angle: 0,
     fontname: 'CMMI10',
     font: 'F7',
     code: text.charCodeAt(0),
     codeBytes: 1,
+    gstate: '',
     ...extra,
   }
 }

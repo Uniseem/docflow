@@ -16,7 +16,7 @@ import { alignTextOps, toLtChar } from './pdf2zh/chars'
 import { buildLayoutMap } from './pdf2zh/doclayout'
 import { interpretPage } from './pdf2zh/interp'
 import { lookupDict, pageSource } from './pdf2zh/pages'
-import { parseLayout, type LtItem } from './pdf2zh/parse'
+import { parseLayout, type LtItem, type ParseOptions } from './pdf2zh/parse'
 import { needsTranslation } from './pdf2zh/segments'
 import { unicodeSource, type UnicodeSource } from './pdf2zh/unicode'
 
@@ -24,7 +24,11 @@ import { unicodeSource, type UnicodeSource } from './pdf2zh/unicode'
  * pdf2zh translate_patch without the translation: for every page, the layout matrix from the
  * DocLayout-YOLO boxes, then receive_layout part A for the page and each form it draws.
  */
-export async function analyzePdf(path: string, layouts: readonly PageLayout[]) {
+export async function analyzePdf(
+  path: string,
+  layouts: readonly PageLayout[],
+  options: ParseOptions = {},
+) {
   const inspection = await inspectPdf(path)
   const bytes = await readFile(path)
   const doc = await openPdfDocument(bytes)
@@ -71,7 +75,13 @@ export async function analyzePdf(path: string, layouts: readonly PageLayout[]) {
     for (const glyph of glyphs) {
       const op = aligned.get(glyph.opSeq)
       const char = op
-        ? toLtChar(glyph, source.ctm, op.font, textOf(glyph, resourcesOf.get(op.formPath), op.font))
+        ? toLtChar(
+            glyph,
+            source.ctm,
+            op.font,
+            textOf(glyph, resourcesOf.get(op.formPath), op.font),
+            op.gstate,
+          )
         : toLtChar(glyph, source.ctm, '')
       if (op) push(bySeq, op.seq, char)
       else push(unaligned, glyph.formPath, char)
@@ -92,7 +102,7 @@ export async function analyzePdf(path: string, layouts: readonly PageLayout[]) {
       }
       for (const char of unaligned.get(unit.formPath) ?? []) items.push({ kind: 'char', ...char })
       chars += items.filter((item) => item.kind === 'char').length
-      const parsed = parseLayout(items, layout, unit.width)
+      const parsed = parseLayout(items, layout, unit.width, options)
       units.push({
         id: unit.formPath ? `${i}/${unit.formPath}` : String(i),
         page: i,
@@ -105,7 +115,7 @@ export async function analyzePdf(path: string, layouts: readonly PageLayout[]) {
 
   const texts = units.flatMap((unit) => unit.texts)
   return AnalysisResult.parse({
-    version: 3,
+    version: 4,
     pages: inspection.pages,
     pageSizes: inspection.pageSizes,
     units,

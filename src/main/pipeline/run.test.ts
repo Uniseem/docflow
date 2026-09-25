@@ -133,12 +133,15 @@ describe('runPipeline', () => {
 
 describe('composeWarningEvent', () => {
   test('every warning code reads as Chinese', () => {
-    for (const code of ['font_unmapped', 'something_new']) {
+    for (const code of ['font_unmapped', 'paragraph_not_fit', 'something_new']) {
       const event = composeWarningEvent({ code, page: 0, message: 'technical english text' })
       expect(event.message, code).not.toMatch(/[A-Za-z]/)
     }
     expect(composeWarningEvent({ code: 'font_unmapped', page: 1, message: 'x' }).message).toBe(
       '第 2 页有公式字符找不到原字体，未能重画',
+    )
+    expect(composeWarningEvent({ code: 'paragraph_not_fit', page: 0, message: 'x' }).message).toBe(
+      '第 1 页有段落在任何字号下都放不下，没有写入译文',
     )
     expect(
       composeWarningEvent({ code: 'something_new', message: 'technical english text' }),
@@ -151,7 +154,7 @@ describe('composeWarningEvent', () => {
 
 function fakeHooks(onChanged: NonNullable<PipelineHooks['onChanged']>): PipelineHooks {
   const analysis: AnalysisResult = {
-    version: 3,
+    version: 4,
     pages: 1,
     pageSizes: [[612, 792]],
     units: [
@@ -160,7 +163,19 @@ function fakeHooks(onChanged: NonNullable<PipelineHooks['onChanged']>): Pipeline
         page: 0,
         formPath: '',
         texts: ['Hello'],
-        paragraphs: [{ y: 700, x: 72, x0: 72, x1: 100, y0: 700, y1: 710, size: 10, brk: false }],
+        paragraphs: [
+          {
+            y: 700,
+            x: 72,
+            x0: 72,
+            x1: 100,
+            y0: 700,
+            y1: 710,
+            size: 10,
+            brk: false,
+            gstate: null,
+          },
+        ],
         formulas: [],
         lines: [],
       },

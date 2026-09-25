@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest'
 import type { LtChar } from '../../../shared/pdf-types'
 import { buildLayoutMap, type LayoutMap } from './doclayout'
-import { parseLayout, vflag, type LtItem } from './parse'
+import { isFormulasFont, parseLayout, vflag, type LtItem } from './parse'
 
 /** A layout map of one class everywhere (a single text box covering the page). */
 function flat(cls = 2, width = 600, height = 800): LayoutMap {
@@ -20,10 +20,12 @@ function char(text: string, x: number, y: number, extra: Partial<LtChar> = {}): 
     y1: y + size,
     size,
     vertical: false,
+    angle: 0,
     fontname: 'ABCDEF+Times-Roman',
     font: 'F1',
     code: text.charCodeAt(0),
     codeBytes: 1,
+    gstate: '',
     ...extra,
   }
 }
@@ -184,5 +186,88 @@ describe('parseLayout (receive_layout part A)', () => {
     )
     // The formula ends, then the gap to the next character adds a space.
     expect(unit.texts).toEqual(['ab{v0} {v1}'])
+  })
+})
+
+describe('BabelDOC rules (parseLayout without strict)', () => {
+  test.each([
+    ['ABCDEF+Times-Italic', false], // pdf2zh: .*Ital
+    ['NimbusRomNo9L-ReguItal', false],
+    ['CMBX10', false], // pdf2zh: CM[^R]
+    ['CMTI10', false],
+    ['CMR10', false],
+    ['Symbol', false],
+    ['CourierNewPSMT', false],
+    ['CMMI10', true],
+    ['XYZ+CMSY10', true],
+    ['MSAM10', true],
+    ['STIXMath-Regular', true],
+    ['LatinModernMath-Regular', true],
+    ['DejaVuSansMono', true],
+  ])('is_formulas_font(%s) → %s', (font, expected) => {
+    expect(isFormulasFont(font)).toBe(expected)
+  })
+
+  test("an italic sentence is text; strict keeps pdf2zh's .*Ital rule", () => {
+    const items = word('word', 10, 700, { fontname: 'ABCDEF+Times-Italic' })
+    expect(parseLayout(items, flat(), 600).texts).toEqual(['word'])
+    expect(parseLayout(items, flat(), 600, { strict: true }).texts).toEqual(['{v0}'])
+  })
+
+  test('a space in a small font is text, not a subscript formula', () => {
+    const items = [
+      ...word('ab', 10, 700),
+      char(' ', 20, 700, { size: 6.4, x1: 25 }),
+      ...word('cd', 25, 700),
+    ]
+    const unit = parseLayout(items, flat(), 600)
+    expect(unit.texts).toEqual(['ab cd'])
+    expect(unit.formulas).toEqual([])
+    expect(parseLayout(items, flat(), 600, { strict: true }).texts).toEqual(['ab{v0}cd'])
+  })
+
+  test('other whitespace becomes a space; a space inside a formula stays in it', () => {
+    const nbsp = [...word('ab', 10, 700), char(' ', 20, 700), ...word('cd', 25, 700)]
+    expect(parseLayout(nbsp, flat(), 600).texts).toEqual(['ab cd'])
+    const math = [
+      ...word('ab', 10, 700),
+      char('x', 25, 700, { fontname: 'CMMI10' }),
+      char(' ', 30, 700),
+      char('y', 35, 700, { fontname: 'CMMI10' }),
+    ]
+    const unit = parseLayout(math, flat(), 600)
+    expect(unit.texts).toEqual(['ab {v0}'])
+    expect(unit.formulas[0]!.chars.map((c) => c.text)).toEqual(['x', ' ', 'y'])
+  })
+
+  test('a space in another layout box stays with the paragraph before it and adds no width', () => {
+    const map = buildLayoutMap({
+      width: 600,
+      height: 800,
+      boxes: [{ name: 'plain text', conf: 0.9, xyxy: [0, 90, 42, 110] }],
+    })
+    // "abc" in the box, two trailing spaces outside it, then the next line outside it too.
+    const items = [
+      ...word('abc', 10, 700),
+      char(' ', 45, 700),
+      char(' ', 50, 700),
+      ...word('next', 10, 685),
+    ]
+    const unit = parseLayout(items, map, 600)
+    expect(unit.texts).toEqual(['abc   ', 'next']) // the gap before the spaces adds one (pdf2zh)
+    expect(unit.paragraphs[0]).toMatchObject({ x0: 10, x1: 25 })
+    expect(parseLayout(items, map, 600, { strict: true }).texts).toEqual(['abc', '   next'])
+  })
+
+  test("the paragraph style is the text characters' common graphic state, else null", () => {
+    const red = { gstate: '1 0 0 rg' }
+    const same = parseLayout(
+      [...word('ab', 10, 700, red), char('x', 25, 700, { fontname: 'CMMI10' })],
+      flat(),
+      600,
+    )
+    expect(same.paragraphs[0]!.gstate).toBe('1 0 0 rg')
+    const mixed = parseLayout([...word('ab', 10, 700, red), ...word('cd', 25, 700)], flat(), 600)
+    expect(mixed.paragraphs[0]!.gstate).toBeNull()
   })
 })

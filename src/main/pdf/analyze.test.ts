@@ -3,7 +3,7 @@ import { fixture, reference, referenceLayouts } from '../../../tests/unit/pdf2zh
 import { analyzePdf } from './analyze'
 
 // Given pdf2zh's own layout boxes, the port must build the same paragraph strings (sstk) as
-// PDFMathTranslate 1.9.11 did on the same file.
+// PDFMathTranslate 1.9.11 did on the same file (strict: without the BabelDOC rules).
 const PARITY = [
   'arxiv-2201.11903',
   'arxiv-2302.13971',
@@ -24,8 +24,8 @@ const PARITY = [
 describe('analyzePdf matches pdf2zh receive_layout', () => {
   test.each(PARITY)('%s', { timeout: 120_000 }, async (name) => {
     const ref = reference(name)
-    const result = await analyzePdf(fixture(name), referenceLayouts(name))
-    expect(result.version).toBe(3)
+    const result = await analyzePdf(fixture(name), referenceLayouts(name), { strict: true })
+    expect(result.version).toBe(4)
     ref.pages.forEach((page, index) => {
       const pageUnit = page.units.find((unit) => unit.kind === 'page')
       const ours = result.units.find((unit) => unit.page === index && unit.formPath === '')
@@ -43,7 +43,9 @@ describe('analyzePdf matches pdf2zh receive_layout', () => {
     // pdfminer.six do__w skips T*, so pdf2zh sees the quoted line continue the previous one.
     // The port keeps pdf.js's (specification) positions: same characters, one paragraph.
     const ref = reference('tj-arrays').pages[0]!.units.find((unit) => unit.kind === 'page')!
-    const result = await analyzePdf(fixture('tj-arrays'), referenceLayouts('tj-arrays'))
+    const result = await analyzePdf(fixture('tj-arrays'), referenceLayouts('tj-arrays'), {
+      strict: true,
+    })
     const texts = result.units.find((unit) => unit.formPath === '')!.texts
     expect(texts.join('').replaceAll(' ', '')).toBe(ref.sstk.join('').replaceAll(' ', ''))
   })

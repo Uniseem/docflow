@@ -6,6 +6,7 @@ import {
   type PDFDict,
   type PDFDocument,
   type PDFFont,
+  type PDFPage,
   type PDFRef,
 } from '@cantoo/pdf-lib'
 import { ERROR_CODES, PermanentError } from '../../../shared/errors'
@@ -14,8 +15,15 @@ import { writeFileAtomic } from '../../settings/atomic-write'
 import { loadPdfLib } from '../load-pdf-lib'
 import { interpretPage } from '../pdf2zh/interp'
 import { lookupDict, pageSource } from '../pdf2zh/pages'
+import {
+  lineOps,
+  preprocessDocument,
+  renderPage,
+  type ReflowPage,
+  type ReflowParagraph,
+} from '../pdf2zh/reflow'
 import { needsTranslation, segmentId } from '../pdf2zh/segments'
-import { NOTO, TIRO, typesetUnit, type TypesetFonts } from '../pdf2zh/typeset'
+import { NOTO, TIRO, type TypesetFonts } from '../pdf2zh/typeset'
 import { buildDualPdf } from './dual'
 
 export type ComposeOutput = ComposeResult & { writtenPages: number[] }
@@ -24,9 +32,10 @@ type Warning = ComposeResult['warnings'][number]
 
 /**
  * pdf2zh translate_stream / translate_patch write-back: every page (and every form XObject it
- * interprets) becomes `q {ops_base}Q <cm> {ops_new}`, where ops_base is the stream without its
- * text and ops_new redraws all characters: translations typeset in tiro/noto, formulas and
- * kept text with their original fonts.
+ * interprets) becomes `q {ops_base}Q <inverse CTM> cm {ops_new}`, where ops_base is the stream
+ * without its text and ops_new redraws all characters: translations in tiro/noto, formulas
+ * with their original fonts. ops_new is laid out by BabelDOC's typesetting (pdf2zh/reflow.ts,
+ * ADR-0017) instead of pdf2zh's part C.
  */
 export async function composePdf(input: ComposeRequest): Promise<ComposeOutput> {
   const request = ComposeRequest.parse(input)
@@ -49,8 +58,44 @@ export async function composePdf(input: ComposeRequest): Promise<ComposeOutput> 
   let opsRemoved = 0
   let runsRedrawn = 0
   const writtenPages: number[] = []
-
   const pages = doc.getPages()
+
+  // Every paragraph's text first: BabelDOC fixes each paragraph's scale against the whole
+  // document before drawing any page.
+  const reflowPages: ReflowPage[] = pages.map((page) => ({ ...pageLimits(page), paragraphs: [] }))
+  const byUnit = new Map<string, ReflowParagraph[]>()
+  // verify looks for Chinese text on the pages that received a translation.
+  const translatedPages = new Set<number>()
+  for (const data of request.analysis.units) {
+    const reflowPage = reflowPages[data.page]
+    if (!reflowPage) continue
+    const paragraphs = data.texts.flatMap((original, index): ReflowParagraph[] => {
+      const para = data.paragraphs[index]
+      if (!para) return []
+      let text = original
+      if (needsTranslation(original)) {
+        const row = translations.get(segmentId(data, index))
+        if (row && !row.kept) {
+          paragraphsWritten += 1
+          translatedPages.add(data.page)
+          text = row.text
+        } else paragraphsKept += 1
+      }
+      const box = { x: para.x0, y: para.y0, x2: para.x1, y2: para.y1 }
+      return [{ para, formulas: data.formulas, text, stream: data.formPath, box }]
+    })
+    byUnit.set(data.id, paragraphs)
+    reflowPage.paragraphs.push(...paragraphs)
+    if (data.formulas.some((f) => f.chars.some((c) => !c.font))) {
+      warnings.push({
+        page: data.page,
+        code: 'font_unmapped',
+        message: 'some formula characters had no resource font and were not redrawn',
+      })
+    }
+  }
+  preprocessDocument(reflowPages, fonts)
+
   for (let pageIndex = 0; pageIndex < pages.length; pageIndex += 1) {
     const page = pages[pageIndex]!
     const source = pageSource(doc, page)
@@ -61,40 +106,36 @@ export async function composePdf(input: ComposeRequest): Promise<ComposeOutput> 
       source.getForm,
       source.resources,
     )
+    const reflowPage = reflowPages[pageIndex]!
+    renderPage(reflowPage, fonts)
+    const notFit = reflowPage.paragraphs.filter((p) => p.rendered === false).length
+    if (notFit > 0) {
+      warnings.push({
+        page: pageIndex,
+        code: 'paragraph_not_fit',
+        message: `${notFit} paragraph(s) did not fit at any scale and were not drawn`,
+      })
+    }
     let pageBytes: Uint8Array | undefined
-    // verify looks for Chinese text on the pages that received a translation.
-    let translatedHere = false
     for (const unit of interp.units) {
       const id = unit.formPath ? `${pageIndex}/${unit.formPath}` : String(pageIndex)
       const data = units.get(id)
-      const news = (data?.texts ?? []).map((text, index) => {
-        if (!data || !needsTranslation(text)) return text
-        const row = translations.get(segmentId(data, index))
-        if (row && !row.kept) {
-          paragraphsWritten += 1
-          translatedHere = true
-          return row.text
-        }
-        paragraphsKept += 1
-        return text
-      })
-      const unknownFonts = (data?.formulas ?? []).some((f) => f.chars.some((c) => !c.font))
-      if (unknownFonts) {
-        warnings.push({
-          page: pageIndex,
-          code: 'font_unmapped',
-          message: 'some formula characters had no resource font and were not redrawn',
-        })
-      }
-      const opsNew = data
-        ? typesetUnit(data, news, fonts)
-        : typesetUnit({ paragraphs: [], formulas: [], lines: [] }, [], fonts)
+      const opsNew =
+        (byUnit.get(id) ?? []).map((p) => p.ops ?? '').join('') +
+        (data?.lines ?? [])
+          .filter((l) => l.linewidth < 5)
+          .map(lineOps)
+          .join('')
       opsRemoved += unit.removed
       runsRedrawn += data?.formulas.length ?? 0
       if (!unit.formPath) {
-        // process_page: `q {ops_base}Q 1 0 0 1 {x0} {y0} cm {ops_new}`
-        const [x0, y0] = source.cropbox
-        pageBytes = concat('q ', unit.opsBase, `Q 1 0 0 1 ${num(x0)} ${num(y0)} cm ${opsNew}`)
+        // process_page writes `q {ops_base}Q 1 0 0 1 {x0} {y0} cm {ops_new}`, the inverse of
+        // the page CTM only without /Rotate; do_Do's inverse CTM also holds for rotated pages.
+        pageBytes = concat(
+          'q ',
+          unit.opsBase,
+          `Q ${inverse(source.ctm).map(num).join(' ')} cm ${opsNew}`,
+        )
         continue
       }
       const record = unit.handle ? source.forms.get(unit.handle) : undefined
@@ -110,7 +151,7 @@ export async function composePdf(input: ComposeRequest): Promise<ComposeOutput> 
     if (!pageBytes) continue
     mountFonts(doc, source.resources, tiro, noto, page.node)
     page.node.set(PDFName.of('Contents'), doc.context.register(doc.context.flateStream(pageBytes)))
-    if (translatedHere) writtenPages.push(pageIndex)
+    if (translatedPages.has(pageIndex)) writtenPages.push(pageIndex)
   }
   for (const patch of formPatches.values()) rewriteForm(doc, patch.ref, patch.dict, patch.bytes)
 
@@ -132,6 +173,21 @@ export async function composePdf(input: ComposeRequest): Promise<ComposeOutput> 
     warnings,
   })
   return { ...result, writtenPages }
+}
+
+/**
+ * get_max_right_space / get_max_bottom_space start from `cropbox.x2 * 0.9` and
+ * `cropbox.y * 1.1` in PDF user space; paragraphs are relative to the crop box. BabelDOC does
+ * not rotate pages, so a rotated page uses its displayed box from the origin.
+ */
+function pageLimits(page: PDFPage): { right: number; bottom: number } {
+  const crop = page.getCropBox()
+  const rotate = ((page.getRotation().angle % 360) + 360) % 360
+  if (rotate === 0) {
+    return { right: (crop.x + crop.width) * 0.9 - crop.x, bottom: crop.y * 1.1 - crop.y }
+  }
+  const width = rotate === 180 ? crop.width : crop.height
+  return { right: width * 0.9, bottom: 0 }
 }
 
 async function embedNoto(doc: PDFDocument, path: string): Promise<PDFFont> {

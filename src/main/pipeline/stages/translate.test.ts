@@ -24,9 +24,19 @@ test('a cache that cannot be written is logged once and translation carries on',
   const workDir = join(dir, 'work')
   // A directory where the cache file should go: every flush fails.
   await mkdir(join(workDir, 'translation-cache.json'), { recursive: true })
-  const para = { y: 700, x: 72, x0: 72, x1: 100, y0: 700, y1: 710, size: 10, brk: false }
+  const para = {
+    y: 700,
+    x: 72,
+    x0: 72,
+    x1: 100,
+    y0: 700,
+    y1: 710,
+    size: 10,
+    brk: false,
+    gstate: null,
+  }
   const analysis: AnalysisResult = {
-    version: 3,
+    version: 4,
     pages: 1,
     pageSizes: [[600, 800]],
     units: [

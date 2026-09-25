@@ -64,12 +64,16 @@ export const LtChar = z.object({
   y0: z.number(),
   x1: z.number(),
   y1: z.number(),
-  size: z.number(),
+  size: z.number(), // BabelDOC: the box width for a vertical font or matrix[0] == 0, else its height
   vertical: z.boolean(), // matrix[0] == 0 and matrix[3] == 0
+  angle: z.number(), // BabelDOC get_rotation_angle: degrees(atan2(matrix[1], matrix[0]))
   fontname: z.string(), // BaseFont
   font: z.string(), // resource name in the /Font dictionary of the stream that draws it
   code: z.number().int(),
   codeBytes: z.number().int(),
+  // BabelDOC passthrough_per_char_instruction: colour and graphics-state operators in effect
+  // when the glyph was shown, e.g. '/CS0 cs 0.2 0.3 0.4 sc'; '' when none were set.
+  gstate: z.string(),
 })
 export type LtChar = z.infer<typeof LtChar>
 
@@ -92,6 +96,9 @@ export const Pdf2zhParagraph = z.object({
   y1: z.number(),
   size: z.number(),
   brk: z.boolean(),
+  // BabelDOC _merge_styles over the paragraph's text characters: their common graphic state,
+  // or null when they differ (the translation is then drawn in the default colour).
+  gstate: z.string().nullable(),
 })
 export type Pdf2zhParagraph = z.infer<typeof Pdf2zhParagraph>
 
@@ -127,7 +134,7 @@ export const LayoutUnit = z.object({
 export type LayoutUnit = z.infer<typeof LayoutUnit>
 
 export const AnalysisResult = z.object({
-  version: z.literal(3),
+  version: z.literal(4),
   pages: z.number().int(),
   pageSizes: z.array(z.tuple([z.number(), z.number()])),
   units: z.array(LayoutUnit),
