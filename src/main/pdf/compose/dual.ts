@@ -136,14 +136,23 @@ async function show(
   prefix: string,
 ): Promise<{ dx: number; dy: number; upright: boolean }> {
   const crop = src.getCropBox()
+  const scale = Math.min(1, height / shown.height)
+  const offsetX = left + (shown.width - shown.width * scale) / 2
+  const offsetY = (height - shown.height * scale) / 2
+  const rotate = ((src.getRotation().angle % 360) + 360) % 360
+  // Destinations keep their coordinates only when the page is shown as it is.
+  const placed = {
+    dx: offsetX - crop.x,
+    dy: offsetY - crop.y,
+    upright: rotate === 0 && scale === 1,
+  }
+  // A page without /Contents is blank (and pdf-lib cannot embed it): nothing to draw.
+  if (!src.node.get(PDFName.of('Contents'))) return placed
   const embedded = await dual.embedPage(
     src,
     { left: crop.x, bottom: crop.y, right: crop.x + crop.width, top: crop.y + crop.height },
     [1, 0, 0, 1, 0, 0],
   )
-  const scale = Math.min(1, height / shown.height)
-  const offsetX = left + (shown.width - shown.width * scale) / 2
-  const offsetY = (height - shown.height * scale) / 2
   const m = multMatrix(shown.toDisplay, [scale, 0, 0, scale, offsetX, offsetY])
   const name = page.node.newXObject(prefix, embedded.ref)
   page.pushOperators(
@@ -152,9 +161,7 @@ async function show(
     drawObject(name),
     popGraphicsState(),
   )
-  const rotate = ((src.getRotation().angle % 360) + 360) % 360
-  // Destinations keep their coordinates only when the page is shown as it is.
-  return { dx: offsetX - crop.x, dy: offsetY - crop.y, upright: rotate === 0 && scale === 1 }
+  return placed
 }
 
 /** Keeps the given pages (sorted), deleting the rest; the outline loses what pointed there. */
