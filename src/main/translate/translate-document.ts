@@ -42,6 +42,14 @@ export function endsDocument(error: unknown): boolean {
   return error instanceof ProviderError && (error.kind === 'fatal' || error.kind === 'credential')
 }
 
+/** Progress within the translate stage: `fraction` of the whole stage, and the step's counts. */
+export type TranslateProgress = {
+  fraction: number
+  current: number
+  total: number
+  message: string
+}
+
 export type TranslateOptions = {
   minTextLength: number
   disableRichText: boolean
@@ -75,7 +83,7 @@ export async function translateDocument(input: {
   pools: TranslationPools
   cache: TranslationCache
   signal: AbortSignal
-  onProgress(done: number, total: number): void
+  onProgress(progress: TranslateProgress): void
   onEvent(event: EventInput): void
   /** Called once the automatic glossary is known, before translation starts (checkpoint). */
   onAutoGlossary?(glossary: Glossary | null): Promise<void>
@@ -132,7 +140,14 @@ export async function translateDocument(input: {
         onFatal,
         onBatchDone: (n) => {
           done += n
-          input.onProgress(Math.min(done, total), total * 2)
+          const current = Math.min(done, total)
+          // Term extraction is the first half of the stage.
+          input.onProgress({
+            fraction: current / Math.max(1, total) / 2,
+            current,
+            total,
+            message: `抽取术语 ${current} / ${total} 段`,
+          })
         },
         onError: () => {
           failures += 1
@@ -190,7 +205,12 @@ export async function translateDocument(input: {
       },
       onParagraphDone: () => {
         done += 1
-        input.onProgress(offset * planned + done, (offset + 1) * planned)
+        input.onProgress({
+          fraction: (offset + done / Math.max(1, planned)) / (offset + 1),
+          current: done,
+          total: planned,
+          message: `已翻译 ${done} / ${planned} 段`,
+        })
         input.onEvent({
           stage: 'translate',
           level: 'info',

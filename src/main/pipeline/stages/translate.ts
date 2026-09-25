@@ -13,7 +13,11 @@ import { Glossary, glossaryFromCsv, type GlossaryEntry } from '../../translate/b
 import { LANG_OUT } from '../../translate/babeldoc/prompts'
 import { cacheFingerprint, TranslationCache } from '../../translate/cache'
 import type { TranslationPools } from '../../translate/pool'
-import { translateDocument, type EventInput } from '../../translate/translate-document'
+import {
+  translateDocument,
+  type EventInput,
+  type TranslateProgress,
+} from '../../translate/translate-document'
 
 export type TranslateStageEvent = Pick<EventInput, 'level' | 'message' | 'detail'>
 
@@ -72,7 +76,7 @@ export async function translateStage(input: {
   pdf: PdfSettings
   glossaries: readonly GlossaryInfo[]
   signal: AbortSignal
-  onProgress: (done: number, total: number) => Promise<void>
+  onProgress: (progress: TranslateProgress) => Promise<void>
   onEvent: (event: TranslateStageEvent) => Promise<void>
 }): Promise<{
   translations: TranslatedParagraph[]
@@ -124,8 +128,8 @@ export async function translateStage(input: {
       pools: input.pools,
       cache,
       signal: input.signal,
-      onProgress: (done, total) => {
-        void input.onProgress(done, total)
+      onProgress: (progress) => {
+        void input.onProgress(progress)
       },
       onEvent: (event) => {
         // Progress rows come from onProgress (with the manifest update).

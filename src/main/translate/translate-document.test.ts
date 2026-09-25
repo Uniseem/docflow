@@ -114,6 +114,28 @@ describe('translateDocument against mock provider', () => {
     expect(stats.requests.openai ?? 0).toBe(0)
   })
 
+  test('term extraction is the first half of the progress, with its own wording', async () => {
+    const ctx = await setup()
+    servers.push(ctx.server)
+    const steps: Array<{ fraction: number; message: string }> = []
+    await translateDocument({
+      analysis: doc('Self-attention layers', 'Second paragraph'),
+      provider: ctx.config,
+      model: 'mock-chat',
+      runtime,
+      options: { ...options, autoExtractGlossary: true },
+      pools: ctx.pools,
+      cache: ctx.cache,
+      signal: new AbortController().signal,
+      onProgress: ({ fraction, message }) => steps.push({ fraction, message }),
+      onEvent: () => undefined,
+      hooks,
+    })
+    expect(steps.at(0)).toEqual({ fraction: 0.5, message: '抽取术语 2 / 2 段' })
+    expect(steps.slice(1).map((s) => s.message)).toEqual(['已翻译 1 / 2 段', '已翻译 2 / 2 段'])
+    expect(steps.slice(1).map((s) => s.fraction)).toEqual([0.75, 1])
+  })
+
   test('a refused batch falls back per paragraph; only the refused one keeps its original', async () => {
     const ctx = await setup()
     servers.push(ctx.server)

@@ -18,6 +18,7 @@ import type { DocumentManifest, ProcessingEvent, Stage } from '../../shared/type
 import type { DocumentLibrary } from '../library/library'
 import { sourcePath, workDir } from '../library/manifest'
 import { writeJsonAtomic } from '../settings/atomic-write'
+import type { TranslateProgress } from '../translate/translate-document'
 import { GLOSSARY_FILE } from './stages/translate'
 
 export type TranslateOutcome = {
@@ -59,7 +60,7 @@ export type PipelineHooks = {
     manifest: DocumentManifest
     workDir: string
     signal: AbortSignal
-    onProgress: (done: number, total: number) => Promise<void>
+    onProgress: (progress: TranslateProgress) => Promise<void>
   }) => Promise<TranslateOutcome>
   compose: (input: {
     sourcePath: string
@@ -238,16 +239,16 @@ export async function runPipeline(
     manifest: library.require(id),
     workDir: work,
     signal,
-    onProgress: async (done, total) => {
-      const progress = 30 + Math.round((done / Math.max(1, total)) * 49)
+    onProgress: async (step) => {
+      const progress = 30 + Math.round(Math.min(1, step.fraction) * 49)
       await emit(
         {
           stage: 'translate',
           level: 'info',
           progress,
-          current: done,
-          total,
-          message: `已翻译 ${done} / ${total} 段`,
+          current: step.current,
+          total: step.total,
+          message: step.message,
         },
         { stage: 'translate', progress },
       )
