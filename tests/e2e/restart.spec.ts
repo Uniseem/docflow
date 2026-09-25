@@ -14,12 +14,15 @@ import {
 
 test('翻译进行中关闭后重启会从断点继续', async ({ launch, dataDir, mockProvider }) => {
   // Slow, serial requests keep long.pdf in the translate stage for ~15 s.
+  // Layout detection of 60 pages takes minutes on a 2-core CI runner (worklog 2026-09-26).
+  test.setTimeout(600_000)
   await mockProvider.configure({ delayMs: 500, rateLimitEvery: 0 })
   const first = await launch()
   await configureMockProvider(first.page, { translation: SLOW_TRANSLATION })
   const id = await createDocument(first.page, fixture('long.pdf'))
   await waitForDocument(first.page, id, (doc) => doc.stage === 'translate' && doc.progress > 30, {
     what: '翻译中',
+    timeout: 420_000,
   })
   // Quit only after part of the translation reached the cache file, so the resumed run can
   // prove it did not pay for those paragraphs again.

@@ -14,6 +14,8 @@ import {
 
 test('取消后重新处理会命中缓存', async ({ launch, dataDir, mockProvider }) => {
   // Slow, serial requests keep long.pdf in the translate stage for ~15 s.
+  // Layout detection of 60 pages takes minutes on a 2-core CI runner (worklog 2026-09-26).
+  test.setTimeout(600_000)
   await mockProvider.configure({ delayMs: 500, rateLimitEvery: 0 })
   const { page } = await launch()
   await configureMockProvider(page, { translation: SLOW_TRANSLATION })
@@ -23,6 +25,7 @@ test('取消后重新处理会命中缓存', async ({ launch, dataDir, mockProvi
   // Cancel in the middle of the translate stage, once some translations are on disk.
   await waitForDocument(page, id, (doc) => doc.stage === 'translate' && doc.progress > 30, {
     what: '翻译中',
+    timeout: 420_000,
   })
   await expect.poll(() => cachedSegments(dataDir, id), { timeout: 20_000 }).toBeGreaterThan(0)
   await page.getByRole('button', { name: '取消处理…' }).click()
