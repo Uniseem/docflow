@@ -19,7 +19,9 @@ runtime and bundled dependencies shipped with DocFlow.
 
 The PDF processing is a TypeScript port of PDFMathTranslate (pdf2zh) 1.9.11
 (https://github.com/PDFMathTranslate/PDFMathTranslate, AGPL-3.0) and of the parts of
-pdfminer.six (MIT) it relies on.
+pdfminer.six (MIT) it relies on. Typesetting, translation prompts, glossaries, font
+selection, bilingual output and scanned-file detection are ported from BabelDOC 0.6.4
+(https://github.com/funstory-ai/BabelDOC, AGPL-3.0), the engine of PDFMathTranslate-next.
 
 - MuPDF.js (\`mupdf\`, Artifex Software, AGPL-3.0-or-later) — renders pages for the layout
   model. Its source is available at https://github.com/ArtifexSoftware/mupdf.js; DocFlow
@@ -30,7 +32,11 @@ pdfminer.six (MIT) it relies on.
 - pdf.js (\`pdfjs-dist\`, Apache-2.0)
 - pdf-lib / \`@cantoo/pdf-lib\` (MIT)
 - fontkit / \`@cantoo/fontkit\` (MIT)
-- Source Han Serif CN (Adobe, SIL Open Font License 1.1) — see \`resources/fonts/LICENSE-OFL.txt\`
+- gpt-tokenizer (MIT) with the o200k_base encoding (from OpenAI tiktoken, MIT) — token counts
+  for batching, as BabelDOC does with tiktoken
+- Fonts from BabelDOC-Assets, all under the SIL Open Font License 1.1 (see
+  \`resources/fonts/LICENSE-OFL.txt\`): Source Han Serif CN and Source Han Sans CN (Adobe),
+  Noto Serif, Noto Sans and Go Noto Kurrent (The Noto Project Authors), LXGW WenKai GB (LXGW)
 - Adobe Glyph List (BSD-3-Clause), as shipped in pdfminer.six
 
 `

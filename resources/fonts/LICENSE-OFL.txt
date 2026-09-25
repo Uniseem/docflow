@@ -1,6 +1,9 @@
-Copyright 2017-2024 Adobe (http://www.adobe.com/), with Reserved Font Name 'Source'.
+Source Han Serif CN: Copyright 2017-2024 Adobe (http://www.adobe.com/), with Reserved Font Name 'Source'.
+Source Han Sans CN: Copyright 2014-2021 Adobe (http://www.adobe.com/), with Reserved Font Name 'Source'.
+Noto Serif, Noto Sans, Go Noto Kurrent: Copyright 2022 The Noto Project Authors (https://github.com/notofonts/latin-greek-cyrillic).
+LXGW WenKai GB: Copyright 2022-2025 LXGW (https://github.com/lxgw/LxgwWenkaiGB); Copyright 2020 The Klee Project Authors (https://github.com/fontworks-fonts/Klee).
 
-This Font Software is licensed under the SIL Open Font License,
+These Font Software are licensed under the SIL Open Font License,
 Version 1.1.
 
 This license is copied below, and is also available with a FAQ at:
