@@ -120,6 +120,26 @@ describe('ILTranslatorLLMOnly batching', () => {
     expect(inputsOf(calls[0]!)).toEqual(['First page body two', 'Second page body one'])
   })
 
+  test('pages without paragraphs (outside a page range) are skipped', async () => {
+    // Pages 2 and 4 only: pages 0, 1 and 3 have nothing to translate.
+    const units = [
+      page([{ text: 'Third page body one' }, { text: 'Third page body two' }], 2),
+      page([{ text: 'Fifth page body one' }], 4),
+    ]
+    const { calls, llm } = fakeLlm()
+    const results = await translateParagraphs(
+      buildParagraphs(analysisOf(units, 5)),
+      options,
+      hooks(llm),
+    )
+    expect(results.size).toBe(3)
+    expect(calls.flatMap(inputsOf).sort()).toEqual([
+      'Fifth page body one',
+      'Third page body one',
+      'Third page body two',
+    ])
+  })
+
   test('a paragraph whose top is 20 pt above the previous one starts a new column', async () => {
     const units = [
       page([

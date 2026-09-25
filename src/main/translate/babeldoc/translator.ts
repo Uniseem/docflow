@@ -66,7 +66,8 @@ function snapshot(p: BdParagraph | undefined): TitleSnapshot | null {
 function byPage(paragraphs: readonly BdParagraph[]): BdParagraph[][] {
   const pages: BdParagraph[][] = []
   for (const p of paragraphs) (pages[p.page] ??= []).push(p)
-  return pages.map((page) => page ?? [])
+  // Array.from, not map: map skips the holes pages without paragraphs leave.
+  return Array.from(pages, (page) => page ?? [])
 }
 
 /** ILTranslatorLLMOnly.translate: plan the batches, run them, fall back paragraph by paragraph. */
