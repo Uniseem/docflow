@@ -9,7 +9,6 @@ import {
   NumberField,
   Radio,
   RadioGroup,
-  Slider,
   Switch,
   Tabs,
   TextArea,
@@ -381,12 +380,9 @@ function AdvancedPanel() {
   const view = useSettingsStore((s) => s.view)
   const update = useSettingsStore((s) => s.update)
   const [draft, setDraft] = useState<string | null>(null)
-  // Local value while the slider is dragged; committed to settings on change end.
-  const [scaleDraft, setScaleDraft] = useState<number | null>(null)
   if (!view) return null
   const prompt = draft ?? view.translation.systemPrompt
   const llm = view.translation.llm
-  const minFontScale = scaleDraft ?? view.pdf.minFontScale
   return (
     <div className="mx-auto flex max-w-2xl flex-col gap-4">
       <Card>
@@ -394,33 +390,6 @@ function AdvancedPanel() {
           <Card.Title>大模型请求</Card.Title>
         </Card.Header>
         <Card.Content className="grid gap-3">
-          <Num
-            label="每段最多字符"
-            value={llm.chunkChars}
-            min={100}
-            max={32000}
-            step={100}
-            onChange={(chunkChars) => void update({ translation: { llm: { chunkChars } } })}
-          />
-          <Num
-            label="单次请求最多段数"
-            value={llm.maxSegmentsPerRequest}
-            min={1}
-            max={64}
-            onChange={(maxSegmentsPerRequest) =>
-              void update({ translation: { llm: { maxSegmentsPerRequest } } })
-            }
-          />
-          <Num
-            label="单次请求最多字符"
-            value={llm.maxRequestChars}
-            min={500}
-            max={100000}
-            step={500}
-            onChange={(maxRequestChars) =>
-              void update({ translation: { llm: { maxRequestChars } } })
-            }
-          />
           <Num
             label="最大输出 tokens"
             value={llm.maxOutputTokens}
@@ -451,8 +420,9 @@ function AdvancedPanel() {
           <TextField aria-label="翻译提示词" value={prompt} onChange={setDraft}>
             <TextArea rows={8} className="font-mono" />
             <Description>
-              {prompt.length} /
-              12000。公式、代码、链接和排版标记由程序在本地保护，提示词无需说明这些规则。新任务使用新参数，进行中的任务保持提交时的设置。
+              {prompt.length} / 12000。每个段落单独发送这段提示词（与 PDFMathTranslate 相同），其中
+              $text 替换为段落原文，$lang_in、$lang_out 替换为 en、zh；段落里的 {'{v0}'}、{'{v1}'}…
+              是公式占位符，需要原样保留。新任务使用新提示词，进行中的任务保持提交时的设置。
             </Description>
           </TextField>
           <div className="flex gap-2">
@@ -476,33 +446,6 @@ function AdvancedPanel() {
           <Card.Title>PDF 写回</Card.Title>
         </Card.Header>
         <Card.Content className="flex flex-col gap-4">
-          <div>
-            <Slider
-              value={minFontScale}
-              minValue={0.4}
-              maxValue={1}
-              step={0.01}
-              onChange={(value) => {
-                const n = Array.isArray(value) ? value[0] : value
-                if (typeof n === 'number') setScaleDraft(n)
-              }}
-              onChangeEnd={(value) => {
-                const n = Array.isArray(value) ? value[0] : value
-                if (typeof n !== 'number') return
-                void update({ pdf: { minFontScale: n } }).then(() => setScaleDraft(null))
-              }}
-            >
-              <Label>译文最小缩放</Label>
-              <Slider.Output>{`${Math.round(minFontScale * 100)}%`}</Slider.Output>
-              <Slider.Track>
-                <Slider.Fill />
-                <Slider.Thumb />
-              </Slider.Track>
-            </Slider>
-            <p className="mt-1 text-xs text-foreground/60">
-              译文装不下时允许把字号缩小到原字号的这个比例
-            </p>
-          </div>
           <Switch
             isSelected={view.pdf.bilingual}
             onChange={(bilingual) => void update({ pdf: { bilingual } })}

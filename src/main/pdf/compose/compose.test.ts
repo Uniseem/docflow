@@ -1,213 +1,156 @@
-import { mkdtemp, readdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { PDFDict, PDFName } from '@cantoo/pdf-lib'
 import { describe, expect, test } from 'vitest'
+import { ERROR_CODES } from '../../../shared/errors'
+import type { AnalysisResult, TranslatedParagraph } from '../../../shared/pdf-types'
+import {
+  NOTO_FONT,
+  fixture,
+  fixturesDir,
+  referenceLayouts,
+} from '../../../../tests/unit/pdf2zh-reference'
 import { analyzePdf } from '../analyze'
 import { inspectPdf } from '../inspect'
-import { composePdf, defaultComposeOptions } from './index'
+import { loadPdfLib } from '../load-pdf-lib'
+import { openPdfDocument } from '../pdfjs'
+import { segmentsOf } from '../pdf2zh/segments'
 import { verifyPdf } from '../verify'
-import { ERROR_CODES } from '../../../shared/errors'
-import { contentBytesOf } from './streams'
-import {
-  PDFDocument,
-  PDFName,
-  StandardFonts,
-  beginText,
-  drawObject,
-  endText,
-  setFontAndSize,
-  setTextMatrix,
-  showText,
-} from '@cantoo/pdf-lib'
-import { loadPageGraph } from './resources'
-
-const fixtures = join(process.cwd(), 'tests/fixtures')
-const fonts = {
-  regular: join(process.cwd(), 'resources/fonts/NotoSansSC-Regular.otf'),
-  bold: join(process.cwd(), 'resources/fonts/NotoSansSC-Bold.otf'),
-}
+import { composePdf } from './index'
+import { streamBytes } from './streams'
 
 const ERROR_FILES: Record<string, string> = {
-  'encrypted.pdf': ERROR_CODES.pdf_encrypted,
-  'scanned.pdf': ERROR_CODES.scanned_pdf,
-  'empty.pdf': ERROR_CODES.pdf_empty,
-  'invisible-text.pdf': ERROR_CODES.scanned_pdf,
+  encrypted: ERROR_CODES.pdf_encrypted,
+  scanned: ERROR_CODES.scanned_pdf,
+  empty: ERROR_CODES.pdf_empty,
+  'invisible-text': ERROR_CODES.scanned_pdf,
 }
 
-describe('pdf compose integration', () => {
+/** Chinese stand-in for a translation that keeps the {vN} markers in place. */
+function fakeTranslations(analysis: AnalysisResult): TranslatedParagraph[] {
+  return segmentsOf(analysis).map((segment) => ({
+    id: segment.id,
+    text: segment.text.replace(/[A-Za-z]+/g, '译文'),
+    kept: false,
+  }))
+}
+
+async function pageText(path: string): Promise<string[]> {
+  const doc = await openPdfDocument(await readFile(path))
+  const out: string[] = []
+  for (let i = 1; i <= doc.numPages; i += 1) {
+    const content = await (await doc.getPage(i)).getTextContent()
+    out.push(content.items.map((item) => ('str' in item ? item.str : '')).join(''))
+  }
+  await doc.cleanup()
+  return out
+}
+
+async function compose(name: string) {
+  const sourcePath = fixture(name)
+  const analysis = await analyzePdf(sourcePath, referenceLayouts(name))
+  const dir = await mkdtemp(join(tmpdir(), 'df-compose-'))
+  const result = await composePdf({
+    sourcePath,
+    monoPath: join(dir, 'mono.pdf'),
+    dualPath: join(dir, 'dual.pdf'),
+    analysis,
+    translations: fakeTranslations(analysis),
+    fonts: { noto: NOTO_FONT },
+  })
+  return { analysis, result, mono: join(dir, 'mono.pdf'), dual: join(dir, 'dual.pdf') }
+}
+
+describe('composePdf (pdf2zh write-back)', () => {
   test('inspect error fixtures keep their codes', async () => {
     for (const [name, code] of Object.entries(ERROR_FILES)) {
-      await expect(inspectPdf(join(fixtures, name))).rejects.toMatchObject({ code })
+      await expect(inspectPdf(join(fixturesDir, `${name}.pdf`))).rejects.toMatchObject({ code })
     }
   })
 
-  test('fake-translate compose+verify for synthetic fixtures', async () => {
-    const names = (await readdir(fixtures)).filter(
-      (name) =>
-        name.endsWith('.pdf') &&
-        !name.startsWith('arxiv-') &&
-        !ERROR_FILES[name] &&
-        name !== 'long.pdf',
-    )
-    const dir = await mkdtemp(join(tmpdir(), 'df-compose-'))
-    for (const name of names) {
-      const sourcePath = join(fixtures, name)
-      const analysis = await analyzePdf(sourcePath)
-      const translations = analysis.paragraphs.map((para) => ({
-        id: para.id,
-        text: para.translatable ? `译${para.text}` : para.text,
-        kept: !para.translatable,
-      }))
-      const monoPath = join(dir, `${name}.zh.pdf`)
-      const dualPath = join(dir, `${name}.dual.pdf`)
-      const result = await composePdf({
-        sourcePath,
-        monoPath,
-        dualPath,
-        analysis,
-        translations,
-        fonts,
-        options: defaultComposeOptions(),
-      })
-      expect(result.monoBytes, name).toBeGreaterThan(1024)
-      expect(result.dualBytes, name).toBeGreaterThan(1024)
-      if (analysis.stats.translatable > 0) {
-        expect(result.paragraphsWritten, `${name} written`).toBeGreaterThan(0)
-        expect(result.writtenPages.length, `${name} pages`).toBeGreaterThan(0)
-        expect(
-          result.warnings.filter((w) => w.code === 'page_skipped'),
-          `${name} page_skipped`,
-        ).toHaveLength(0)
-      }
+  test.each(['single-column', 'two-column', 'inline-formula', 'display-math', 'colored-text'])(
+    '%s: the original text is gone, translations and formulas are drawn',
+    { timeout: 60_000 },
+    async (name) => {
+      const { analysis, result, mono, dual } = await compose(name)
+      expect(result.paragraphsWritten).toBe(analysis.stats.translatable)
+      expect(result.opsRemoved).toBeGreaterThan(0)
+      const text = (await pageText(mono)).join('\n')
+      // Every translated paragraph was redrawn as 译文; only formula characters stay Latin.
+      const formulaText = analysis.units
+        .flatMap((unit) => unit.formulas.flatMap((f) => f.chars.map((c) => c.text)))
+        .join('')
+      const leftover = (text.match(/[A-Za-z]{4,}/g) ?? []).filter(
+        (word) => !formulaText.includes(word),
+      )
+      expect(leftover).toEqual([])
+      expect(text).toContain('译文')
       const verified = await verifyPdf({
-        monoPath,
-        dualPath,
+        monoPath: mono,
+        dualPath: dual,
         pages: analysis.pages,
         writtenPages: result.writtenPages,
       })
-      expect(verified.monoPages, name).toBe(analysis.pages)
-      expect(verified.dualPages, name).toBe(analysis.pages * 2)
-      expect(verified.translatedPagesWithoutCjk, name).toEqual([])
+      expect(verified.dualPages).toBe(analysis.pages * 2)
+      expect(verified.translatedPagesWithoutCjk).toEqual([])
+    },
+  )
 
-      const source = await PDFDocument.load(await readFile(sourcePath), { ignoreEncryption: true })
-      const mono = await PDFDocument.load(await readFile(monoPath), { ignoreEncryption: true })
-      const keptParas = analysis.paragraphs.filter(
-        (p) => !p.translatable && p.text.trim().length > 4,
-      )
-      const sample = keptParas[0]
-      if (sample && sample.formPath === '') {
-        const original = Buffer.from(contentBytesOf(source.getPages()[sample.page]!)).toString(
-          'latin1',
-        )
-        const rewritten = Buffer.from(contentBytesOf(mono.getPages()[sample.page]!)).toString(
-          'latin1',
-        )
-        const snippet = sample.text.slice(0, 8)
-        if (original.includes(snippet.split(' ')[0] ?? '')) {
-          expect(rewritten.length, name).toBeGreaterThan(10)
-        }
-      }
+  test('page contents are q {ops_base}Q 1 0 0 1 x0 y0 cm BT … ET with tiro and noto mounted', async () => {
+    const { mono } = await compose('single-column')
+    const doc = await loadPdfLib(await readFile(mono))
+    for (const page of doc.getPages()) {
+      // The stream as written (pdf-lib's normalize() would wrap it in another q/Q).
+      const content = Buffer.from(
+        streamBytes(doc.context.lookup(page.node.get(PDFName.of('Contents')))),
+      ).toString('latin1')
+      expect(content.startsWith('q ')).toBe(true)
+      expect(content).toMatch(/Q 1 0 0 1 [-\d.]+ [-\d.]+ cm BT /)
+      expect(content.trimEnd().endsWith('ET')).toBe(true)
+      // Only the redraw draws text: Tf appears after the base stream's closing Q.
+      const base = content.slice(0, content.search(/Q 1 0 0 1 [-\d.]+ [-\d.]+ cm BT /))
+      expect(base).not.toMatch(/\bT[jJ]\b/)
+      const fonts = page.node.Resources()?.lookup(PDFName.of('Font'), PDFDict)
+      expect(fonts?.has(PDFName.of('tiro'))).toBe(true)
+      expect(fonts?.has(PDFName.of('noto'))).toBe(true)
     }
-  }, 120_000)
+  })
 
-  test('long fixture compose+dual+verify is within 30s for 30 pages worth', async () => {
-    const sourcePath = join(fixtures, 'long.pdf')
-    const analysis = await analyzePdf(sourcePath)
-    const dir = await mkdtemp(join(tmpdir(), 'df-long-'))
+  test('a form XObject is rewritten in its own stream through the inverse CTM', async () => {
+    const { mono } = await compose('form-wrapped')
+    const doc = await loadPdfLib(await readFile(mono))
+    const xobjects = doc.getPages()[0]!.node.Resources()?.lookup(PDFName.of('XObject'), PDFDict)
+    const [, ref] = [...(xobjects?.entries() ?? [])][0]!
+    const form = Buffer.from(streamBytes(doc.context.lookup(ref))).toString('latin1')
+    // do_Do: `q {ops_base}Q a b c d e f cm {ops_new}`
+    expect(form).toMatch(/^q .*Q [-\d.e]+ [-\d.e]+ [-\d.e]+ [-\d.e]+ [-\d.e]+ [-\d.e]+ cm BT /s)
+    const base = form.slice(0, form.lastIndexOf(' cm BT '))
+    expect(base).not.toMatch(/\bT[jJ]\b/)
+  })
+
+  test('shared form: body text translated, the form redrawn as pdf2zh keeps it', async () => {
+    const { analysis, result, mono } = await compose('shared-form')
+    expect(result.writtenPages).toEqual([0, 1])
+    const formulaText = analysis.units
+      .flatMap((unit) => unit.formulas.flatMap((f) => f.chars.map((c) => c.text)))
+      .join('')
+    for (const page of await pageText(mono)) {
+      const words = page.match(/[A-Za-z]{4,}/g) ?? []
+      expect(words.filter((word) => !formulaText.includes(word))).toEqual([])
+    }
+  })
+
+  test('long fixture compose+dual+verify stays within 30 s', { timeout: 120_000 }, async () => {
     const started = Date.now()
-    const result = await composePdf({
-      sourcePath,
-      monoPath: join(dir, 'mono.pdf'),
-      dualPath: join(dir, 'dual.pdf'),
-      analysis,
-      translations: analysis.paragraphs.map((para) => ({
-        id: para.id,
-        text: para.translatable ? `译${para.text}` : para.text,
-        kept: !para.translatable,
-      })),
-      fonts,
-      options: defaultComposeOptions(),
-    })
-    await verifyPdf({
-      monoPath: join(dir, 'mono.pdf'),
-      dualPath: join(dir, 'dual.pdf'),
+    const { analysis, result, mono, dual } = await compose('long')
+    const verified = await verifyPdf({
+      monoPath: mono,
+      dualPath: dual,
       pages: analysis.pages,
       writtenPages: result.writtenPages,
     })
-    expect(result.paragraphsWritten).toBeGreaterThan(10)
-    expect(result.writtenPages.length).toBeGreaterThan(10)
-    const elapsed = Date.now() - started
-    expect(elapsed, `compose+dual+verify ${elapsed}ms`).toBeLessThan(30_000)
-  }, 60_000)
-
-  test('keeps paragraphs nested inside a shared form untouched', async () => {
-    const doc = await PDFDocument.create()
-    const font = await doc.embedFont(StandardFonts.TimesRoman)
-    const nestedText = 'Nested text inside a shared form must stay the same on every page.'
-    const inner = doc.context.formXObject(
-      [
-        beginText(),
-        setFontAndSize('F1', 10),
-        setTextMatrix(1, 0, 0, 1, 72, 600),
-        showText(font.encodeText(nestedText)),
-        endText(),
-      ],
-      { BBox: [0, 0, 612, 792], Matrix: [1, 0, 0, 1, 0, 0], Resources: { Font: { F1: font.ref } } },
-    )
-    const innerRef = doc.context.register(inner)
-    const outer = doc.context.formXObject([drawObject('Inner')], {
-      BBox: [0, 0, 612, 792],
-      Matrix: [1, 0, 0, 1, 0, 0],
-      Resources: { XObject: { Inner: innerRef } },
-    })
-    const outerRef = doc.context.register(outer)
-    for (let i = 0; i < 2; i += 1) {
-      const page = doc.addPage([612, 792])
-      page.node.setXObject(PDFName.of('Shared'), outerRef)
-      page.pushOperators(drawObject('Shared'))
-      page.drawText(`Body text of page ${i + 1} explains the method in a single line.`, {
-        x: 72,
-        y: 700,
-        size: 10,
-        font,
-      })
-    }
-    const dir = await mkdtemp(join(tmpdir(), 'df-nested-shared-'))
-    const sourcePath = join(dir, 'nested-shared.pdf')
-    await writeFile(sourcePath, await doc.save())
-
-    const analysis = await analyzePdf(sourcePath)
-    expect(analysis.forms.filter((f) => f.shared).map((f) => f.formPath)).toEqual(['1', '1'])
-    // Text inside the shared form's children is not sent for translation either.
-    expect(
-      analysis.paragraphs.filter((p) => p.formPath.startsWith('1/') && p.translatable),
-    ).toEqual([])
-    const result = await composePdf({
-      sourcePath,
-      monoPath: join(dir, 'mono.pdf'),
-      dualPath: null,
-      analysis,
-      translations: analysis.paragraphs.map((para) => ({
-        id: para.id,
-        text: `译${para.text}`,
-        kept: !para.translatable,
-      })),
-      fonts,
-      options: defaultComposeOptions(),
-    })
-    const codes = result.warnings.map((w) => w.code)
-    expect(codes).not.toContain('page_skipped')
-    expect(codes).not.toContain('op_mismatch')
-    expect(result.writtenPages).toEqual([0, 1])
-
-    const innerContent = async (path: string) => {
-      const pdf = await PDFDocument.load(await readFile(path))
-      const graph = loadPageGraph(pdf, pdf.getPages()[0]!)
-      const form = graph.getForm('Shared')?.getForm?.('Inner')
-      return Buffer.from(form?.content ?? new Uint8Array()).toString('latin1')
-    }
-    const before = await innerContent(sourcePath)
-    expect(before).toContain('Tj')
-    expect(await innerContent(join(dir, 'mono.pdf'))).toBe(before)
-  }, 30_000)
+    expect(verified.monoPages).toBe(analysis.pages)
+    expect(Date.now() - started).toBeLessThan(30_000)
+  })
 })

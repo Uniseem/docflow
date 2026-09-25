@@ -94,32 +94,60 @@ describe('translateDocument against mock provider', () => {
     expect(stats.requests.openai ?? 0).toBe(0)
   })
 
-  test('DROP_ME falls back to per-segment and DAMAGE is repaired', async () => {
-    const ctx = await setup()
-    servers.push(ctx.server)
-    const events: string[] = []
+  test("each paragraph is its own request carrying pdf2zh's prompt", async () => {
+    const bodies: Array<Record<string, unknown>> = []
+    const pools = new TranslationPools(
+      (_url, init) => {
+        bodies.push(
+          JSON.parse(typeof init?.body === 'string' ? init.body : '{}') as Record<string, unknown>,
+        )
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              choices: [
+                {
+                  message: { content: '<think>plan</think>\n\n  你好 {v0} ' },
+                  finish_reason: 'stop',
+                },
+              ],
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          ),
+        )
+      },
+      () => 'test-key',
+    )
+    const dir = await mkdtemp(join(tmpdir(), 'df-prompt-'))
+    const config = provider('https://provider.example.com')
     const result = await translateDocument({
       segments: [
-        { id: 'a', text: 'keep me' },
-        { id: 'b', text: 'DROP_ME please' },
-        { id: 'c', text: 'DAMAGE_MARKERS see {v1}' },
+        { id: 'a', text: 'Hello {v0}' },
+        { id: 'b', text: 'World' },
       ],
-      provider: ctx.config,
+      provider: config,
       model: 'mock-chat',
-      runtime: {
-        ...runtime,
-        llm: { ...runtime.llm, maxSegmentsPerRequest: 8, maxRequestChars: 8000 },
-      },
-      pools: ctx.pools,
-      cache: ctx.cache,
+      runtime,
+      pools,
+      cache: new TranslationCache(
+        join(dir, 'c.json'),
+        cacheFingerprint(config, 'mock-chat', runtime),
+      ),
       signal: new AbortController().signal,
       onProgress: () => undefined,
-      onEvent: (event) => events.push(event.message),
+      onEvent: () => undefined,
       hooks,
     })
-    expect(events.some((message) => message.includes('改为逐段翻译'))).toBe(true)
-    expect(result.results.find((row) => row.id === 'b')?.text).toContain(MOCK_MARK)
-    expect(result.results.find((row) => row.id === 'c')?.text).toContain('{v1}')
+    expect(bodies).toHaveLength(2)
+    const messages = bodies.map((body) => body.messages)
+    expect(messages).toContainEqual([
+      {
+        role: 'user',
+        content:
+          'You are a professional, authentic machine translation engine. Only Output the translated text, do not include any other text.\n\nTranslate the following markdown source text to zh. Keep the formula notation {v*} unchanged. Output translation directly without any additional text.\n\nSource Text: Hello {v0}\n\nTranslated Text:',
+      },
+    ])
+    // strip, think filter, strip (OpenAITranslator.do_translate)
+    expect(result.results[0]).toEqual({ id: 'a', text: '你好 {v0}', kept: false })
   })
 
   test('REFUSE keeps original; mostly_untranslated when enough chars are kept', async () => {
@@ -239,13 +267,6 @@ describe('submit retry ladder (injected fetch)', () => {
     return { config, cache, pools: new TranslationPools(fetchFn, () => 'test-key') }
   }
 
-  function okReply(text: string): Response {
-    return new Response(
-      JSON.stringify({ choices: [{ message: { content: text }, finish_reason: 'stop' }] }),
-      { status: 200, headers: { 'content-type': 'application/json' } },
-    )
-  }
-
   test('a provider that stays unavailable fails the document retryably after one exhausted request', async () => {
     let requests = 0
     const ctx = await offline(() => {
@@ -275,7 +296,7 @@ describe('submit retry ladder (injected fetch)', () => {
     )
   })
 
-  test('an exhausted batch stops the other batches of the document', async () => {
+  test('an exhausted request stops the other requests of the document', async () => {
     let slowSignal: AbortSignal | undefined
     const ctx = await offline((_url, init) => {
       const body = typeof init?.body === 'string' ? init.body : ''
@@ -297,7 +318,7 @@ describe('submit retry ladder (injected fetch)', () => {
         ],
         provider: ctx.config,
         model: 'mock-chat',
-        runtime: { ...runtime, llm: { ...runtime.llm, maxSegmentsPerRequest: 1 } },
+        runtime,
         pools: ctx.pools,
         cache: ctx.cache,
         signal: new AbortController().signal,
@@ -309,14 +330,14 @@ describe('submit retry ladder (injected fetch)', () => {
     expect(slowSignal?.aborted).toBe(true)
   })
 
-  test('non-retryable errors skip the back-off and go straight to the ladder', async () => {
+  test('a non-retryable error keeps that paragraph without a back-off', async () => {
     let requests = 0
     const ctx = await offline(() => {
       requests += 1
-      if (requests === 1) return Promise.resolve(new Response('too large', { status: 413 }))
-      return Promise.resolve(okReply('你好'))
+      return Promise.resolve(new Response('too large', { status: 413 }))
     })
     const delays: number[] = []
+    const events: string[] = []
     const result = await translateDocument({
       segments: [{ id: 'a', text: 'Hello' }],
       provider: ctx.config,
@@ -326,7 +347,7 @@ describe('submit retry ladder (injected fetch)', () => {
       cache: ctx.cache,
       signal: new AbortController().signal,
       onProgress: () => undefined,
-      onEvent: () => undefined,
+      onEvent: (event) => events.push(event.message),
       hooks: {
         delay: (ms) => {
           delays.push(ms)
@@ -335,8 +356,9 @@ describe('submit retry ladder (injected fetch)', () => {
         jitterMs: () => 0,
       },
     })
-    expect(result.results[0]).toMatchObject({ text: '你好', kept: false })
+    expect(result.results[0]).toEqual({ id: 'a', text: 'Hello', kept: true })
+    expect(events).toContain('第 1 段翻译失败，已保留原文')
     expect(delays).toEqual([])
-    expect(requests).toBe(2)
+    expect(requests).toBe(1)
   })
 })

@@ -1,29 +1,10 @@
-import {
-  ISOLATED_FRAGMENT_CHARS,
-  MIN_FRAGMENT_CHARS,
-  REJECTED_STREAK_LIMIT,
-  REPAIR_PARALLELISM,
-  RETRY_NOTICES,
-  SPLIT_MIN_CHARS,
-  SUBMIT_ATTEMPTS,
-} from '../../shared/constants'
+import { REJECTED_STREAK_LIMIT, RETRY_NOTICES, SUBMIT_ATTEMPTS } from '../../shared/constants'
 import { ERROR_CODES, UserError } from '../../shared/errors'
 import type { ProviderConfig, TranslationRuntime } from '../../shared/types'
-import {
-  buildSystemPrompt,
-  buildUserMessage,
-  charCount,
-  parseBatch,
-  planBatches,
-  smartSplit,
-  type MarkerMode,
-  type Segment,
-} from './batch'
 import type { TranslationCache } from './cache'
 import { ProviderError, RetriesExhaustedError } from './errors'
-import { protectTexts } from './protect'
+import { cleanReply, pdf2zhPrompt } from './pdf2zh-prompt'
 import type { TranslationPools } from './pool'
-import { checkReply, type ReplyCheck } from './validate'
 
 export type EventInput = {
   stage: 'translate'
@@ -35,6 +16,8 @@ export type EventInput = {
   total?: number
 }
 
+export type Segment = { id: string; text: string }
+
 export type TranslatedParagraph = { id: string; text: string; kept: boolean }
 
 export type TranslateHooks = {
@@ -42,8 +25,6 @@ export type TranslateHooks = {
   delay?: (ms: number, signal?: AbortSignal) => Promise<void>
   jitterMs?: () => number
 }
-
-const HAS_LETTER = /\p{L}/u
 
 export function createLimit(max: number): <T>(fn: () => Promise<T>) => Promise<T> {
   let active = 0
@@ -69,15 +50,23 @@ function throwIfAborted(signal: AbortSignal): void {
 }
 
 /**
- * Errors the retry ladder must pass up instead of keeping the original text: cancellation and
- * the rejected streak (`UserError`), a bad key or model, and a provider that stayed
- * unavailable through every `submit()` attempt.
+ * Errors that end the document instead of keeping one paragraph's original text:
+ * cancellation and the rejected streak (`UserError`), a bad key or model, and a provider that
+ * stayed unavailable through every `submit()` attempt.
  */
 function endsDocument(error: unknown): boolean {
   if (error instanceof UserError || error instanceof RetriesExhaustedError) return true
   return error instanceof ProviderError && (error.kind === 'fatal' || error.kind === 'credential')
 }
 
+function charCount(text: string): number {
+  return [...text].length
+}
+
+/**
+ * pdf2zh converter part "B. 段落翻译": every paragraph string goes to the translator on its
+ * own, with pdf2zh's prompt as the only (user) message; the reply is used as it is.
+ */
 export async function translateDocument(input: {
   segments: Segment[]
   provider: ProviderConfig
@@ -98,8 +87,7 @@ export async function translateDocument(input: {
   const total = input.segments.length
   const totalChars = input.segments.reduce((sum, segment) => sum + charCount(segment.text), 0)
   const usage = { input: 0, output: 0 }
-  const indexOf = new Map(input.segments.map((segment, index) => [segment.id, index + 1]))
-  // The first error that ends the document also stops the batches still running.
+  // The first error that ends the document also stops the requests still running.
   const stop = new AbortController()
   const ctx: TranslateContext = {
     ...input,
@@ -107,33 +95,37 @@ export async function translateDocument(input: {
     usage,
     rejected: 0,
     notices: 0,
-    indexOf,
     delay: input.hooks?.delay ?? defaultDelay,
     jitterMs: input.hooks?.jitterMs ?? defaultJitter,
   }
-  const batches = planBatches(input.segments, input.runtime)
-  const translated = new Map<string, TranslatedParagraph>()
   const limit = createLimit(input.runtime.perDocumentConcurrency)
+  const results = new Map<string, TranslatedParagraph>()
   let done = 0
+  let cacheHits = 0
   let failure: { error: unknown } | undefined
 
   await Promise.all(
-    batches.map((batch) =>
+    input.segments.map((segment, index) =>
       limit(async () => {
         throwIfAborted(ctx.signal)
-        const results = await translateBatch(batch, ctx)
-        for (const result of results) {
-          translated.set(result.id, result)
-          done += 1
-          input.onProgress(done, total)
-          input.onEvent({
-            stage: 'translate',
-            level: 'info',
-            message: `已翻译 ${done} / ${total} 段`,
-            current: done,
-            total,
-          })
+        const hit = ctx.cache.get(segment.text)
+        let result: TranslatedParagraph
+        if (hit !== undefined) {
+          cacheHits += 1
+          result = { id: segment.id, text: hit, kept: false }
+        } else {
+          result = await translateSegment(segment, index + 1, ctx)
         }
+        results.set(segment.id, result)
+        done += 1
+        input.onProgress(done, total)
+        input.onEvent({
+          stage: 'translate',
+          level: 'info',
+          message: `已翻译 ${done} / ${total} 段`,
+          current: done,
+          total,
+        })
       }).catch((error: unknown) => {
         failure ??= { error }
         stop.abort()
@@ -141,30 +133,25 @@ export async function translateDocument(input: {
       }),
     ),
   ).catch(() => {
-    // The batches stopped by `stop` reject with a cancellation: report the error that ended
-    // the document.
+    // Requests stopped by `stop` reject with a cancellation: report the error that ended the
+    // document.
     throw failure?.error
   })
+  if (cacheHits > 0) {
+    input.onEvent({ stage: 'translate', level: 'info', message: `缓存命中 ${cacheHits} 段` })
+  }
 
-  const results: TranslatedParagraph[] = input.segments.map((segment) => {
-    const parts = [...translated.entries()]
-      .filter(([id]) => id === segment.id || id.startsWith(`${segment.id}#`))
-      .sort(([a], [b]) => a.localeCompare(b, undefined, { numeric: true }))
-    if (parts.length === 0) return { id: segment.id, text: segment.text, kept: true }
-    return {
-      id: segment.id,
-      text: parts.map(([, value]) => value.text).join(''),
-      kept: parts.every(([, value]) => value.kept),
-    }
-  })
-  const keptChars = results.reduce(
+  const ordered = input.segments.map(
+    (segment) => results.get(segment.id) ?? { id: segment.id, text: segment.text, kept: true },
+  )
+  const keptChars = ordered.reduce(
     (sum, result, index) => sum + (result.kept ? charCount(input.segments[index]?.text ?? '') : 0),
     0,
   )
   if (keptChars > 400 && keptChars * 5 > totalChars) {
     throw new UserError(ERROR_CODES.mostly_untranslated)
   }
-  return { results, keptChars, totalChars, usage }
+  return { results: ordered, keptChars, totalChars, usage }
 }
 
 type TranslateContext = {
@@ -178,308 +165,43 @@ type TranslateContext = {
   usage: { input: number; output: number }
   rejected: number
   notices: number
-  indexOf: Map<string, number>
   delay: (ms: number, signal?: AbortSignal) => Promise<void>
   jitterMs: () => number
 }
 
-async function translateBatch(
-  batch: Segment[],
-  ctx: TranslateContext,
-): Promise<TranslatedParagraph[]> {
-  if (batch.length === 1 && batch[0] && batch[0].text.trim() === '') {
-    return [{ id: batch[0].id, text: batch[0].text, kept: false }]
-  }
-  const cached: TranslatedParagraph[] = []
-  const pending: Segment[] = []
-  for (const member of batch) {
-    const hit = ctx.cache.get(member.text)
-    if (hit) cached.push({ id: member.id, text: hit, kept: false })
-    else pending.push(member)
-  }
-  if (cached.length > 0) {
-    ctx.onEvent({
-      stage: 'translate',
-      level: 'info',
-      message: `缓存命中 ${cached.length} 段`,
-    })
-  }
-  if (pending.length === 0) return cached
-  try {
-    const got = await requestMembers(pending, 'standard', ctx)
-    const missing: Segment[] = []
-    const done: TranslatedParagraph[] = [...cached]
-    for (const member of pending) {
-      const check = got.get(member.id)
-      if (check?.ok) {
-        done.push({ id: member.id, text: check.text, kept: false })
-        ctx.cache.set(member.text, check.text)
-      } else missing.push(member)
-    }
-    if (missing.length > 0) {
-      if (pending.length > 1) {
-        ctx.onEvent({
-          stage: 'translate',
-          level: 'warning',
-          message: '批量请求未完成，改为逐段翻译',
-        })
-      }
-      const limit = createLimit(REPAIR_PARALLELISM)
-      const repaired = await Promise.all(
-        missing.map((member) => limit(() => translateSegment(member, ctx))),
-      )
-      done.push(...repaired)
-    }
-    return done
-  } catch (error) {
-    if (endsDocument(error)) throw error
-    const limit = createLimit(REPAIR_PARALLELISM)
-    const repaired = await Promise.all(
-      pending.map((member) => limit(() => translateSegment(member, ctx))),
-    )
-    return [...cached, ...repaired]
-  }
-}
-
-async function requestMembers(
-  members: Segment[],
-  mode: MarkerMode,
-  ctx: TranslateContext,
-): Promise<Map<string, ReplyCheck>> {
-  const protection = protectTexts(members.map((member) => member.text))
-  const protectedMembers = members.map((member, index) => ({
-    id: member.id,
-    text: protection.texts[index] ?? member.text,
-  }))
-  const multi = protectedMembers.length > 1
-  const reply = await submit(
-    {
-      model: ctx.model,
-      system: buildSystemPrompt(ctx.runtime.systemPrompt, mode, multi),
-      user: buildUserMessage(protectedMembers),
-      ...(ctx.runtime.llm.maxOutputTokens > 0
-        ? { maxTokens: ctx.runtime.llm.maxOutputTokens }
-        : {}),
-    },
-    ctx,
-  )
-  const parsed = multi ? parseBatch(reply.text) : new Map([[members[0]?.id ?? '', reply.text]])
-  const out = new Map<string, ReplyCheck>()
-  for (const member of members) {
-    const raw = parsed.get(member.id)
-    if (raw === undefined) continue
-    const tokens = tokenSubset(protection, member.text, members.indexOf(member))
-    out.set(
-      member.id,
-      checkReply({
-        text: raw,
-        finish: reply.finish,
-        source: member.text,
-        tokens: tokens.tokens,
-        originals: tokens.originals,
-        mode,
-      }),
-    )
-  }
-  return out
-}
-
-function tokenSubset(
-  protection: ReturnType<typeof protectTexts>,
-  source: string,
-  index: number,
-): { tokens: string[]; originals: Map<string, string> } {
-  const text = protection.texts[index] ?? source
-  const tokens = protection.tokens.filter((token) => text.includes(token))
-  const originals = new Map<string, string>()
-  for (const token of tokens) {
-    const original = protection.originals.get(token)
-    if (original) originals.set(token, original)
-  }
-  return { tokens, originals }
-}
-
 async function translateSegment(
-  segment: Segment,
-  ctx: TranslateContext,
-): Promise<TranslatedParagraph> {
-  const cached = ctx.cache.get(segment.text)
-  if (cached) return { id: segment.id, text: cached, kept: false }
-  const n = ctx.indexOf.get(parentSegmentId(segment.id)) ?? 1
-  let mode: MarkerMode = 'standard'
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    throwIfAborted(ctx.signal)
-    try {
-      const got = await requestMembers([segment], mode, ctx)
-      const check = got.get(segment.id)
-      if (check?.ok) {
-        ctx.cache.set(segment.text, check.text)
-        return { id: segment.id, text: check.text, kept: false }
-      }
-      if (check?.kind === 'invalid' && mode === 'standard') {
-        mode = 'strict'
-        continue
-      }
-      if (check?.kind === 'empty') continue
-      break
-    } catch (error) {
-      if (endsDocument(error)) throw error
-      break
-    }
-  }
-  if (charCount(segment.text) > SPLIT_MIN_CHARS) {
-    const parts = smartSplit(segment.text, Math.ceil(charCount(segment.text) / 2))
-    if (parts.length > 1) {
-      ctx.onEvent({
-        stage: 'translate',
-        level: 'warning',
-        message: `第 ${n} 段拆成 ${parts.length} 部分重译`,
-      })
-      const pieces = await Promise.all(
-        parts.map((text, index) =>
-          translateSegment({ id: `${segment.id}#${index + 1}`, text }, ctx),
-        ),
-      )
-      return {
-        id: segment.id,
-        text: pieces.map((piece) => piece.text).join(''),
-        kept: pieces.every((piece) => piece.kept),
-      }
-    }
-  }
-  return isolateAndTranslate(segment, n, ctx)
-}
-
-async function isolateAndTranslate(
   segment: Segment,
   n: number,
   ctx: TranslateContext,
 ): Promise<TranslatedParagraph> {
-  const protection = protectTexts([segment.text])
-  const protectedText = protection.texts[0] ?? segment.text
-  const pieces = splitIsolated(protectedText, protection.tokens)
-  const limit = createLimit(REPAIR_PARALLELISM)
-  let textTotal = 0
-  let textFailed = 0
-  const out: string[] = []
-  await Promise.all(
-    pieces.map((piece, index) =>
-      limit(async () => {
-        if (piece.kind === 'token') {
-          out[index] = protection.originals.get(piece.value) ?? piece.value
-          return
-        }
-        if (!HAS_LETTER.test(piece.value)) {
-          out[index] = piece.value
-          return
-        }
-        textTotal += 1
-        const translated = await translateIsolatedText(piece.value, ctx)
-        if (translated === undefined) {
-          textFailed += 1
-          out[index] = piece.value
-          ctx.onEvent({
-            stage: 'translate',
-            level: 'warning',
-            message: `第 ${n} 段有一个片段无法翻译，已保留原文`,
-          })
-        } else {
-          out[index] = translated
-        }
-      }),
-    ),
-  )
-  const text = restoreIsolated(out.join(''), protection.originals)
-  return { id: segment.id, text, kept: textTotal > 0 && textFailed === textTotal }
-}
-
-function restoreIsolated(text: string, originals: Map<string, string>): string {
-  let out = text
-  for (const [token, original] of originals) out = out.split(token).join(original)
-  return out
-}
-
-async function translateIsolatedText(
-  text: string,
-  ctx: TranslateContext,
-): Promise<string | undefined> {
-  const chunks =
-    charCount(text) > ISOLATED_FRAGMENT_CHARS ? smartSplit(text, ISOLATED_FRAGMENT_CHARS) : [text]
-  const parts: string[] = []
-  for (const chunk of chunks) {
-    const translated = await translateIsolatedChunk(chunk, ctx)
-    if (translated === undefined) return undefined
-    parts.push(translated)
+  try {
+    const reply = await submit(
+      {
+        model: ctx.model,
+        system: '',
+        user: pdf2zhPrompt(segment.text, ctx.runtime.systemPrompt),
+        ...(ctx.runtime.llm.maxOutputTokens > 0
+          ? { maxTokens: ctx.runtime.llm.maxOutputTokens }
+          : {}),
+      },
+      ctx,
+    )
+    // A content-filter stop leaves no message content (pdf2zh's `.strip()` would raise).
+    if (reply.finish === 'refused') throw new ProviderError('refused', '服务商拒绝翻译这一段')
+    const text = cleanReply(reply.text)
+    ctx.cache.set(segment.text, text)
+    return { id: segment.id, text, kept: false }
+  } catch (error) {
+    if (endsDocument(error)) throw error
+    const message = error instanceof Error ? error.message : String(error)
+    ctx.onEvent({
+      stage: 'translate',
+      level: 'warning',
+      message: `第 ${n} 段翻译失败，已保留原文`,
+      detail: message,
+    })
+    return { id: segment.id, text: segment.text, kept: true }
   }
-  return parts.join('')
-}
-
-async function translateIsolatedChunk(
-  text: string,
-  ctx: TranslateContext,
-): Promise<string | undefined> {
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    throwIfAborted(ctx.signal)
-    try {
-      const protection = protectTexts([text])
-      const reply = await submit(
-        {
-          model: ctx.model,
-          system: buildSystemPrompt(ctx.runtime.systemPrompt, 'isolated', false),
-          user: protection.texts[0] ?? text,
-        },
-        ctx,
-      )
-      const check = checkReply({
-        text: reply.text,
-        finish: reply.finish,
-        source: text,
-        tokens: protection.tokens,
-        originals: protection.originals,
-        mode: 'isolated',
-      })
-      if (check.ok) return check.text
-    } catch (error) {
-      if (endsDocument(error)) throw error
-    }
-    if (charCount(text) > MIN_FRAGMENT_CHARS) {
-      const halves = smartSplit(text, Math.ceil(charCount(text) / 2))
-      if (halves.length > 1) {
-        const nested: string[] = []
-        for (const half of halves) {
-          const part = await translateIsolatedChunk(half, ctx)
-          if (part === undefined) return undefined
-          nested.push(part)
-        }
-        return nested.join('')
-      }
-    }
-  }
-  return undefined
-}
-
-function splitIsolated(
-  text: string,
-  tokens: string[],
-): Array<{ kind: 'text' | 'token'; value: string }> {
-  if (tokens.length === 0) return [{ kind: 'text', value: text }]
-  const pieces: Array<{ kind: 'text' | 'token'; value: string }> = []
-  let cursor = 0
-  for (const token of tokens) {
-    const at = text.indexOf(token, cursor)
-    if (at < 0) continue
-    if (at > cursor) pieces.push({ kind: 'text', value: text.slice(cursor, at) })
-    pieces.push({ kind: 'token', value: token })
-    cursor = at + token.length
-  }
-  if (cursor < text.length) pieces.push({ kind: 'text', value: text.slice(cursor) })
-  return pieces
-}
-
-function parentSegmentId(id: string): string {
-  const hash = id.lastIndexOf('#')
-  if (hash <= 0) return id
-  return /^\d+$/.test(id.slice(hash + 1)) ? id.slice(0, hash) : id
 }
 
 async function submit(
@@ -511,8 +233,7 @@ async function submit(
         }
         throw providerError
       }
-      // oversized / refused / output will not change on a resend: the caller's ladder
-      // (split, isolate) handles them without waiting.
+      // oversized / refused: the same request will not succeed on a resend.
       if (!providerError.retryable) throw providerError
       if (attempt === SUBMIT_ATTEMPTS) break
       const backoff = Math.min(2 ** (attempt - 1), 32) * 1000

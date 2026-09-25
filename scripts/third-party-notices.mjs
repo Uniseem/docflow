@@ -17,10 +17,21 @@ runtime and bundled dependencies shipped with DocFlow.
 
 ## PDF stack
 
+The PDF processing is a TypeScript port of PDFMathTranslate (pdf2zh) 1.9.11
+(https://github.com/PDFMathTranslate/PDFMathTranslate, AGPL-3.0) and of the parts of
+pdfminer.six (MIT) it relies on.
+
+- MuPDF.js (\`mupdf\`, Artifex Software, AGPL-3.0-or-later) — renders pages for the layout
+  model. Its source is available at https://github.com/ArtifexSoftware/mupdf.js; DocFlow
+  installers that include it are distributed under the terms of the AGPL-3.0.
+- ONNX Runtime Web (\`onnxruntime-web\`, MIT)
+- DocLayout-YOLO-DocStructBench model weights
+  (https://huggingface.co/wybxc/DocLayout-YOLO-DocStructBench-onnx, Apache-2.0)
 - pdf.js (\`pdfjs-dist\`, Apache-2.0)
 - pdf-lib / \`@cantoo/pdf-lib\` (MIT)
 - fontkit / \`@cantoo/fontkit\` (MIT)
-- Noto Sans SC (SIL Open Font License 1.1) — see \`resources/fonts/LICENSE-OFL.txt\`
+- Source Han Serif CN (Adobe, SIL Open Font License 1.1) — see \`resources/fonts/LICENSE-OFL.txt\`
+- Adobe Glyph List (BSD-3-Clause), as shipped in pdfminer.six
 
 `
 

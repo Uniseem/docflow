@@ -48,6 +48,8 @@ describe('pdf schemas', () => {
       size: 10,
       adv: 6,
       width: 6,
+      corners: [72, 720, 78, 730],
+      fontName: 'Times-Roman',
       ascent: 0.8,
       descent: -0.2,
       rotated: false,

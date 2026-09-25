@@ -4,8 +4,8 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const expected = {
-  'NotoSansSC-Regular.otf': 'faa6c9df652116dde789d351359f3d7e5d2285a2b2a1f04a2d7244df706d5ea9',
-  'NotoSansSC-Bold.otf': 'c6cb5a93abaa9edc8ee7463b7ebb7f42d618d40e6ed2f7a5371c97b0b64767c0',
+  'SourceHanSerifCN-Regular.ttf':
+    '8ba5ec09db04b1d1599edeff3fb5627ca11eaaf85e339e5c32684cb94e806993',
 }
 
 const fontsDir = join(dirname(fileURLToPath(import.meta.url)), '../resources/fonts')

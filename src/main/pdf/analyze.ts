@@ -1,113 +1,127 @@
 import { readFile } from 'node:fs/promises'
 import { PDF } from '../../shared/pdf-constants'
-import { AnalysisResult, type Glyph } from '../../shared/pdf-types'
+import { PDFName, type PDFDict } from '@cantoo/pdf-lib'
+import {
+  AnalysisResult,
+  type Glyph,
+  type LayoutUnit,
+  type LtChar,
+  type PageLayout,
+} from '../../shared/pdf-types'
 import { extractPageGraphics } from './analyze/glyphs'
-import { mergeLines } from './analyze/lines'
-import { attachFormulas } from './analyze/formula'
-import { assignColumns, columnSplitFits, detectColumnSplit, readingOrder } from './analyze/columns'
-import { mergeParagraphs } from './analyze/paragraphs'
-import { scanFormRefs } from './forms'
-import { openPdfDocument } from './pdfjs'
 import { inspectPdf } from './inspect'
+import { loadPdfLib } from './load-pdf-lib'
+import { openPdfDocument } from './pdfjs'
+import { alignTextOps, toLtChar } from './pdf2zh/chars'
+import { buildLayoutMap } from './pdf2zh/doclayout'
+import { interpretPage } from './pdf2zh/interp'
+import { lookupDict, pageSource } from './pdf2zh/pages'
+import { parseLayout, type LtItem } from './pdf2zh/parse'
+import { needsTranslation } from './pdf2zh/segments'
+import { unicodeSource, type UnicodeSource } from './pdf2zh/unicode'
 
-export async function analyzePdf(path: string) {
+/**
+ * pdf2zh translate_patch without the translation: for every page, the layout matrix from the
+ * DocLayout-YOLO boxes, then receive_layout part A for the page and each form it draws.
+ */
+export async function analyzePdf(path: string, layouts: readonly PageLayout[]) {
   const inspection = await inspectPdf(path)
   const bytes = await readFile(path)
-  const forms = await scanFormRefs(bytes)
   const doc = await openPdfDocument(bytes)
-  const paragraphs = []
-  const fontMap: AnalysisResult['fontMap'] = {}
-  let glyphCount = 0
-  let lineCount = 0
-  let runCount = 0
-  const formStats = forms.stats
-  // Two-column split of the last page that had one; reused where a figure hides a column.
-  let lastSplit: { split: number; width: number } | undefined
-  // Characters per font size (0.5 pt buckets) over the pages so far: a page that is mostly
-  // figure must not decide what body text looks like.
-  const sizeChars = new Map<number, number>()
+  const lib = await loadPdfLib(bytes)
+  const libPages = lib.getPages()
+  const units: LayoutUnit[] = []
+  let chars = 0
+  const sources = new WeakMap<PDFDict, UnicodeSource>()
+  // pdfminer's text for a glyph: to_unichr through the font the operator selected.
+  const textOf = (glyph: Glyph, resources: unknown, font: string): string => {
+    const fonts = lookupDict(lib, (resources as PDFDict | undefined)?.get(PDFName.of('Font')))
+    const dict = fonts ? lookupDict(lib, fonts.get(PDFName.of(font))) : undefined
+    const fallback = glyph.unicode || `(cid:${glyph.code})`
+    if (!dict) return fallback
+    let source = sources.get(dict)
+    if (!source) {
+      source = unicodeSource(lib, dict)
+      sources.set(dict, source)
+    }
+    if (source === 'pdfjs') return fallback
+    return source(glyph.code) ?? `(cid:${glyph.code})`
+  }
 
   for (let i = 0; i < doc.numPages; i += 1) {
     const page = await doc.getPage(i + 1)
-    const graphics = await extractPageGraphics(page, i)
-    glyphCount += graphics.glyphs.length
-    for (const g of graphics.glyphs) {
-      fontMap[g.fontKey] ??= {
-        family: g.fontFamily,
-        composite: g.composite,
-        codeBytes: g.codeBytes,
-        type3: g.type3,
-      }
-    }
-    const shared = forms.sharedPaths.get(i) ?? new Set<string>()
-    const lines = mergeLines(graphics.glyphs, shared)
-    lineCount += lines.length
-    const withRuns = attachFormulas(lines)
-    runCount += withRuns.reduce((n, line) => n + line.runs.length, 0)
-    const width = inspection.pageSizes[i]?.[0] ?? 612
-    const height = inspection.pageSizes[i]?.[1] ?? 792
-    const detected = detectColumnSplit(withRuns, width)
-    let split = detected
-    if (
-      split === undefined &&
-      lastSplit &&
-      Math.abs(lastSplit.width - width) < 1 &&
-      columnSplitFits(withRuns, lastSplit.split)
-    ) {
-      split = lastSplit.split
-    }
-    if (detected !== undefined) lastSplit = { split: detected, width }
-    const ordered = readingOrder(assignColumns(withRuns, split))
-    for (const line of withRuns) {
-      if (line.formulaLine) continue
-      const bucket = Math.round(line.size * 2) / 2
-      const chars = line.text.replace(/\{v\d+\}/g, '').length
-      sizeChars.set(bucket, (sizeChars.get(bucket) ?? 0) + chars)
-    }
-    const pageParas = mergeParagraphs(
-      ordered,
-      height,
-      width,
-      inspection.rotations[i] ?? 0,
-      graphics.imageRects,
-      shared,
-      modeOf(sizeChars),
-    )
-    paragraphs.push(...pageParas)
-    for (const stat of formStats.filter((row) => row.page === i)) {
-      stat.glyphs = graphics.glyphs.filter((g: Glyph) => g.formPath === stat.formPath).length
-    }
+    const { glyphs } = await extractPageGraphics(page, i)
     page.cleanup()
+    const libPage = libPages[i]
+    if (!libPage) continue
+    const source = pageSource(lib, libPage)
+    const interp = interpretPage(
+      source.content,
+      source.ctm,
+      source.width,
+      source.getForm,
+      source.resources,
+    )
+    const aligned = alignTextOps(glyphs, interp.textOps, source.ctm)
+    const resourcesOf = new Map(interp.units.map((unit) => [unit.formPath, unit.resources]))
+
+    const bySeq = new Map<number, LtChar[]>()
+    // Glyphs of operators that could not be paired go to the end of their stream's items.
+    const unaligned = new Map<string, LtChar[]>()
+    for (const glyph of glyphs) {
+      const op = aligned.get(glyph.opSeq)
+      const char = op
+        ? toLtChar(glyph, source.ctm, op.font, textOf(glyph, resourcesOf.get(op.formPath), op.font))
+        : toLtChar(glyph, source.ctm, '')
+      if (op) push(bySeq, op.seq, char)
+      else push(unaligned, glyph.formPath, char)
+    }
+
+    const layout = buildLayoutMap(
+      layouts[i] ?? {
+        width: Math.ceil(source.width),
+        height: Math.ceil(source.height),
+        boxes: [],
+      },
+    )
+    for (const unit of interp.units) {
+      const items: LtItem[] = []
+      for (const event of unit.events) {
+        if (event.kind === 'line') items.push({ kind: 'line', ...event.line })
+        else for (const char of bySeq.get(event.seq) ?? []) items.push({ kind: 'char', ...char })
+      }
+      for (const char of unaligned.get(unit.formPath) ?? []) items.push({ kind: 'char', ...char })
+      chars += items.filter((item) => item.kind === 'char').length
+      const parsed = parseLayout(items, layout, unit.width)
+      units.push({
+        id: unit.formPath ? `${i}/${unit.formPath}` : String(i),
+        page: i,
+        formPath: unit.formPath,
+        ...parsed,
+      })
+    }
   }
   await doc.cleanup()
 
+  const texts = units.flatMap((unit) => unit.texts)
   return AnalysisResult.parse({
-    version: 2,
+    version: 3,
     pages: inspection.pages,
     pageSizes: inspection.pageSizes,
-    paragraphs,
-    fontMap,
-    forms: formStats,
+    units,
     stats: {
-      glyphs: glyphCount,
-      lines: lineCount,
-      paragraphs: paragraphs.length,
-      translatable: paragraphs.filter((p) => p.translatable).length,
-      runs: runCount,
+      chars,
+      paragraphs: texts.length,
+      translatable: texts.filter(needsTranslation).length,
+      formulas: units.reduce((n, unit) => n + unit.formulas.length, 0),
     },
   })
 }
 
-function modeOf(counts: Map<number, number>): number | undefined {
-  let best: number | undefined
-  let bestCount = 0
-  for (const [value, count] of counts) {
-    if (count > bestCount) {
-      best = value
-      bestCount = count
-    }
-  }
-  return best
+function push<K>(map: Map<K, LtChar[]>, key: K, char: LtChar): void {
+  const list = map.get(key)
+  if (list) list.push(char)
+  else map.set(key, [char])
 }
 
 export function analyzeTimeoutMs(pages: number): number {

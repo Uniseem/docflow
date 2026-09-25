@@ -2,31 +2,12 @@ import { mkdir, mkdtemp, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect, test } from 'vitest'
-import type { AnalysisResult, Paragraph } from '../../../shared/pdf-types'
+import type { AnalysisResult } from '../../../shared/pdf-types'
 import { defaultTranslationRuntime } from '../../../shared/types'
 import { DocumentLibrary } from '../../library/library'
 import { fakeFetch, fakeProvider } from '../../translate/fake'
 import { TranslationPools } from '../../translate/pool'
 import { translateStage, type TranslateStageEvent } from './translate'
-
-function paragraph(id: string, text: string): Paragraph {
-  return {
-    id,
-    page: 0,
-    bbox: [0, 0, 100, 20],
-    lines: [],
-    size: 10,
-    lineHeight: 12,
-    bold: false,
-    align: 'left',
-    color: [0, 0, 0],
-    role: 'body',
-    text,
-    runs: [],
-    formPath: '',
-    translatable: true,
-  }
-}
 
 test('a cache that cannot be written is logged once and translation carries on', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'df-stage-'))
@@ -43,14 +24,24 @@ test('a cache that cannot be written is logged once and translation carries on',
   const workDir = join(dir, 'work')
   // A directory where the cache file should go: every flush fails.
   await mkdir(join(workDir, 'translation-cache.json'), { recursive: true })
+  const para = { y: 700, x: 72, x0: 72, x1: 100, y0: 700, y1: 710, size: 10, brk: false }
   const analysis: AnalysisResult = {
-    version: 2,
+    version: 3,
     pages: 1,
     pageSizes: [[600, 800]],
-    paragraphs: [paragraph('p1', 'Hello'), paragraph('p2', 'World')],
-    fontMap: {},
-    forms: [],
-    stats: { glyphs: 10, lines: 2, paragraphs: 2, translatable: 2, runs: 0 },
+    units: [
+      {
+        id: '0',
+        page: 0,
+        formPath: '',
+        // Blank strings and pure formulas are not sent (converter worker()).
+        texts: ['Hello', 'World', ' ', '{v0}'],
+        paragraphs: [para, para, para, para],
+        formulas: [],
+        lines: [],
+      },
+    ],
+    stats: { chars: 10, paragraphs: 4, translatable: 2, formulas: 0 },
   }
   const events: TranslateStageEvent[] = []
   const result = await translateStage({

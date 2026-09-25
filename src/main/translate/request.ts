@@ -54,17 +54,18 @@ export function buildRequest(
     ...authHeaders(provider.type, key),
   }
 
+  // pdf2zh sends its prompt as the only (user) message: an empty `system` is left out.
   let body: Record<string, unknown>
   if (provider.type === 'anthropic') {
     body = {
       model,
       max_tokens: maxTokens ?? 8192,
-      system,
+      ...(system ? { system } : {}),
       messages: [{ role: 'user', content: user }],
     }
   } else if (provider.type === 'gemini') {
     body = {
-      systemInstruction: { parts: [{ text: system }] },
+      ...(system ? { systemInstruction: { parts: [{ text: system }] } } : {}),
       contents: [{ role: 'user', parts: [{ text: user }] }],
     }
     if (maxTokens) {
@@ -74,7 +75,7 @@ export function buildRequest(
     body = {
       model,
       messages: [
-        { role: 'system', content: system },
+        ...(system ? [{ role: 'system', content: system }] : []),
         { role: 'user', content: user },
       ],
       stream: false,

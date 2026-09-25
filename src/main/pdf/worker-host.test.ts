@@ -67,8 +67,12 @@ describe('PdfWorkerHost', () => {
   test("cancelling one document's request re-runs the others on a fresh worker", async () => {
     const host = new PdfWorkerHost(scripted, 'analyze', 15_000, memoryLogger())
     const ac = new AbortController()
-    const cancelled = host.request({ kind: 'analyze', path: 'never' }, 5_000, ac.signal)
-    const other = host.request({ kind: 'analyze', path: 'slow:150' }, 5_000)
+    const cancelled = host.request(
+      { kind: 'analyze', path: 'never', layouts: [] },
+      5_000,
+      ac.signal,
+    )
+    const other = host.request({ kind: 'analyze', path: 'slow:150', layouts: [] }, 5_000)
     await new Promise((resolve) => setTimeout(resolve, 30))
     ac.abort()
     await expect(cancelled).rejects.toMatchObject({ code: ERROR_CODES.cancelled })
@@ -88,10 +92,12 @@ describe('PdfWorkerHost', () => {
   test('an unexpected worker exception is logged with its stack and is a permanent internal error', async () => {
     const logger = memoryLogger()
     const host = new PdfWorkerHost(scripted, 'analyze', 15_000, logger)
-    const error = await host.request({ kind: 'analyze', path: 'internal' }, 5_000).then(
-      () => undefined,
-      (reason: unknown) => reason,
-    )
+    const error = await host
+      .request({ kind: 'analyze', path: 'internal', layouts: [] }, 5_000)
+      .then(
+        () => undefined,
+        (reason: unknown) => reason,
+      )
     expect(error).toBeInstanceOf(Error)
     expect(error).not.toBeInstanceOf(UserError)
     expect(

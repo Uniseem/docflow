@@ -6,3 +6,5 @@ coverage
 package-lock.json
 THIRD_PARTY_NOTICES.md
 tmp
+# pdf2zh reference output (generated data)
+tests/fixtures/pdf2zh

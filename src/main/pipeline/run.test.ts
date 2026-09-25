@@ -5,9 +5,11 @@ import { access } from 'node:fs/promises'
 import { describe, expect, test } from 'vitest'
 import type { AnalysisResult } from '../../shared/pdf-types'
 import { defaultTranslationRuntime } from '../../shared/types'
+import { fixture, referenceLayouts } from '../../../tests/unit/pdf2zh-reference'
 import { analyzePdf } from '../pdf/analyze'
-import { composePdf, defaultComposeOptions } from '../pdf/compose'
+import { composePdf } from '../pdf/compose'
 import { inspectPdf } from '../pdf/inspect'
+import { segmentsOf } from '../pdf/pdf2zh/segments'
 import { verifyPdf } from '../pdf/verify'
 import { DocumentLibrary } from '../library/library'
 import { bundledFonts, composeWarningEvent, runPipeline, type PipelineHooks } from './run'
@@ -21,7 +23,7 @@ describe('runPipeline', () => {
     const lib = new DocumentLibrary()
     await lib.open(dir)
     const created = await lib.create({
-      path: join(process.cwd(), 'tests/fixtures/colored-text.pdf'),
+      path: fixture('colored-text'),
       title: 'Color',
       translator,
       settingsSnapshot: defaultTranslationRuntime(),
@@ -29,12 +31,16 @@ describe('runPipeline', () => {
     await lib.update(created.id, { status: 'processing' })
     await runPipeline(lib, created.id, new AbortController().signal, {
       inspect: (path) => inspectPdf(path),
-      analyze: (path) => analyzePdf(path),
+      layout: async (_path, pages, _signal, onPage) => {
+        for (let i = 1; i <= pages; i += 1) await onPage(i, pages)
+        return referenceLayouts('colored-text')
+      },
+      analyze: (path, layouts) => analyzePdf(path, layouts),
       translate: ({ analysis }) => {
-        const translations = analysis.paragraphs.map((para) => ({
-          id: para.id,
-          text: para.translatable ? `译${para.text}` : para.text,
-          kept: !para.translatable,
+        const translations = segmentsOf(analysis).map((segment) => ({
+          id: segment.id,
+          text: `译${segment.text}`,
+          kept: false,
         }))
         return Promise.resolve({
           translations,
@@ -51,7 +57,6 @@ describe('runPipeline', () => {
           analysis: input.analysis,
           translations: input.translations,
           fonts: input.fonts,
-          options: { ...defaultComposeOptions(), minFontScale: input.minFontScale },
         }),
       verify: (input) =>
         verifyPdf({
@@ -62,12 +67,12 @@ describe('runPipeline', () => {
         }),
       fonts,
       bilingual: () => true,
-      minFontScale: () => 0.6,
     })
     await access(join(dir, 'documents', created.id, 'output', 'mono.pdf'))
     await access(join(dir, 'documents', created.id, 'output', 'dual.pdf'))
     const events = await lib.events.read(created.id)
     expect(events.items.some((e) => e.message.includes('校验通过'))).toBe(true)
+    expect(events.items.some((e) => e.message === '版面检测 1 / 1 页')).toBe(true)
     expect(lib.require(created.id).outputs.mono?.bytes).toBeGreaterThan(1024)
   }, 60_000)
 
@@ -127,63 +132,41 @@ describe('runPipeline', () => {
 })
 
 describe('composeWarningEvent', () => {
-  const analysis = {
-    paragraphs: [
-      { id: '0-0', page: 0 },
-      { id: '1-0', page: 1 },
-      { id: '1-3', page: 1 },
-    ],
-  } as unknown as AnalysisResult
-
-  test('numbers paragraphs by position on their page instead of internal ids', () => {
-    expect(
-      composeWarningEvent(
-        { code: 'overflow', page: 1, paragraphId: '1-3', message: 'overflow' },
-        analysis,
-      ).message,
-    ).toBe('第 2 页第 2 段译文超出原段落范围')
-    expect(
-      composeWarningEvent(
-        { code: 'layout_failed', page: 1, paragraphId: 'gone', message: 'x' },
-        analysis,
-      ).message,
-    ).toBe('第 2 页有一段排版失败，已保留原文')
-  })
-
   test('every warning code reads as Chinese', () => {
-    const codes = [
-      'overflow',
-      'layout_failed',
-      'font_unmapped',
-      'encode_failed',
-      'page_skipped',
-      'op_mismatch',
-      'font_subset_fallback',
-      'something_new',
-    ]
-    for (const code of codes) {
-      const event = composeWarningEvent(
-        { code, page: 0, paragraphId: '0-0', message: 'technical english text' },
-        analysis,
-      )
+    for (const code of ['font_unmapped', 'something_new']) {
+      const event = composeWarningEvent({ code, page: 0, message: 'technical english text' })
       expect(event.message, code).not.toMatch(/[A-Za-z]/)
     }
+    expect(composeWarningEvent({ code: 'font_unmapped', page: 1, message: 'x' }).message).toBe(
+      '第 2 页有公式字符找不到原字体，未能重画',
+    )
     expect(
-      composeWarningEvent({ code: 'something_new', message: 'technical english text' }, analysis),
-    ).toEqual({ message: '生成 PDF 时出现警告', detail: 'something_new: technical english text' })
+      composeWarningEvent({ code: 'something_new', message: 'technical english text' }),
+    ).toEqual({
+      message: '生成 PDF 时出现警告',
+      detail: 'something_new: technical english text',
+    })
   })
 })
 
 function fakeHooks(onChanged: NonNullable<PipelineHooks['onChanged']>): PipelineHooks {
-  const analysis = {
-    version: 2,
+  const analysis: AnalysisResult = {
+    version: 3,
     pages: 1,
     pageSizes: [[612, 792]],
-    paragraphs: [{ id: 'p0', page: 0, text: 'Hello', translatable: true }],
-    fontMap: {},
-    forms: [],
-    stats: { glyphs: 5, lines: 1, paragraphs: 1, translatable: 1, runs: 0 },
-  } as unknown as AnalysisResult
+    units: [
+      {
+        id: '0',
+        page: 0,
+        formPath: '',
+        texts: ['Hello'],
+        paragraphs: [{ y: 700, x: 72, x0: 72, x1: 100, y0: 700, y1: 710, size: 10, brk: false }],
+        formulas: [],
+        lines: [],
+      },
+    ],
+    stats: { chars: 5, paragraphs: 1, translatable: 1, formulas: 0 },
+  }
   return {
     inspect: () =>
       Promise.resolve({
@@ -194,10 +177,11 @@ function fakeHooks(onChanged: NonNullable<PipelineHooks['onChanged']>): Pipeline
         visibleTextChars: 5,
         hasTextLayer: true,
       }),
+    layout: () => Promise.resolve([{ width: 612, height: 792, boxes: [] }]),
     analyze: () => Promise.resolve(analysis),
     translate: () =>
       Promise.resolve({
-        translations: [{ id: 'p0', text: '你好', kept: false }],
+        translations: [{ id: '0#0', text: '你好', kept: false }],
         usage: { input: 1, output: 1 },
         kept: 0,
         translated: 1,
@@ -225,7 +209,6 @@ function fakeHooks(onChanged: NonNullable<PipelineHooks['onChanged']>): Pipeline
       }),
     fonts,
     bilingual: () => true,
-    minFontScale: () => 0.6,
     onChanged,
   }
 }

@@ -10,10 +10,24 @@ files:
   - package.json
   - '!**/*.map'
   - '!**/node_modules/@napi-rs/**' # pdf.js optional native canvas; DOMMatrix is polyfilled
+  # onnxruntime-web: only the Node entry and the SIMD+threads WebAssembly build are loaded.
+  - '!**/node_modules/onnxruntime-web/dist/**'
+  - '**/node_modules/onnxruntime-web/dist/ort.node.min.mjs'
+  - '**/node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.mjs'
+  - '**/node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.wasm'
+  # mupdf (MuPDF.js): the page renderer pdf2zh uses, as WebAssembly; types are not needed.
+  - '!**/node_modules/mupdf/dist/*.d.ts'
+asarUnpack:
+  # WebAssembly and the worker threads onnxruntime-web starts itself load these from disk.
+  - '**/node_modules/onnxruntime-web/dist/**'
+  - '**/node_modules/mupdf/dist/**'
 extraResources:
   - from: resources/fonts
     to: fonts
-    filter: ['*.otf']
+    filter: ['*.ttf']
+  - from: resources/models
+    to: models
+    filter: ['*.onnx']
   - from: THIRD_PARTY_NOTICES.md
     to: THIRD_PARTY_NOTICES.md
   - from: LICENSE

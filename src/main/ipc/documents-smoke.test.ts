@@ -10,8 +10,11 @@ import { memoryCryptor, SecretsStore } from '../settings/secrets'
 import { TranslationPools } from '../translate/pool'
 import { fakeFetch, fakeProvider } from '../translate/fake'
 import { analyzePdf } from '../pdf/analyze'
-import { composePdf, defaultComposeOptions } from '../pdf/compose'
+import { composePdf } from '../pdf/compose'
 import { inspectPdf } from '../pdf/inspect'
+import { detectPage } from '../pdf/pdf2zh/detect'
+import { segmentsOf } from '../pdf/pdf2zh/segments'
+import { LAYOUT_MODEL } from '../../../tests/unit/pdf2zh-reference'
 import { verifyPdf } from '../pdf/verify'
 import { bundledFonts, runPipeline, type PipelineHooks } from '../pipeline/run'
 import { handleDocumentsCreate, type HandlerContext } from './handlers'
@@ -22,12 +25,21 @@ const fonts = bundledFonts()
 function inProcessHooks(): PipelineHooks {
   return {
     inspect: (path) => inspectPdf(path),
-    analyze: (path) => analyzePdf(path),
+    // The real layout model in-process: MuPDF.js renders, onnxruntime-web detects.
+    layout: async (path, pages, _signal, onPage) => {
+      const layouts = []
+      for (let i = 0; i < pages; i += 1) {
+        layouts.push(await detectPage(path, i, LAYOUT_MODEL))
+        await onPage(i + 1, pages)
+      }
+      return layouts
+    },
+    analyze: (path, layouts) => analyzePdf(path, layouts),
     translate: ({ analysis }) => {
-      const translations = analysis.paragraphs.map((para) => ({
-        id: para.id,
-        text: para.translatable ? `译${para.text}` : para.text,
-        kept: !para.translatable,
+      const translations = segmentsOf(analysis).map((segment) => ({
+        id: segment.id,
+        text: `译${segment.text}`,
+        kept: false,
       }))
       return Promise.resolve({
         translations,
@@ -44,7 +56,6 @@ function inProcessHooks(): PipelineHooks {
         analysis: input.analysis,
         translations: input.translations,
         fonts: input.fonts,
-        options: { ...defaultComposeOptions(), minFontScale: input.minFontScale },
       }),
     verify: (input) =>
       verifyPdf({
@@ -55,7 +66,6 @@ function inProcessHooks(): PipelineHooks {
       }),
     fonts,
     bilingual: () => true,
-    minFontScale: () => 0.6,
   }
 }
 

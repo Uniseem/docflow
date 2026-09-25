@@ -1,4 +1,3 @@
-import { defaultComposeOptions } from '../pdf/compose'
 import type { PdfWorkerHost } from '../pdf/worker-host'
 import type { DocumentLibrary } from '../library/library'
 import type { SettingsStore } from '../settings/settings'
@@ -8,11 +7,12 @@ import { withMockProviderUrl } from '../../shared/presets'
 import { ERROR_CODES, UserError } from '../../shared/errors'
 import type { DocumentManifest, ProviderConfig } from '../../shared/types'
 import { analyzeStage } from './stages/analyze'
+import { layoutStage } from './stages/layout'
 import { composeStage } from './stages/compose'
 import { inspectStage } from './stages/inspect'
 import { translateStage } from './stages/translate'
 import { verifyStage } from './stages/verify'
-import { bundledFonts, type PipelineHooks } from './run'
+import { bundledFonts, bundledModel, type PipelineHooks } from './run'
 
 export function createPipelineHooks(input: {
   library: DocumentLibrary
@@ -21,15 +21,27 @@ export function createPipelineHooks(input: {
   analyze: PdfWorkerHost
   compose: PdfWorkerHost
   env?: NodeJS.Dict<string>
-  /** Directory holding the bundled Noto Sans SC fonts. */
+  /** Directory holding the bundled Source Han Serif CN font. */
   fontsDir?: string
+  /** Directory holding the DocLayout-YOLO model. */
+  modelsDir?: string
   onChanged?: (manifest: DocumentManifest) => void
 }): PipelineHooks {
   const env = input.env ?? process.env
   return {
     ...(input.onChanged ? { onChanged: input.onChanged } : {}),
     inspect: (path, signal) => inspectStage(input.analyze, path, signal),
-    analyze: (path, pages, signal) => analyzeStage(input.analyze, path, pages, signal),
+    layout: (path, pages, signal, onPage) =>
+      layoutStage({
+        host: input.analyze,
+        modelPath: bundledModel(input.modelsDir),
+        path,
+        pages,
+        signal,
+        onPage,
+      }),
+    analyze: (path, layouts, pages, signal) =>
+      analyzeStage(input.analyze, path, layouts, pages, signal),
     translate: async ({ analysis, manifest, workDir, signal, onProgress }) => {
       const provider = resolveProvider(
         input.settings.snapshot.providers,
@@ -59,7 +71,6 @@ export function createPipelineHooks(input: {
           analysis: args.analysis,
           translations: args.translations,
           fonts: args.fonts,
-          options: { ...defaultComposeOptions(), minFontScale: args.minFontScale },
         },
         args.analysis.pages,
         args.signal,
@@ -79,7 +90,6 @@ export function createPipelineHooks(input: {
       ),
     fonts: bundledFonts(input.fontsDir),
     bilingual: () => input.settings.snapshot.pdf.bilingual,
-    minFontScale: () => input.settings.snapshot.pdf.minFontScale,
   }
 }
 

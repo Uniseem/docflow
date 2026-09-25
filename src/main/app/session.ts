@@ -303,6 +303,9 @@ export class AppSession {
       fontsDir: app.isPackaged
         ? join(process.resourcesPath, 'fonts')
         : join(app.getAppPath(), 'resources/fonts'),
+      modelsDir: app.isPackaged
+        ? join(process.resourcesPath, 'models')
+        : join(app.getAppPath(), 'resources/models'),
       onChanged: (manifest) => this.onManifestChanged(manifest),
     })
     return new Scheduler(library, (id, signal) => runPipeline(library, id, signal, hooks), {

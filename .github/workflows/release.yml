@@ -55,6 +55,13 @@ jobs:
             ~/AppData/Local/electron-builder/Cache
           key: electron-${{ matrix.key }}-${{ hashFiles('package-lock.json') }}
       - run: npm ci
+      - name: 缓存版面模型
+        uses: actions/cache@v4
+        with:
+          path: resources/models
+          key: doclayout-${{ hashFiles('scripts/fetch-model.mjs') }}
+      - name: 下载版面模型（DocLayout-YOLO，75 MB）
+        run: npm run model
       - name: 标签必须等于 package.json 的版本
         if: startsWith(github.ref, 'refs/tags/v')
         shell: bash

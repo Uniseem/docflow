@@ -1,5 +1,7 @@
 # 构建产物
 THIRD_PARTY_NOTICES.md
+# 版面模型（75 MB，npm run model 下载，随安装包分发）
+resources/models/*.onnx
 
 # 依赖与构建产物
 node_modules/

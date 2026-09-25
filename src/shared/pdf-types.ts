@@ -43,6 +43,9 @@ export const Glyph = z.object({
   size: z.number(),
   adv: z.number(),
   width: z.number(),
+  // pdfminer LTChar corners in user space: text-space (0, 0) and (w0, 1) through trm.
+  corners: z.tuple([z.number(), z.number(), z.number(), z.number()]),
+  fontName: z.string(), // BaseFont as the font dictionary names it
   ascent: z.number(),
   descent: z.number(),
   rotated: z.boolean(),
@@ -53,72 +56,86 @@ export const Glyph = z.object({
 })
 export type Glyph = z.infer<typeof Glyph>
 
-export const FormulaRun = z.object({
-  id: z.number().int(),
-  glyphs: z.array(Glyph),
-  bbox: Rect,
-  baselineOffset: z.number(),
-  width: z.number(),
-  text: z.string(),
-})
-export type FormulaRun = z.infer<typeof FormulaRun>
-
-export const Line = z.object({
-  page: z.number().int(),
-  bbox: Rect,
-  baseline: z.number(),
+// pdfminer LTChar as pdf2zh sees it (descent forced to 0, so y0 is the baseline). Coordinates
+// are page space relative to the crop box, like pdfminer after its page CTM.
+export const LtChar = z.object({
+  text: z.string(), // get_text(); '(cid:N)' when the font has no Unicode mapping
+  x0: z.number(),
+  y0: z.number(),
+  x1: z.number(),
+  y1: z.number(),
   size: z.number(),
-  glyphs: z.array(Glyph),
-  runs: z.array(FormulaRun),
-  text: z.string(),
-  opSeqs: z.array(z.number()),
-  column: z.number().int(),
-  formulaLine: z.boolean(),
+  vertical: z.boolean(), // matrix[0] == 0 and matrix[3] == 0
+  fontname: z.string(), // BaseFont
+  font: z.string(), // resource name in the /Font dictionary of the stream that draws it
+  code: z.number().int(),
+  codeBytes: z.number().int(),
 })
-export type Line = z.infer<typeof Line>
+export type LtChar = z.infer<typeof LtChar>
 
-export const Paragraph = z.object({
+// A stroked two-point horizontal black line (pdf2zh pdfinterp.do_S).
+export const LtLine = z.object({
+  x0: z.number(),
+  y0: z.number(),
+  pts: z.tuple([z.tuple([z.number(), z.number()]), z.tuple([z.number(), z.number()])]),
+  linewidth: z.number(),
+})
+export type LtLine = z.infer<typeof LtLine>
+
+// pdf2zh converter.Paragraph
+export const Pdf2zhParagraph = z.object({
+  y: z.number(),
+  x: z.number(),
+  x0: z.number(),
+  x1: z.number(),
+  y0: z.number(),
+  y1: z.number(),
+  size: z.number(),
+  brk: z.boolean(),
+})
+export type Pdf2zhParagraph = z.infer<typeof Pdf2zhParagraph>
+
+// One {vN}: var[N], varl[N], varf[N], vlen[N]
+export const Pdf2zhFormula = z.object({
+  chars: z.array(LtChar),
+  lines: z.array(LtLine),
+  fix: z.number(),
+  len: z.number(),
+})
+export type Pdf2zhFormula = z.infer<typeof Pdf2zhFormula>
+
+// DocLayout-YOLO output for one page (pixel coordinates, top-left origin, sorted by conf).
+export const LayoutBox = z.object({ name: z.string(), conf: z.number(), xyxy: Rect })
+export type LayoutBox = z.infer<typeof LayoutBox>
+export const PageLayout = z.object({
+  width: z.number().int(),
+  height: z.number().int(),
+  boxes: z.array(LayoutBox),
+})
+export type PageLayout = z.infer<typeof PageLayout>
+
+// One receive_layout call: the page itself (formPath '') or one drawing of a form XObject.
+export const LayoutUnit = z.object({
   id: z.string(),
   page: z.number().int(),
-  bbox: Rect,
-  lines: z.array(z.object({ bbox: Rect, baseline: z.number(), opSeqs: z.array(z.number()) })),
-  size: z.number(),
-  lineHeight: z.number(),
-  bold: z.boolean(),
-  align: z.enum(['left', 'justify', 'center', 'right']),
-  color: z.tuple([z.number(), z.number(), z.number()]),
-  role: z.enum(['body', 'heading', 'caption', 'listItem', 'footnote', 'headerFooter', 'other']),
-  text: z.string(),
-  runs: z.array(FormulaRun),
   formPath: z.string(),
-  translatable: z.boolean(),
-  skipReason: z.string().optional(),
+  texts: z.array(z.string()), // sstk
+  paragraphs: z.array(Pdf2zhParagraph), // pstk
+  formulas: z.array(Pdf2zhFormula),
+  lines: z.array(LtLine), // lstk
 })
-export type Paragraph = z.infer<typeof Paragraph>
+export type LayoutUnit = z.infer<typeof LayoutUnit>
 
 export const AnalysisResult = z.object({
-  version: z.literal(2),
+  version: z.literal(3),
   pages: z.number().int(),
   pageSizes: z.array(z.tuple([z.number(), z.number()])),
-  paragraphs: z.array(Paragraph),
-  fontMap: z.record(
-    z.string(),
-    z.object({
-      family: z.string(),
-      composite: z.boolean(),
-      codeBytes: z.number(),
-      type3: z.boolean(),
-    }),
-  ),
-  forms: z.array(
-    z.object({ page: z.number(), formPath: z.string(), shared: z.boolean(), glyphs: z.number() }),
-  ),
+  units: z.array(LayoutUnit),
   stats: z.object({
-    glyphs: z.number(),
-    lines: z.number(),
+    chars: z.number(),
     paragraphs: z.number(),
     translatable: z.number(),
-    runs: z.number(),
+    formulas: z.number(),
   }),
 })
 export type AnalysisResult = z.infer<typeof AnalysisResult>
@@ -136,12 +153,7 @@ export const ComposeRequest = z.object({
   dualPath: z.string().nullable(),
   analysis: AnalysisResult,
   translations: z.array(TranslatedParagraph),
-  fonts: z.object({ regular: z.string(), bold: z.string() }),
-  options: z.object({
-    minFontScale: z.number(),
-    lineHeightFactor: z.number(),
-    minLineHeightFactor: z.number(),
-  }),
+  fonts: z.object({ noto: z.string() }),
 })
 export type ComposeRequest = z.infer<typeof ComposeRequest>
 

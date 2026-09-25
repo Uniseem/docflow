@@ -397,6 +397,8 @@ function showText(
     const adv = tx * unit
     const code = Number(glyph.originalCharCode ?? 0)
     const unicode = glyph.unicode ?? ''
+    const ll = apply(trm, 0, 0)
+    const ur = apply(trm, w0, 1)
     glyphs.push({
       page: pageIndex,
       opSeq,
@@ -416,6 +418,8 @@ function showText(
       size: visualSize,
       adv,
       width,
+      corners: [ll[0], ll[1], ur[0], ur[1]],
+      fontName: font?.name ?? state.fontKey,
       ascent,
       descent,
       rotated: Math.abs(trm[1]) > 1e-3 || Math.abs(trm[2]) > 1e-3,

@@ -2,6 +2,7 @@ import { parentPort } from 'node:worker_threads'
 import { inspectPdf } from '../pdf/inspect'
 import { analyzePdf } from '../pdf/analyze'
 import { verifyPdf } from '../pdf/verify'
+import { detectPage } from '../pdf/pdf2zh/detect'
 import { isUserError } from '../../shared/errors'
 import type { WorkerRequest, WorkerResponse } from '../pdf/worker-host'
 
@@ -17,7 +18,10 @@ async function handle(msg: WorkerRequest): Promise<void> {
         result = await inspectPdf(msg.path)
         break
       case 'analyze':
-        result = await analyzePdf(msg.path)
+        result = await analyzePdf(msg.path, msg.layouts)
+        break
+      case 'detect':
+        result = await detectPage(msg.path, msg.index, msg.modelPath)
         break
       case 'verify':
         result = await verifyPdf(msg)

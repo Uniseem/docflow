@@ -1,0 +1,1 @@
+{"source":"PDFMathTranslate 1.9.11 (pdfminer.six 20250416, PyMuPDF 1.25.2) on tests/fixtures/invisible-text.pdf","pages":[{"layout":{"width":612,"height":792,"boxes":[]},"units":[{"kind":"page","name":null,"sstk":["Hidden OCR layer that must not count as visible text."],"formulas":0}]}]}

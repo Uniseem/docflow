@@ -21,7 +21,12 @@ function translateBody(text: string): string {
   return `${text}${FAKE_MARK}`
 }
 
+// pdf2zh's prompt: the paragraph follows "Source Text: " and ends before "Translated Text:".
+const PDF2ZH_SOURCE_RE = /Source Text: ([\s\S]*)\n\nTranslated Text:\s*$/
+
 function translateUser(user: string): string {
+  const pdf2zh = PDF2ZH_SOURCE_RE.exec(user)
+  if (pdf2zh) return translateBody(pdf2zh[1] ?? '')
   SEGMENT_RE.lastIndex = 0
   const parts = [...user.matchAll(SEGMENT_RE)]
   if (parts.length === 0) return translateBody(user)

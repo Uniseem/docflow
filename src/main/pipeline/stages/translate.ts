@@ -1,6 +1,7 @@
 import { join } from 'node:path'
 import type { AnalysisResult, TranslatedParagraph } from '../../../shared/pdf-types'
 import type { DocumentManifest, ProviderConfig } from '../../../shared/types'
+import { segmentsOf } from '../../pdf/pdf2zh/segments'
 import { cacheFingerprint, TranslationCache } from '../../translate/cache'
 import type { TranslationPools } from '../../translate/pool'
 import { translateDocument, type EventInput } from '../../translate/translate-document'
@@ -22,10 +23,11 @@ export async function translateStage(input: {
   kept: number
   translated: number
 }> {
-  const translatable = input.analysis.paragraphs.filter((para) => para.translatable)
+  // pdf2zh translates every paragraph string except blanks and pure formulas.
+  const segments = segmentsOf(input.analysis)
   await input.onEvent({
     level: 'info',
-    message: `开始翻译：${input.manifest.translator.label}，共 ${translatable.length} 段`,
+    message: `开始翻译：${input.manifest.translator.label}，共 ${segments.length} 段`,
   })
   // A cache that cannot be written only costs a re-translation after a retry: log it once
   // (the flush timer would repeat it every few seconds) and keep translating.
@@ -47,7 +49,7 @@ export async function translateStage(input: {
   cache.start()
   try {
     const { results, usage } = await translateDocument({
-      segments: translatable.map((para) => ({ id: para.id, text: para.text })),
+      segments,
       provider: input.provider,
       model: input.manifest.translator.model,
       runtime: input.manifest.settingsSnapshot,
@@ -67,30 +69,14 @@ export async function translateStage(input: {
         })
       },
     })
-    const byId = new Map(results.map((row) => [row.id, row]))
-    const translations = input.analysis.paragraphs.map((para) => {
-      if (!para.translatable) return { id: para.id, text: para.text, kept: true }
-      const hit = byId.get(para.id)
-      return { id: para.id, text: hit?.text ?? para.text, kept: hit?.kept ?? true }
-    })
-    const translated = translations.filter(
-      (row) => paraTranslatable(input.analysis, row.id) && !row.kept,
-    ).length
-    const kept = translations.filter(
-      (row) => paraTranslatable(input.analysis, row.id) && row.kept,
-    ).length
     return {
-      translations,
+      translations: results,
       usage,
-      kept,
-      translated,
+      kept: results.filter((row) => row.kept).length,
+      translated: results.filter((row) => !row.kept).length,
     }
   } finally {
     cache.stop()
     await cache.flush()
   }
-}
-
-function paraTranslatable(analysis: AnalysisResult, id: string): boolean {
-  return Boolean(analysis.paragraphs.find((para) => para.id === id)?.translatable)
 }

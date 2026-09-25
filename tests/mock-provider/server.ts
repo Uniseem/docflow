@@ -262,6 +262,9 @@ export function translateText(text: string): string {
   return `${text}${MOCK_MARK}`
 }
 
+// pdf2zh's prompt: the paragraph follows "Source Text: " and ends before "Translated Text:".
+const PDF2ZH_SOURCE_RE = /Source Text: ([\s\S]*)\n\nTranslated Text:\s*$/
+
 function unwrapSegment(text: string): string {
   return text.replace(/^\n/, '').replace(/\n$/, '')
 }
@@ -280,7 +283,10 @@ export function replyFor(
     text: unwrapSegment(match[2] ?? ''),
   }))
   let text: string
-  if (segments.length > 0) {
+  const pdf2zh = PDF2ZH_SOURCE_RE.exec(user)
+  if (pdf2zh) {
+    text = applyFaults(pdf2zh[1] ?? '', state)
+  } else if (segments.length > 0) {
     const parts: string[] = []
     for (const segment of segments) {
       if (segment.text.includes('DROP_ME') && segments.length > 1) {

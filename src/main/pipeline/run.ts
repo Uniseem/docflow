@@ -1,13 +1,16 @@
 import { mkdir, readFile, rename, rm, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { ERROR_CODES, UserError } from '../../shared/errors'
-import type {
+import {
   AnalysisResult,
-  ComposeResult,
-  PdfInspection,
-  TranslatedParagraph,
-  VerifyResult,
+  PageLayout,
+  type ComposeResult,
+  type PdfInspection,
+  type TranslatedParagraph,
+  type VerifyResult,
 } from '../../shared/pdf-types'
+import { DOCLAYOUT_MODEL_FILE } from '../pdf/pdf2zh/doclayout'
+import { needsTranslation } from '../pdf/pdf2zh/segments'
 import type { DocumentManifest, ProcessingEvent, Stage } from '../../shared/types'
 import type { DocumentLibrary } from '../library/library'
 import { sourcePath, workDir } from '../library/manifest'
@@ -22,7 +25,19 @@ export type TranslateOutcome = {
 
 export type PipelineHooks = {
   inspect: (path: string, signal: AbortSignal) => Promise<PdfInspection>
-  analyze: (path: string, pages: number, signal: AbortSignal) => Promise<AnalysisResult>
+  /** DocLayout-YOLO boxes for every page (raster window + model). */
+  layout: (
+    path: string,
+    pages: number,
+    signal: AbortSignal,
+    onPage: (done: number, total: number) => Promise<void>,
+  ) => Promise<PageLayout[]>
+  analyze: (
+    path: string,
+    layouts: PageLayout[],
+    pages: number,
+    signal: AbortSignal,
+  ) => Promise<AnalysisResult>
   translate: (input: {
     analysis: AnalysisResult
     manifest: DocumentManifest
@@ -36,8 +51,7 @@ export type PipelineHooks = {
     dualPath: string | null
     analysis: AnalysisResult
     translations: TranslatedParagraph[]
-    fonts: { regular: string; bold: string }
-    minFontScale: number
+    fonts: { noto: string }
     signal: AbortSignal
   }) => Promise<ComposeResult & { writtenPages?: number[] }>
   verify: (input: {
@@ -47,9 +61,8 @@ export type PipelineHooks = {
     writtenPages: number[]
     signal: AbortSignal
   }) => Promise<VerifyResult>
-  fonts: { regular: string; bold: string }
+  fonts: { noto: string }
   bilingual: (manifest: DocumentManifest) => boolean
-  minFontScale: (manifest: DocumentManifest) => number
   onChanged?: (manifest: DocumentManifest) => void
 }
 
@@ -107,17 +120,41 @@ export async function runPipeline(
   )
 
   await enterStage('analyze', 10)
+  const layouts = await withCheckpoint(
+    join(work, 'layout.json'),
+    manifest.sourceSha256,
+    async () => {
+      throwIfAborted(signal)
+      return hooks.layout(src, inspection.pages, signal, async (done, total) => {
+        const progress = 10 + Math.round((done / Math.max(1, total)) * 15)
+        await emit(
+          {
+            stage: 'analyze',
+            level: 'info',
+            progress,
+            current: done,
+            total,
+            message: `版面检测 ${done} / ${total} 页`,
+          },
+          { stage: 'analyze', progress },
+        )
+      })
+    },
+    (data) => PageLayout.array().safeParse(data).success,
+  )
   const analysis = await withCheckpoint(
     join(work, 'analysis.json'),
     manifest.sourceSha256,
     async () => {
       throwIfAborted(signal)
-      return hooks.analyze(src, inspection.pages, signal)
+      return hooks.analyze(src, layouts, inspection.pages, signal)
     },
+    (data) => AnalysisResult.safeParse(data).success,
   )
   const pagesWithout = new Set<number>()
   for (let i = 0; i < analysis.pages; i += 1) {
-    if (!analysis.paragraphs.some((p) => p.page === i && p.translatable)) pagesWithout.add(i)
+    const texts = analysis.units.filter((unit) => unit.page === i).flatMap((unit) => unit.texts)
+    if (!texts.some(needsTranslation)) pagesWithout.add(i)
   }
   for (const page of pagesWithout) {
     await emit({
@@ -132,7 +169,7 @@ export async function runPipeline(
       stage: 'analyze',
       level: 'info',
       progress: 29,
-      message: `分析版面：识别到 ${analysis.stats.paragraphs} 个段落，其中 ${analysis.stats.translatable} 个待翻译，公式 ${analysis.stats.runs} 处`,
+      message: `分析版面：识别到 ${analysis.stats.paragraphs} 个段落，其中 ${analysis.stats.translatable} 个待翻译，公式 ${analysis.stats.formulas} 处`,
     },
     {
       stage: 'analyze',
@@ -142,7 +179,7 @@ export async function runPipeline(
         translatable: analysis.stats.translatable,
         translated: 0,
         kept: 0,
-        formulaRuns: analysis.stats.runs,
+        formulaRuns: analysis.stats.formulas,
         opsRemoved: 0,
         usage: { input: 0, output: 0 },
       },
@@ -185,7 +222,7 @@ export async function runPipeline(
         translatable: analysis.stats.translatable,
         translated: translation.translated,
         kept: translation.kept,
-        formulaRuns: analysis.stats.runs,
+        formulaRuns: analysis.stats.formulas,
         opsRemoved: 0,
         usage: translation.usage,
       },
@@ -204,18 +241,17 @@ export async function runPipeline(
     analysis,
     translations: translation.translations,
     fonts: hooks.fonts,
-    minFontScale: hooks.minFontScale(current),
     signal,
   })
   for (const warning of composed.warnings) {
-    await emit({ stage: 'compose', level: 'warning', ...composeWarningEvent(warning, analysis) })
+    await emit({ stage: 'compose', level: 'warning', ...composeWarningEvent(warning) })
   }
   await emit(
     {
       stage: 'compose',
       level: 'info',
       progress: 89,
-      message: `改写内容流：写入 ${composed.paragraphsWritten} 段译文，重绘公式 ${composed.runsRedrawn} 处，删除文字指令 ${composed.opsRemoved} 条`,
+      message: `改写内容流：删除原文文字指令 ${composed.opsRemoved} 条，写入 ${composed.paragraphsWritten} 段译文，原样重绘公式 ${composed.runsRedrawn} 处`,
     },
     {
       stage: 'compose',
@@ -225,7 +261,7 @@ export async function runPipeline(
         translatable: analysis.stats.translatable,
         translated: translation.translated,
         kept: translation.kept + composed.paragraphsKept,
-        formulaRuns: analysis.stats.runs,
+        formulaRuns: analysis.stats.formulas,
         opsRemoved: composed.opsRemoved,
         usage: translation.usage,
       },
@@ -284,10 +320,16 @@ export async function runPipeline(
   hooks.onChanged?.(archived)
 }
 
-async function withCheckpoint<T>(path: string, sha: string, produce: () => Promise<T>): Promise<T> {
+async function withCheckpoint<T>(
+  path: string,
+  sha: string,
+  produce: () => Promise<T>,
+  valid: (data: unknown) => boolean = () => true,
+): Promise<T> {
   try {
     const raw = JSON.parse(await readFile(path, 'utf8')) as { sourceSha256?: string; data?: T }
-    if (raw.sourceSha256 === sha && raw.data) return raw.data
+    // A checkpoint written by an older version has another shape: produce it again.
+    if (raw.sourceSha256 === sha && raw.data && valid(raw.data)) return raw.data
   } catch {
     /* miss */
   }
@@ -297,30 +339,14 @@ async function withCheckpoint<T>(path: string, sha: string, produce: () => Promi
 }
 
 /** Processing-record text for a compose warning; unknown codes keep their text as `detail`. */
-export function composeWarningEvent(
-  warning: ComposeResult['warnings'][number],
-  analysis: Pick<AnalysisResult, 'paragraphs'>,
-): { message: string; detail?: string } {
+export function composeWarningEvent(warning: ComposeResult['warnings'][number]): {
+  message: string
+  detail?: string
+} {
   const page = `第 ${(warning.page ?? 0) + 1} 页`
-  // Paragraph ids (`2-5`) are internal; users get the paragraph's position on its page.
-  const onPage = analysis.paragraphs.filter((para) => para.page === warning.page)
-  const index = onPage.findIndex((para) => para.id === warning.paragraphId)
-  const paragraph = index >= 0 ? `${page}第 ${index + 1} 段` : `${page}有一段`
   switch (warning.code) {
-    case 'overflow':
-      return { message: `${paragraph}译文超出原段落范围` }
-    case 'layout_failed':
-      return { message: `${paragraph}排版失败，已保留原文` }
     case 'font_unmapped':
-      return { message: `${paragraph}的公式字体无法映射，已保留原文` }
-    case 'encode_failed':
-      return { message: `${paragraph}译文无法用内置字体写入，该页未写入译文` }
-    case 'page_skipped':
-      return { message: `${page}有文字指令无法对应到段落，已跳过该页` }
-    case 'op_mismatch':
-      return { message: `${page}删除的原文指令数与预期不一致，请检查该页译文是否与原文重叠` }
-    case 'font_subset_fallback':
-      return { message: '中文字体子集嵌入失败，已改为嵌入完整字体，文件会大一些' }
+      return { message: `${page}有公式字符找不到原字体，未能重画` }
     default:
       return {
         message: warning.page === undefined ? '生成 PDF 时出现警告' : `${page}生成时出现警告`,
@@ -334,12 +360,11 @@ function throwIfAborted(signal: AbortSignal): void {
 }
 
 /** `root` is `<resources>/fonts` in a packaged app; tests and scripts run from the repo root. */
-export function bundledFonts(root = join(process.cwd(), 'resources/fonts')): {
-  regular: string
-  bold: string
-} {
-  return {
-    regular: join(root, 'NotoSansSC-Regular.otf'),
-    bold: join(root, 'NotoSansSC-Bold.otf'),
-  }
+export function bundledFonts(root = join(process.cwd(), 'resources/fonts')): { noto: string } {
+  return { noto: join(root, 'SourceHanSerifCN-Regular.ttf') }
+}
+
+/** DocLayout-YOLO; `root` is `<resources>/models` in a packaged app. */
+export function bundledModel(root = join(process.cwd(), 'resources/models')): string {
+  return join(root, DOCLAYOUT_MODEL_FILE)
 }

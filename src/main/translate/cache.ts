@@ -3,7 +3,6 @@ import { readFile } from 'node:fs/promises'
 import { CACHE_FLUSH_EVERY, CACHE_FLUSH_MS } from '../../shared/constants'
 import type { ProviderConfig, TranslationRuntime } from '../../shared/types'
 import { writeJsonAtomic } from '../settings/atomic-write'
-import { pdfMarkerSequence } from './validate'
 
 export type CacheEntry = { text: string; at: string }
 
@@ -80,13 +79,9 @@ export class TranslationCache {
     this.#timer = undefined
   }
 
+  /** pdf2zh TranslationCache.get: whatever was stored for this source text. */
   get(segmentText: string): string | undefined {
-    const hit = this.#entries.get(sha256(segmentText))
-    if (!hit?.text.trim()) return undefined
-    if (pdfMarkerSequence(hit.text).join('\0') !== pdfMarkerSequence(segmentText).join('\0')) {
-      return undefined
-    }
-    return hit.text
+    return this.#entries.get(sha256(segmentText))?.text
   }
 
   set(segmentText: string, text: string): void {

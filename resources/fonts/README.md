@@ -1,10 +1,9 @@
 # 字体
 
-译文写回 PDF 时嵌入的中文字体。来源：[notofonts/noto-cjk](https://github.com/notofonts/noto-cjk)，`Sans/SubsetOTF/SC/`，许可证 SIL Open Font License 1.1（见 `LICENSE-OFL.txt`）。
+译文写回 PDF 时嵌入的中文字体：思源宋体（Source Han Serif CN Regular，版本 2.003），与 PDFMathTranslate（pdf2zh）1.9.11 对简体中文使用的字体相同，取自 [BabelDOC-Assets](https://github.com/funstory-ai/BabelDOC-Assets) 的 `fonts/SourceHanSerifCN-Regular.ttf`。版权 © 2017-2024 Adobe，许可证 SIL Open Font License 1.1（见 `LICENSE-OFL.txt`）。拉丁字符按 pdf2zh 的做法用 PDF 标准字体 Times-Roman，不需要字体文件。
 
-| 文件                     | SHA-256                                                            | 大小      |
-| ------------------------ | ------------------------------------------------------------------ | --------- |
-| `NotoSansSC-Regular.otf` | `faa6c9df652116dde789d351359f3d7e5d2285a2b2a1f04a2d7244df706d5ea9` | 8,331,336 |
-| `NotoSansSC-Bold.otf`    | `c6cb5a93abaa9edc8ee7463b7ebb7f42d618d40e6ed2f7a5371c97b0b64767c0` | 8,543,168 |
+| 文件                           | SHA-256                                                            | 大小       |
+| ------------------------------ | ------------------------------------------------------------------ | ---------- |
+| `SourceHanSerifCN-Regular.ttf` | `8ba5ec09db04b1d1599edeff3fb5627ca11eaaf85e339e5c32684cb94e806993` | 14,047,768 |
 
 嵌入时用 fontkit 做子集化，最终 PDF 只带用到的字形。`scripts/verify-fonts.mjs` 会在 `npm run check` 里核对以上校验和。

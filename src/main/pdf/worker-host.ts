@@ -5,14 +5,15 @@ import { ERROR_CODES, UserError } from '../../shared/errors'
 import type {
   AnalysisResult,
   ComposeRequest,
-  PdfInspection,
+  PageLayout,
   VerifyResult,
 } from '../../shared/pdf-types'
 import { createLogger, type Logger } from '../log/logger'
 
 export type WorkerJob =
   | { kind: 'inspect'; path: string }
-  | { kind: 'analyze'; path: string; inspection?: PdfInspection }
+  | { kind: 'analyze'; path: string; layouts: PageLayout[] }
+  | { kind: 'detect'; path: string; index: number; modelPath: string }
   | {
       kind: 'verify'
       monoPath: string
@@ -214,6 +215,7 @@ export const TIMEOUT = {
   compose: (pages: number) =>
     Math.max(PDF.TIMEOUT_COMPOSE_BASE_MS, pages * PDF.TIMEOUT_COMPOSE_PER_PAGE_MS),
   verify: PDF.TIMEOUT_VERIFY_MS,
+  detect: PDF.TIMEOUT_DETECT_PAGE_MS,
 }
 
 export type { AnalysisResult, VerifyResult }

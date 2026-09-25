@@ -1,6 +1,7 @@
 import { mkdir, readFile, rename } from 'node:fs/promises'
 import { join } from 'node:path'
 import { Settings, defaultSettings, type ProviderConfig } from '../../shared/types'
+import { DEFAULT_SYSTEM_PROMPT, LEGACY_SYSTEM_PROMPT } from '../../shared/constants'
 import { writeJsonAtomic } from './atomic-write'
 
 export type SettingsHooks = {
@@ -60,7 +61,7 @@ export class SettingsStore {
     }
 
     try {
-      this.#value = dropStaleTranslator(Settings.parse(JSON.parse(raw) as unknown))
+      this.#value = upgradePrompt(dropStaleTranslator(Settings.parse(JSON.parse(raw) as unknown)))
     } catch {
       const broken = `${this.filePath}.broken-${stamp()}`
       await rename(this.filePath, broken).catch(() => undefined)
@@ -81,6 +82,15 @@ export class SettingsStore {
 
   replaceProviders(providers: ProviderConfig[]): Promise<Settings> {
     return this.update({ providers })
+  }
+}
+
+/** The 4.0.0 default prompt was for batched requests; 4.0.1 sends pdf2zh's prompt instead. */
+function upgradePrompt(settings: Settings): Settings {
+  if (settings.translation.systemPrompt !== LEGACY_SYSTEM_PROMPT) return settings
+  return {
+    ...settings,
+    translation: { ...settings.translation, systemPrompt: DEFAULT_SYSTEM_PROMPT },
   }
 }
 
