@@ -38,7 +38,7 @@ test('翻译进行中关闭后重启会从断点继续', async ({ launch, dataDi
   await waitForStatus(second.page, id, 'completed')
   const messages = (await documentEvents(second.page, id)).map((event) => event.message)
   expect(messages).toContain('应用重新启动，从断点继续')
-  expect(messages.some((message) => /^缓存命中 \d+ 段$/.test(message))).toBe(true)
+  expect(messages.some((message) => /^缓存命中 \d+ 个请求$/.test(message))).toBe(true)
   // Quitting the app is not a cancel.
   expect(messages).not.toContain('已取消处理')
 })

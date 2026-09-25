@@ -45,7 +45,7 @@ import { useUiStore } from '../../store/ui'
 import { confirmCancel, confirmDelete, useDeletingStore } from './actions'
 import { elapsedMs, latestEvent, stageState, type StageState } from './progress'
 
-type ExportKind = 'mono' | 'dual' | 'source' | 'bundle'
+type ExportKind = 'mono' | 'dual' | 'glossary' | 'source' | 'bundle'
 
 // Stable fallback: zustand 5 selectors must not return a fresh array on every call,
 // otherwise useSyncExternalStore loops forever ("Maximum update depth exceeded").
@@ -225,6 +225,7 @@ function exportName(item: DocumentSummary, kind: ExportKind): string {
   if (kind === 'mono') return item.suggestedNames.mono
   if (kind === 'dual') return item.suggestedNames.dual
   if (kind === 'bundle') return item.suggestedNames.bundle
+  if (kind === 'glossary') return item.suggestedNames.glossary
   return item.suggestedNames.source
 }
 
@@ -288,6 +289,11 @@ function HeaderActions(props: {
               {item.files.dual ? (
                 <Dropdown.Item id="dual" textValue="双语对照 PDF…">
                   双语对照 PDF…
+                </Dropdown.Item>
+              ) : null}
+              {item.files.glossary ? (
+                <Dropdown.Item id="glossary" textValue="术语表（CSV）…">
+                  术语表（CSV）…
                 </Dropdown.Item>
               ) : null}
               <Dropdown.Item id="source" textValue="源文件…">

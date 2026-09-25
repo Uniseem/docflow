@@ -1,6 +1,18 @@
-import { Alert, Button, CloseButton, Label, Modal, TextField, Input } from '@heroui/react'
+import {
+  Alert,
+  Button,
+  CloseButton,
+  Description,
+  FieldError,
+  Input,
+  Label,
+  Modal,
+  Switch,
+  TextField,
+} from '@heroui/react'
 import { FileText } from 'lucide-react'
 import { useState } from 'react'
+import { pageRangeProblem } from '../../../shared/pages'
 import { invoke } from '../../api/invoke'
 import { TranslatorSelect } from '../../components/TranslatorSelect'
 import { basename, fileStem } from '../../lib/labels'
@@ -22,6 +34,7 @@ export function NewTranslationModal() {
   const setSettingsTab = useUiStore((s) => s.setSettingsTab)
   const settings = useSettingsStore((s) => s.view)
   const options = translatorOptions(settings)
+  const glossaries = (settings?.glossaries ?? []).filter((g) => g.enabled).map((g) => g.name)
   const [files, setFiles] = useState<PendingFile[]>(() => mergePaths([], preset))
   // Paths pushed while the modal is already open (a second drop, app:openFiles) arrive as a
   // new preset array without remounting the modal, so merge them into the list here.
@@ -41,11 +54,16 @@ export function NewTranslationModal() {
   const title = titleDraft ?? (onlyFile ? fileStem(basename(onlyFile.path)) : '')
   const [pending, setPending] = useState(false)
   const [failures, setFailures] = useState<Array<{ path: string; message: string }>>([])
+  // BabelDOC pages / only_include_translated_page, for every file of this batch.
+  const [pages, setPages] = useState('')
+  const [onlyPages, setOnlyPages] = useState(false)
+  const pagesProblem = pageRangeProblem(pages)
 
   const problems = files.filter((file) => file.problem)
   const canSubmit =
     files.length > 0 &&
     problems.length === 0 &&
+    !pagesProblem &&
     Boolean(translatorKey) &&
     options.some((item) => item.key === translatorKey)
 
@@ -70,10 +88,13 @@ export function NewTranslationModal() {
     setFailures([])
     try {
       const customTitle = files.length === 1 && titleDraft !== null ? titleDraft.trim() : ''
-      const payload = customTitle
-        ? { paths: files.map((file) => file.path), translator: parsed, title: customTitle }
-        : { paths: files.map((file) => file.path), translator: parsed }
-      const result = await invoke('documents:create', payload)
+      const range = pages.trim()
+      const result = await invoke('documents:create', {
+        paths: files.map((file) => file.path),
+        translator: parsed,
+        ...(customTitle ? { title: customTitle } : {}),
+        ...(range ? { pages: range, onlyTranslatedPages: onlyPages } : {}),
+      })
       if (result.created.length > 0) {
         notify.success(`已添加 ${result.created.length} 个文档`)
         const docs = useDocumentsStore.getState()
@@ -165,7 +186,7 @@ export function NewTranslationModal() {
                 </div>
               )}
               <p className="mt-2 text-xs text-foreground/60">
-                只支持带文本层的 PDF；扫描件、加密文件和 Office 文档无法处理。
+                只支持带文字层的 PDF；没做过 OCR 的扫描件、加密文件和 Office 文档无法处理。
               </p>
             </div>
             <TranslatorSelect
@@ -177,6 +198,7 @@ export function NewTranslationModal() {
             />
             <p className="text-xs text-foreground/60">
               由所选的大模型翻译；速度和费用取决于服务商和模型。
+              {glossaries.length > 0 ? ` 使用术语表：${glossaries.join('、')}。` : ''}
             </p>
             {files.length === 1 ? (
               <TextField value={title} onChange={setTitleDraft}>
@@ -184,6 +206,27 @@ export function NewTranslationModal() {
                 <Input placeholder="默认使用文件名" />
               </TextField>
             ) : null}
+            <div className="flex flex-col gap-2">
+              <TextField value={pages} onChange={setPages} isInvalid={Boolean(pagesProblem)}>
+                <Label>页码范围</Label>
+                <Input placeholder="全部页" />
+                {pagesProblem ? (
+                  <FieldError>{pagesProblem}</FieldError>
+                ) : (
+                  <Description>
+                    例如 1-3,5,8-（第 8 页到最后）。只翻译这些页，其余页保持原文。
+                  </Description>
+                )}
+              </TextField>
+              <Switch isSelected={onlyPages} isDisabled={!pages.trim()} onChange={setOnlyPages}>
+                <Switch.Content>
+                  <Switch.Control>
+                    <Switch.Thumb />
+                  </Switch.Control>
+                  生成的 PDF 只包含这些页
+                </Switch.Content>
+              </Switch>
+            </div>
             {translatorMissing ? (
               <Alert status="warning">
                 <Alert.Indicator />

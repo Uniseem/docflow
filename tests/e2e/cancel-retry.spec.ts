@@ -38,7 +38,7 @@ test('取消后重新处理会命中缓存', async ({ launch, dataDir, mockProvi
   await page.getByRole('button', { name: '重新处理', exact: true }).first().click()
   await waitForStatus(page, id, 'completed')
   const rerun = await documentEvents(page, id, lastSeq)
-  expect(rerun.some((event) => /^缓存命中 \d+ 段$/.test(event.message))).toBe(true)
+  expect(rerun.some((event) => /^缓存命中 \d+ 个请求$/.test(event.message))).toBe(true)
   const all = await documentEvents(page, id)
   expect(all.filter((event) => event.message === '已取消处理')).toHaveLength(1)
   await page.getByRole('tab', { name: '处理记录', exact: true }).click()

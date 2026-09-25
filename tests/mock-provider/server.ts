@@ -294,8 +294,10 @@ export function replyFor(
     source = user.slice(single + SINGLE_MARKER.length)
     text = applyFaults(source, state)
   } else if (user.includes(TERMS_MARKER)) {
+    // One fixed term, so the automatic glossary (and its export) shows up in E2E.
     source = ''
-    text = '[]'
+    const input = user.slice(user.indexOf(TERMS_MARKER) + TERMS_MARKER.length)
+    text = /attention/i.test(input) ? JSON.stringify([{ src: 'attention', tgt: '注意力' }]) : '[]'
   } else {
     source = user
     text = applyFaults(user, state)

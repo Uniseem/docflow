@@ -20,7 +20,7 @@ import { ProxyConfig } from '../../../shared/types'
 import { invoke } from '../../api/invoke'
 import { TranslatorSelect } from '../../components/TranslatorSelect'
 import { ConfirmDialog } from '../../components/ConfirmDialog'
-import { notifyError } from '../../lib/notify'
+import { notify, notifyError } from '../../lib/notify'
 import { defaultTranslatorKey, parseTranslatorKey, translatorOptions } from '../../lib/translators'
 import { useDocumentsStore } from '../../store/documents'
 import { useSettingsStore } from '../../store/settings'
@@ -383,6 +383,8 @@ function AdvancedPanel() {
   if (!view) return null
   const prompt = draft ?? view.translation.systemPrompt
   const llm = view.translation.llm
+  const translation = view.translation
+  const pdf = view.pdf
   return (
     <div className="mx-auto flex max-w-2xl flex-col gap-4">
       <Card>
@@ -403,7 +405,7 @@ function AdvancedPanel() {
           />
           <Num
             label="单个文档最多同时发出的请求数"
-            value={view.translation.perDocumentConcurrency}
+            value={translation.perDocumentConcurrency}
             min={1}
             max={1000}
             onChange={(perDocumentConcurrency) =>
@@ -414,15 +416,49 @@ function AdvancedPanel() {
       </Card>
       <Card>
         <Card.Header>
-          <Card.Title>翻译提示词</Card.Title>
+          <Card.Title>翻译</Card.Title>
+        </Card.Header>
+        <Card.Content className="flex flex-col gap-4">
+          <Num
+            label="最短翻译长度（字符）"
+            value={translation.minTextLength}
+            min={1}
+            max={1000}
+            description="比这更短的段落（编号、短标签等）保留原文。"
+            onChange={(minTextLength) => void update({ translation: { minTextLength } })}
+          />
+          <Toggle
+            isSelected={translation.autoExtractGlossary}
+            onChange={(autoExtractGlossary) =>
+              void update({ translation: { autoExtractGlossary } })
+            }
+            label="自动提取术语表"
+            description="翻译前先让大模型找出文中的术语并定好译名，整篇译名一致；结果可以在导出里保存为 CSV。会多用一些 tokens。"
+          />
+          <Toggle
+            isSelected={translation.richText}
+            onChange={(richText) => void update({ translation: { richText } })}
+            label="保留段内格式"
+            description="段落里的粗体、斜体、颜色（如蓝色的引用链接）在译文里保留。模型总是弄乱格式时可以关掉。"
+          />
+        </Card.Content>
+      </Card>
+      <GlossaryCard />
+      <Card>
+        <Card.Header>
+          <Card.Title>角色提示词</Card.Title>
         </Card.Header>
         <Card.Content className="flex flex-col gap-2">
-          <TextField aria-label="翻译提示词" value={prompt} onChange={setDraft}>
-            <TextArea rows={8} className="font-mono" />
+          <TextField aria-label="角色提示词" value={prompt} onChange={setDraft}>
+            <TextArea
+              rows={4}
+              className="font-mono"
+              placeholder="You are a professional zh-CN native translator who needs to fluently translate text into zh-CN."
+            />
             <Description>
-              {prompt.length} / 12000。每个段落单独发送这段提示词（与 PDFMathTranslate 相同），其中
-              $text 替换为段落原文，$lang_in、$lang_out 替换为 en、zh；段落里的 {'{v0}'}、{'{v1}'}…
-              是公式占位符，需要原样保留。新任务使用新提示词，进行中的任务保持提交时的设置。
+              {prompt.length} / 12000。留空使用默认。填写后替换每个请求开头的角色说明（如“你是一名
+              化学领域的专业译者”），译文格式、占位符与术语表的要求不受影响。新任务使用新设置，
+              进行中的任务保持提交时的设置。
             </Description>
           </TextField>
           <div className="flex gap-2">
@@ -446,20 +482,174 @@ function AdvancedPanel() {
           <Card.Title>PDF 写回</Card.Title>
         </Card.Header>
         <Card.Content className="flex flex-col gap-4">
-          <Switch
-            isSelected={view.pdf.bilingual}
+          <Toggle
+            isSelected={pdf.bilingual}
             onChange={(bilingual) => void update({ pdf: { bilingual } })}
+            label="同时生成双语对照 PDF"
+          />
+          <RadioGroup
+            value={pdf.dualMode}
+            isDisabled={!pdf.bilingual}
+            onChange={(dualMode) => void update({ pdf: { dualMode } })}
           >
-            <Switch.Content>
-              <Switch.Control>
-                <Switch.Thumb />
-              </Switch.Control>
-              同时生成双语对照 PDF
-            </Switch.Content>
-          </Switch>
+            <Label>双语对照排法</Label>
+            <Choice value="side-by-side" label="左右并排（原文与译文在同一页）" />
+            <Choice value="alternating" label="原文页与译文页交替" />
+          </RadioGroup>
+          <Toggle
+            isSelected={pdf.dualTranslateFirst}
+            isDisabled={!pdf.bilingual}
+            onChange={(dualTranslateFirst) => void update({ pdf: { dualTranslateFirst } })}
+            label="译文在前"
+            description="左右并排时译文在左边，交替时译文页在前。"
+          />
+          <RadioGroup
+            value={pdf.fontFamily}
+            onChange={(fontFamily) => void update({ pdf: { fontFamily } })}
+          >
+            <Label>译文字体</Label>
+            <Choice value="auto" label="自动：按原文的粗细、斜体与有无衬线选择" />
+            <Choice value="serif" label="宋体（思源宋体）" />
+            <Choice value="sans-serif" label="黑体（思源黑体）" />
+            <Choice value="script" label="楷体（霞鹜文楷）" />
+          </RadioGroup>
+          <Toggle
+            isSelected={pdf.ocrWorkaround}
+            onChange={(ocrWorkaround) => void update({ pdf: { ocrWorkaround } })}
+            label="自动处理带文字层的扫描件"
+            description="扫描件的文字层多半是 OCR 的结果，原文印在图片里。打开后遇到这类 PDF，译文用黑色写在白底上盖住原文；关闭时会提示无法处理。"
+          />
         </Card.Content>
       </Card>
     </div>
+  )
+}
+
+function GlossaryCard() {
+  const glossaries = useSettingsStore((s) => s.view?.glossaries ?? [])
+  const [importing, setImporting] = useState(false)
+  const [deleting, setDeleting] = useState<{ id: string; name: string } | null>(null)
+
+  async function importCsv() {
+    setImporting(true)
+    try {
+      const result = await invoke('glossaries:import', {})
+      if ('glossary' in result) {
+        notify.success(`已导入术语表“${result.glossary.name}”（${result.glossary.entries} 条）`)
+      }
+    } catch (error) {
+      notifyError(error)
+    } finally {
+      setImporting(false)
+    }
+  }
+
+  return (
+    <Card>
+      <Card.Header>
+        <Card.Title>术语表</Card.Title>
+        <Card.Description>
+          导入 CSV（source、target 两列，可选 tgt_lng
+          列），新建翻译时使用已勾选的术语表。打开“自动提取术语表”时，它们交给大模型提取术语时参考。
+        </Card.Description>
+      </Card.Header>
+      <Card.Content className="flex flex-col gap-3">
+        {glossaries.length === 0 ? (
+          <p className="text-sm text-foreground/60">还没有导入术语表。</p>
+        ) : (
+          <ul className="flex flex-col gap-2">
+            {glossaries.map((glossary) => (
+              <li key={glossary.id} className="flex items-center gap-2 text-sm">
+                <Switch
+                  aria-label={`使用术语表 ${glossary.name}`}
+                  isSelected={glossary.enabled}
+                  onChange={(enabled) => {
+                    invoke('glossaries:update', { id: glossary.id, enabled }).catch(notifyError)
+                  }}
+                >
+                  <Switch.Content>
+                    <Switch.Control>
+                      <Switch.Thumb />
+                    </Switch.Control>
+                  </Switch.Content>
+                </Switch>
+                <span className="min-w-0 flex-1 truncate" title={glossary.name}>
+                  {glossary.name}
+                </span>
+                <span className="text-foreground/60">{glossary.entries} 条</span>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onPress={() => setDeleting({ id: glossary.id, name: glossary.name })}
+                >
+                  删除
+                </Button>
+              </li>
+            ))}
+          </ul>
+        )}
+        <div>
+          <Button variant="secondary" isPending={importing} onPress={() => void importCsv()}>
+            导入 CSV…
+          </Button>
+        </div>
+      </Card.Content>
+      <ConfirmDialog
+        key={deleting?.id ?? 'none'}
+        isOpen={Boolean(deleting)}
+        title={`删除术语表“${deleting?.name ?? ''}”？`}
+        body="已经添加的文档不受影响；删除后新建翻译不再使用它。"
+        confirmLabel="删除"
+        danger
+        onOpenChange={(open) => {
+          if (!open) setDeleting(null)
+        }}
+        onConfirm={async () => {
+          if (!deleting) return
+          await invoke('glossaries:delete', { id: deleting.id })
+          setDeleting(null)
+        }}
+      />
+    </Card>
+  )
+}
+
+function Toggle(props: {
+  isSelected: boolean
+  isDisabled?: boolean
+  label: string
+  description?: string
+  onChange: (value: boolean) => void
+}) {
+  return (
+    <div className="flex flex-col gap-1">
+      <Switch
+        isSelected={props.isSelected}
+        isDisabled={props.isDisabled ?? false}
+        onChange={props.onChange}
+      >
+        <Switch.Content>
+          <Switch.Control>
+            <Switch.Thumb />
+          </Switch.Control>
+          {props.label}
+        </Switch.Content>
+      </Switch>
+      {props.description ? <p className="text-xs text-foreground/60">{props.description}</p> : null}
+    </div>
+  )
+}
+
+function Choice(props: { value: string; label: string }) {
+  return (
+    <Radio value={props.value}>
+      <Radio.Content>
+        <Radio.Control>
+          <Radio.Indicator />
+        </Radio.Control>
+        {props.label}
+      </Radio.Content>
+    </Radio>
   )
 }
 

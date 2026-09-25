@@ -50,7 +50,7 @@ test('设置在重启后保留，更换文档库后文档还在原位置', async
   await first.page.getByRole('tab', { name: '网络', exact: true }).click()
   await first.page.getByText('不使用代理', { exact: true }).click()
   await first.page.getByRole('tab', { name: '高级', exact: true }).click()
-  await first.page.getByRole('textbox', { name: '翻译提示词' }).fill(PROMPT)
+  await first.page.getByRole('textbox', { name: '角色提示词' }).fill(PROMPT)
   await first.page.getByRole('button', { name: '保存', exact: true }).click()
   // Every change above is an async IPC write: close only after the main process stored them.
   await expect.poll(() => persisted(first.page), { timeout: 10_000 }).toEqual(EXPECTED)

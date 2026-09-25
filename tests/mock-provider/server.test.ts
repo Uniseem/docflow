@@ -111,6 +111,9 @@ describe('mock provider', () => {
       `three${MOCK_MARK}`,
     )
     expect(replyFor('Input Text:\n```\nterms\n```', state).text).toBe('[]')
+    expect(JSON.parse(replyFor('Input Text:\n```\nSelf-attention\n```', state).text)).toEqual([
+      { src: 'attention', tgt: '注意力' },
+    ])
   })
 
   test('injects the 08.3 faults', async () => {

@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, rm, truncate, writeFile } from 'node:fs/promises'
+import { access, mkdtemp, mkdir, readFile, rm, truncate, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, test } from 'vitest'
@@ -24,6 +24,9 @@ import {
   handleDocumentsRename,
   handleDocumentsReveal,
   handleDocumentsRetry,
+  handleGlossariesDelete,
+  handleGlossariesImport,
+  handleGlossariesUpdate,
   handleShellRevealExport,
   type HandlerContext,
 } from './handlers'
@@ -240,6 +243,78 @@ describe('documents handlers', () => {
       { path: empty, message: '文件是空的（0 字节），请选择其他 PDF。' },
       { path: huge, message: '文件太大，请选择小于 500 MB 的 PDF。' },
     ])
+    await ctx.scheduler.stop(0)
+  })
+})
+
+describe('documents:create options (BabelDOC pages)', () => {
+  test('pages, only-these-pages and the enabled glossaries are stored with the document', async () => {
+    const { ctx, pdf, lib } = await setup()
+    await ctx.settings.update({
+      glossaries: [
+        { id: 'aa', name: 'on', enabled: true, entries: 1 },
+        { id: 'bb', name: 'off', enabled: false, entries: 1 },
+      ],
+    })
+    const created = await handleDocumentsCreate(ctx, {
+      paths: [pdf],
+      translator,
+      pages: ' 2-3,5 ',
+      onlyTranslatedPages: true,
+    })
+    const id = created.created[0]!.id
+    expect(lib.require(id).options).toEqual({
+      pages: '2-3,5',
+      onlyTranslatedPages: true,
+      glossaryIds: ['aa'],
+    })
+    await expect(
+      handleDocumentsCreate(ctx, { paths: [pdf], translator, pages: '3-1' }),
+    ).rejects.toMatchObject({ code: 'pages_out_of_range' })
+    await ctx.scheduler.stop(0)
+  })
+})
+
+describe('glossaries handlers', () => {
+  test('import copies the CSV into the library and lists it by file name', async () => {
+    const { ctx, dir } = await setup()
+    const csv = join(dir, '化学.csv')
+    await writeFile(csv, 'source,target\nacid,酸\nbase,碱\n')
+    ctx.env = { ...ctx.env, DOCFLOW_E2E_GLOSSARY_PATH: csv }
+    const result = await handleGlossariesImport(ctx)
+    if (!('glossary' in result)) throw new Error('cancelled')
+    expect(result.glossary).toMatchObject({ name: '化学', enabled: true, entries: 2 })
+    expect(ctx.settings.snapshot.glossaries).toEqual([result.glossary])
+    const stored = join(dir, 'glossaries', `${result.glossary.id}.csv`)
+    expect(await readFile(stored, 'utf8')).toBe('source,target\nacid,酸\nbase,碱\n')
+
+    await handleGlossariesUpdate(ctx, { id: result.glossary.id, enabled: false })
+    expect(ctx.settings.snapshot.glossaries[0]?.enabled).toBe(false)
+    await expect(handleGlossariesUpdate(ctx, { id: 'nope', enabled: true })).rejects.toMatchObject({
+      code: 'not_found',
+    })
+
+    await handleGlossariesDelete(ctx, { id: result.glossary.id })
+    expect(ctx.settings.snapshot.glossaries).toEqual([])
+    await expect(access(stored)).rejects.toThrow()
+    await ctx.scheduler.stop(0)
+  })
+
+  test('a CSV without source and target columns is refused with the reason', async () => {
+    const { ctx, dir } = await setup()
+    const csv = join(dir, 'bad.csv')
+    await writeFile(csv, 'foo,bar\n1,2\n')
+    ctx.env = { ...ctx.env, DOCFLOW_E2E_GLOSSARY_PATH: csv }
+    await expect(handleGlossariesImport(ctx)).rejects.toMatchObject({
+      message: expect.stringContaining('需要 source、target 两列') as unknown,
+    })
+    expect(ctx.settings.snapshot.glossaries).toEqual([])
+    await ctx.scheduler.stop(0)
+  })
+
+  test('cancelling the file dialog changes nothing', async () => {
+    const { ctx } = await setup()
+    expect(await handleGlossariesImport(ctx)).toEqual({ cancelled: true })
     await ctx.scheduler.stop(0)
   })
 })
