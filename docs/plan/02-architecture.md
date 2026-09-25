@@ -13,12 +13,14 @@
 │  ├─ library/    文档目录、manifest、events.jsonl、内存索引、导出        │
 │  ├─ jobs/       调度器：队列、并发、重试、取消、断点恢复                 │
 │  ├─ pipeline/   一个文档的处理流程：inspect→analyze→translate→compose… │
-│  ├─ translate/  服务商、请求、错误分类、密钥轮换、并发池、批处理、缓存   │
+│  ├─ translate/  服务商、请求、错误分类、密钥轮换、并发池、缓存；         │
+│  │              babeldoc/：BabelDOC 的批量翻译、占位符、术语表          │
 │  ├─ pdf/        worker 桥（超时、取消、空闲退出）+ 解析/写回的纯函数     │
 │  └─ log/        electron-log 配置                                       │
 │        │ worker_threads (纯 CPU，无 Electron API)                        │
 │        ▼                                                                │
-│  src/main/workers/analyze.ts   inspect、analyze（算子流→行/栏/段落/公式）、verify │
+│  src/main/workers/analyze.ts   inspect、scan（扫描件判定）、detect（版面检测）、│
+│                                analyze（分段与公式）、verify            │
 │  src/main/workers/compose.ts   内容流改写 + 译文排版 + 公式重绘 + 双语   │
 │                                                                        │
 │  主窗口 renderer  src/renderer/  React 19 + HeroUI 3                   │
@@ -48,11 +50,12 @@ docflow/
 ├─ build/                         # electron-builder 用的图标与安装器资源
 │  ├─ icon.icns  icon.ico  icon.png (1024)
 ├─ resources/                     # extraResources，运行时通过 process.resourcesPath 访问
-│  ├─ fonts/SourceHanSerifCN-Regular.ttf  LICENSE-OFL.txt  README.md   # 思源宋体（pdf2zh 的 noto）
-│  └─ models/doclayout_yolo_docstructbench_imgsz1024.onnx   # 75 MB，不进 git，npm run model 下载
+│  ├─ fonts/*.ttf  LICENSE-OFL.txt  README.md   # BabelDOC 的 15 个字体（src/main/pdf/babeldoc/fonts.json）；
+│  │                              # 只有 SourceHanSerifCN-Regular.ttf 进 git，其余 npm run assets 下载
+│  └─ models/doclayout_yolo_docstructbench_imgsz1024.onnx   # 75 MB，不进 git，npm run assets 下载
 ├─ scripts/
-│  ├─ verify-fonts.mjs            # 核对字体 SHA-256
-│  ├─ fetch-model.mjs             # 下载版面模型并校验 SHA3-256（predev、prebuild 自动运行）
+│  ├─ verify-fonts.mjs            # 按 fonts.json 核对全部字体的 SHA3-256（npm run check 的第一步）
+│  ├─ fetch-assets.mjs            # 下载版面模型与字体并校验 SHA3-256（predev、prebuild 自动运行）
 │  ├─ make-icons.mjs              # 由 build/icon.png 生成 icns/ico（png2icons）
 │  ├─ make-fixtures.mjs           # 生成 tests/fixtures/*.pdf（用 pdf-lib）
 │  ├─ analyze-pdf.mjs             # 调试：版面检测 + 分段，输出 analysis.json 与画框的调试 PDF（03 章 §3.12）
@@ -71,6 +74,7 @@ docflow/
 │  │  ├─ library-filter.ts        # 文档库筛选与状态分组
 │  │  ├─ constants.ts             # 其他限制值（并发上限、字符上限…）
 │  │  ├─ text.ts                  # 纯函数：文件名清理、相对时间、字节格式化
+│  │  ├─ pages.ts                 # 页码范围（BabelDOC parse_pages），界面与主进程共用
 │  │  └─ errors.ts                # UserError / PermanentError 等错误类与错误码
 │  ├─ main/
 │  │  ├─ index.ts                 # 入口：协议注册、单实例、主窗口、启动顺序（见 2.5）
@@ -90,16 +94,23 @@ docflow/
 │  │  ├─ pdf/dom-matrix.ts        # 纯 JS 的 DOMMatrix，替代 pdf.js 的可选原生依赖（ADR-0010）
 │  │  ├─ pdf/load-pdf-lib.ts      # 加载 pdf-lib 前把间接 /Length 改写为数字
 │  │  ├─ pdf/inspect.ts  pdf/verify.ts  pdf/analyze.ts（分析入口）
+│  │  ├─ pdf/scanned.ts           # BabelDOC DetectScannedFile：带 OCR 文字层的扫描件判定（ADR-0018）
 │  │  ├─ pdf/analyze/glyphs.ts    # pdf.js 算子流 → 逐字形
 │  │  ├─ pdf/pdf2zh/              # PDFMathTranslate 1.9.11 的移植（03 章，ADR-0016）
 │  │  │  ├─ render.ts detect.ts doclayout.ts   # MuPDF.js 渲染 + DocLayout-YOLO + 版面矩阵
 │  │  │  ├─ interp.ts pages.ts                  # pdfinterp：ops_base、do_S、do_Do
 │  │  │  ├─ chars.ts unicode.ts pdfminer-tables.ts  # LTChar、to_unichr
-│  │  │  ├─ parse.ts typeset.ts segments.ts     # receive_layout A、C、B
-│  │  ├─ pdf/compose/index.ts  content-lexer.ts  streams.ts  dual.ts
+│  │  │  ├─ parse.ts segments.ts typeset.ts     # receive_layout A、B；C（只作参照）
+│  │  │  ├─ reflow.ts                           # BabelDOC Typesetting（实际使用的排版，ADR-0017）
+│  │  │  └─ font-flags.ts                       # 原字体的粗体/斜体/等宽/衬线（MuPDF.js）
+│  │  ├─ pdf/babeldoc/            # BabelDOC 的字体：fonts.json（文件、属性、SHA3-256）、fonts.ts、
+│  │  │                           # fontmap.ts（FontMapper）、font-set.ts（按需加载、查字形与宽度）
+│  │  ├─ pdf/compose/index.ts  content-lexer.ts  streams.ts  dual.ts  outline.ts（书签迁移）
 │  │  ├─ workers/analyze.ts  workers/compose.ts   # worker 入口（薄封装，调用 pdf/ 下纯函数）
 │  │  ├─ translate/providers.ts  request.ts  response.ts  errors.ts  keys.ts  pool.ts
-│  │  ├─ translate/pdf2zh-prompt.ts  translate-document.ts  cache.ts  fake.ts
+│  │  ├─ translate/translate-document.ts  cache.ts  fake.ts
+│  │  ├─ translate/babeldoc/      # BabelDOC 0.6.4 的翻译（04 章 §4.9–§4.15，ADR-0018）：paragraphs.ts
+│  │  │                           # translator.ts prompts.ts templates.ts placeholders.ts glossary.ts terms.ts text.ts
 │  │  ├─ translate/http.ts        # fetch 注入：生产用 net.fetch，测试用 Node fetch
 │  │  └─ log/logger.ts
 │  ├─ preload/index.ts            # contextBridge.exposeInMainWorld('docflow', api)
@@ -143,6 +154,7 @@ docflow/
 | `onnxruntime-web`                                                                                                                                                                                                                       | `1.30.0`（精确版本）                                 | DocLayout-YOLO 推理（Node 下用 wasm 后端，不用原生的 onnxruntime-node）             | 检查 `ort.node.min.mjs` 与 wasm 文件名（electron-builder `files`） |
 | `electron-log`                                                                                                                                                                                                                          | `^5.4.4`                                             | 日志                                                                                | —                                                                  |
 | `fflate`                                                                                                                                                                                                                                | `^0.8.2`                                             | ZIP 导出（内容流的解压/压缩用 pdf-lib 自带的）                                      | —                                                                  |
+| `gpt-tokenizer`                                                                                                                                                                                                                         | `^4.0.0`（devDependency，打进主进程 bundle）         | o200k_base 分词计数，BabelDOC 按 token 分批（04 §4.9，ADR-0018）；纯 JS，MIT        | 检查 `gpt-tokenizer/encoding/o200k_base` 入口与 `encode` 的选项    |
 | `lucide-react`                                                                                                                                                                                                                          | `^1.47.0`                                            | 图标                                                                                | —                                                                  |
 | `clsx`                                                                                                                                                                                                                                  | `^2.1.1`                                             | className 拼接                                                                      | —                                                                  |
 | `vitest`                                                                                                                                                                                                                                | `^5.0.1`                                             | 单测                                                                                | —                                                                  |
@@ -160,7 +172,7 @@ docflow/
 ```json
 {
   "name": "docflow",
-  "version": "4.0.0",
+  "version": "4.1.0",
   "private": true,
   "description": "PDF 论文翻译桌面应用",
   "author": "DocFlow contributors",
@@ -171,9 +183,9 @@ docflow/
   "engines": { "node": ">=24" },
   "scripts": {
     "dev": "electron-vite dev",
-    "predev": "node scripts/fetch-model.mjs",
+    "predev": "node scripts/fetch-assets.mjs",
     "build": "electron-vite build",
-    "prebuild": "node scripts/fetch-model.mjs && node scripts/third-party-notices.mjs",
+    "prebuild": "node scripts/fetch-assets.mjs && node scripts/third-party-notices.mjs",
     "preview": "electron-vite preview",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
     "lint": "eslint . && prettier --check .",
@@ -182,7 +194,8 @@ docflow/
     "test:watch": "vitest",
     "test:e2e": "playwright test",
     "verify:fonts": "node scripts/verify-fonts.mjs",
-    "model": "node scripts/fetch-model.mjs",
+    "model": "node scripts/fetch-assets.mjs",
+    "assets": "node scripts/fetch-assets.mjs",
     "check": "npm run verify:fonts && npm run typecheck && npm run lint && npm run test",
     "dist": "npm run build && electron-builder --publish never",
     "dist:dir": "npm run build && electron-builder --dir --publish never",
@@ -221,6 +234,7 @@ docflow/
     "eslint-plugin-react-hooks": "^7.1.1",
     "eslint-plugin-react-refresh": "^0.5.7",
     "globals": "^17.12.0",
+    "gpt-tokenizer": "^4.0.0",
     "lucide-react": "^1.47.0",
     "png2icons": "^2.0.1",
     "prettier": "^3.9.8",
@@ -237,7 +251,7 @@ docflow/
 }
 ```
 
-原则：**主进程运行时需要的包放 `dependencies`**（electron-vite 的 `externalizeDepsPlugin` 把它们保持为外部模块，electron-builder 打包 `node_modules` 里的它们）；渲染进程用的包被 Vite 打进 bundle，放 `devDependencies`，避免打包体积膨胀。例外：`zod` 在 `dependencies` 里，但 preload 把它打进 bundle（2.9）；`pdfjs-dist` 的可选原生依赖 `@napi-rs/canvas` 会随 npm 安装，但被 `electron-builder.yml` 的 `files` 排除，`DOMMatrix` 由 `src/main/pdf/dom-matrix.ts` 补齐（ADR-0010）。`dist` / `dist:dir` 走 `npm run build`（不要直接 `electron-vite build`），这样 `prebuild` 会先生成 `THIRD_PARTY_NOTICES.md`，electron-builder 的 extraResources 才能找到它。
+原则：**主进程运行时需要的包放 `dependencies`**（electron-vite 的 `externalizeDepsPlugin` 把它们保持为外部模块，electron-builder 打包 `node_modules` 里的它们）；渲染进程用的包被 Vite 打进 bundle，放 `devDependencies`，避免打包体积膨胀。例外：`zod` 在 `dependencies` 里，但 preload 把它打进 bundle（2.9）；`gpt-tokenizer` 反过来在 `devDependencies` 里，由 Vite 打进主进程 bundle 的单独一块（2.9），不进 `node_modules` 的打包；`pdfjs-dist` 的可选原生依赖 `@napi-rs/canvas` 会随 npm 安装，但被 `electron-builder.yml` 的 `files` 排除，`DOMMatrix` 由 `src/main/pdf/dom-matrix.ts` 补齐（ADR-0010）。`dist` / `dist:dir` 走 `npm run build`（不要直接 `electron-vite build`），这样 `prebuild` 会先下载版面模型与字体（`fetch-assets.mjs`，已有且哈希一致的跳过）并生成 `THIRD_PARTY_NOTICES.md`，electron-builder 的 extraResources 才能找到它们。`model` 是 `assets` 的旧名，指向同一个脚本。
 
 `.npmrc`：
 
@@ -303,6 +317,9 @@ audit=false
 | `DOCFLOW_LOG_LEVEL`         | `debug/info/warn/error`                                                                                                                                                                                            |
 | `DOCFLOW_E2E_SAVE_PATH`     | 存在时保存对话框直接返回该路径（E2E 用）                                                                                                                                                                           |
 | `DOCFLOW_E2E_FOLDER_PATH`   | 存在时选文件夹对话框直接返回该路径；同时让 `app:info.dataDirFromEnv` 为 false，以便 E2E 改文档库位置                                                                                                               |
+| `DOCFLOW_E2E_GLOSSARY_PATH` | 存在时 `glossaries:import` 不弹对话框，直接导入该 CSV（E2E 用，05 §5.6）                                                                                                                                           |
+| `DOCFLOW_MODEL_URL`         | 只给 `scripts/fetch-assets.mjs`：版面模型的完整下载地址，替换内置的 Hugging Face / hf-mirror / ModelScope 三个来源                                                                                                 |
+| `DOCFLOW_FONTS_URL`         | 只给 `scripts/fetch-assets.mjs`：字体的基础地址（以 `/` 结尾，后面接文件名），替换内置的 BabelDOC-Assets 三个来源（GitHub、Hugging Face、ModelScope）                                                              |
 | `DOCFLOW_HIDE_WINDOW`       | `1` 时窗口创建后不显示、macOS 隐藏 Dock 图标、不发系统通知，`backgroundThrottling` 关闭（隐藏窗口的定时器与动画照常）；E2E 默认带上（`E2E_SHOW=1` 时不带），自写的冒烟脚本也应带上，避免在开发者屏幕上反复开关窗口 |
 
 ## 2.9 各配置文件全文
@@ -342,6 +359,11 @@ export default defineConfig({
           format: 'es',
           entryFileNames: '[name].mjs',
           chunkFileNames: 'chunks/[name]-[hash].mjs',
+          // The o200k token list holds strings such as " import": in a chunk that also uses
+          // __dirname, electron-vite's CommonJS shim takes one for an import statement and is
+          // inserted inside the list. On its own the list needs no shim.
+          manualChunks: (id) =>
+            id.includes('/node_modules/gpt-tokenizer/') ? 'gpt-tokenizer' : undefined,
         },
       },
     },
@@ -352,7 +374,7 @@ export default defineConfig({
     build: {
       rollupOptions: {
         input: { index: resolve(__dirname, 'src/preload/index.ts') },
-        // 沙箱 preload 必须是 CommonJS；zod 必须打进 bundle，不能 require node_modules
+        // 沙箱 preload 必须是 CommonJS
         output: { format: 'cjs', entryFileNames: '[name].cjs' },
       },
     },
@@ -375,6 +397,7 @@ export default defineConfig({
 
 - `"type": "module"` + 主进程 ESM 输出：`pdfjs-dist` 是 ESM-only，这样主进程与 worker 可以直接 `import * as pdfjs from 'pdfjs-dist/legacy/build/pdf.mjs'`。ESM 主进程里没有 `__dirname`，先取 `appDir = fileURLToPath(new URL('.', import.meta.url))`，再 `join(appDir, '../preload/index.cjs')`。
 - worker 作为主进程的额外入口打包（`out/main/workers/analyze.mjs`），`PdfWorkerHost` 用 `new Worker(pathToFileURL(join(appDir, 'workers/analyze.mjs')))` 启动（路径由 `app/session.ts` 的 `workerPath()` 给出）。M0 已验证：electron-vite 5 在 `dev` 与 `build` 下都会把 `out/main/workers/{analyze,compose}.mjs` 打出来，路径一致，无需改 `?nodeWorker` 或 `utilityProcess.fork`。
+- `gpt-tokenizer` 单独成块（`out/main/chunks/gpt-tokenizer-<hash>.mjs`）：它的 o200k 分词表里有 `" import"` 这样的字符串，与用到 `__dirname` 的代码在同一块时，electron-vite 给 ESM 输出补 CommonJS 垫片的正则把它当成 import 语句，把垫片插进字符串中间，主进程打包失败（4.1.0 开发时 CI 打包冒烟发现，单测不打包所以测不出；worklog 2026-09-26-babeldoc-features）。改主进程依赖后先本地 `npm run build`。
 - 沙箱 preload 必须是 CJS（Electron 限制），所以 preload 单独指定 `format: 'cjs'`、后缀 `.cjs`。沙箱里不能 `require('zod')`，因此 `externalizeDepsPlugin({ exclude: ['zod'] })` 把 zod 打进 preload（ADR-0009）。
 - 开发模式 CSP：renderer 用 Vite 插件把 `connect-src` 扩成允许 `ws://localhost:*` / `http://localhost:*`（生产构建 `NODE_ENV=production` 不改）。
 - 生产窗口：`loadFile(out/renderer/index.html)`，文件在 asar 里，Vite 产出的 `<script type="module" crossorigin>` 原样可用。开发窗口：`ELECTRON_RENDERER_URL`。

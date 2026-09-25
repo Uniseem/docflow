@@ -8,6 +8,8 @@
 ├─ settings.json                   非敏感设置（5.3）；无法解析时改名为 settings.json.broken-<时间>
 ├─ secrets.bin                     safeStorage 加密的 API Key 映射（4.7）；解不开时改名为 secrets.bin.broken-<时间>
 ├─ logs/main.log  main.old.log     electron-log，单个文件超过 8 MB 时轮换
+├─ glossaries/
+│  └─ <id>.csv                     用户导入的术语表（原文件照抄；id = 16 位十六进制随机；04 §4.15）
 ├─ documents/
 │  └─ <id>/                        id = UTC 时间戳 + 6 位十六进制随机：`20260921T160000-8f3a2c`（可排序、可读）
 │     ├─ manifest.json             文档记录（5.4）
@@ -15,10 +17,13 @@
 │     ├─ events.jsonl              处理记录，追加写（5.5）
 │     ├─ output/                   documents:create 时建好（空）
 │     │  ├─ mono.pdf               中文 PDF
-│     │  └─ dual.pdf               双语对照（处理时关闭了 pdf.bilingual 则没有）
+│     │  ├─ dual.pdf               双语对照（处理时关闭了 pdf.bilingual 则没有）
+│     │  └─ glossary.csv           自动抽取的术语表（UTF-8 带 BOM；没开自动抽取或没抽到术语则没有）
 │     └─ work/                     可再生中间产物；归档成功后删除，失败/取消/中断时保留作断点
-│        ├─ inspection.json  layout.json  analysis.json   检查点 `{ sourceSha256, data }`（5.7）
-│        ├─ translation-cache.json           逐段译文缓存（04 §4.12）
+│        ├─ inspection.json  scan.json  layout.json  analysis.json   检查点 `{ sourceSha256, data }`（5.7）
+│        ├─ translation-cache.json           翻译缓存，键为整条提示词（04 §4.12）
+│        ├─ auto-glossary.json               自动术语表检查点（04 §4.15）
+│        ├─ glossary.csv                     自动术语表，归档时移到 output/
 │        └─ mono.pdf  dual.pdf     写回产物，verify 通过后 rename 到 output/
 ```
 
@@ -28,7 +33,7 @@
 
 `HostStore.update(patch)` 浅合并后校验，写入排队串行，主题与窗口状态同时更新也不会互相覆盖。`theme` 由 `app:setTheme` 写，启动时先应用到 `nativeTheme.themeSource`。`window`（02 §2.5 第 8 步）：resize/move/最大化/还原后 500 ms 与关闭窗口时保存（最大化时存 `getNormalBounds()`，最小化或全屏时不存）；启动时只有标题栏那一条（高 40 px）在某块屏幕的工作区里露出至少 120 × 20 px 才恢复，否则按默认 1240 × 800 居中打开；宽高不小于最小尺寸 960 × 600；`maximized` 为 true 时在 `ready-to-show` 后 `maximize()`。
 
-原子写：`settings/atomic-write.ts` 的 `writeFileAtomic(path, data)` / `writeJsonAtomic(path, value)`（2 空格缩进、末尾换行）：写 `path + '.' + 16 位十六进制 + '.tmp'` → `fsync` → `rename`；Windows 上 rename 目标存在或被占用会失败，`EPERM/EEXIST/EACCES` 时 `unlink` 目标再 `rename`（最多 3 次，间隔 50 ms），其他错误删掉临时文件后抛出。settings、secrets、host.json、manifest、inspect/analyze 检查点与翻译缓存都走它；`events.jsonl` 例外（追加写，截断时直接重写）。
+原子写：`settings/atomic-write.ts` 的 `writeFileAtomic(path, data)` / `writeJsonAtomic(path, value)`（2 空格缩进、末尾换行）：写 `path + '.' + 16 位十六进制 + '.tmp'` → `fsync` → `rename`；Windows 上 rename 目标存在或被占用会失败，`EPERM/EEXIST/EACCES` 时 `unlink` 目标再 `rename`（最多 3 次，间隔 50 ms），其他错误删掉临时文件后抛出。settings、secrets、host.json、manifest、inspect/scan/layout/analyze 检查点、翻译缓存、术语检查点与 `work/glossary.csv` 都走它；`events.jsonl` 例外（追加写，截断时直接重写），导入的术语表 CSV 用普通 `writeFile` 复制进 `glossaries/`。
 
 ## 5.2 更改文档库位置
 
@@ -58,22 +63,38 @@ export const Settings = z
       }),
     ]),
     pdf: z.object({
-      minFontScale: z.number().min(0.4).max(1).default(0.6),
+      minFontScale: z.number().min(0.4).max(1).default(0.6), // 不再使用
       bilingual: z.boolean().default(true), // 关掉则不生成 dual.pdf
+      dualMode: z.enum(['side-by-side', 'alternating']).default('side-by-side'), // BabelDOC：左右并排 / use_alternating_pages_dual
+      dualTranslateFirst: z.boolean().default(false), // dual_translate_first
+      fontFamily: z.enum(['auto', 'serif', 'sans-serif', 'script']).default('auto'), // primary_font_family（'auto' = None）
+      ocrWorkaround: z.boolean().default(false), // auto_enable_ocr_workaround：处理带 OCR 文字层的扫描件
     }),
+    glossaries: z.array(GlossaryInfo).max(100).default([]), // 用户术语表（04 §4.15）
     notifications: z.boolean().default(true),
     checkUpdates: z.boolean().default(true),
   })
   .strict()
+
+export const GlossaryInfo = z
+  .object({
+    id: z.string().regex(/^[a-z0-9-]{1,64}$/), // 文件 <library>/glossaries/<id>.csv
+    name: z.string().min(1).max(200), // 导入时的文件名去掉 .csv
+    enabled: z.boolean(), // 新建翻译时是否使用
+    entries: z.number().int().min(0), // 导入时解析出的条数
+  })
+  .strict()
 ```
 
-实际代码里 `proxy` 用 `ProxyConfig`、URL 用 `ProxyUrl`、上限用 `MAX_PROVIDERS`（均在 `src/shared/types.ts` / `constants.ts`），与上面展开的写法等价。
+实际代码里 `proxy` 用 `ProxyConfig`、URL 用 `ProxyUrl`、`pdf` 用 `PdfSettings`（枚举为 `DualMode`、`FontFamily`）、上限用 `MAX_PROVIDERS`（均在 `src/shared/types.ts` / `constants.ts`），与上面展开的写法等价。`translation` 的字段见 04 §4.1。
 
 - 读取：文件不存在 → 默认值；解析失败 → 改名备份为 `settings.json.broken-<时间>` 并用默认值，主日志记 warning。
-- 未知字段：zod `.strict()` 拒绝 → 视为损坏（同上）。升级版本时用 `version` 做迁移函数链（目前只有版本 1，还没有迁移）。
+- 未知字段：zod `.strict()` 拒绝 → 视为损坏（同上）。升级版本时用 `version` 做迁移函数链（目前只有版本 1；4.1.0 新增的字段都有默认值，4.0.x 的文件照常读入）。
 - 写入：`settings.update(patch)` 深合并（对象逐层合并，数组与 `null` 整体替换）后整体校验再原子写；随后按新设置配置翻译池、广播 `settings:changed`、按需重新应用代理。
 - `defaultTranslator` 指向的服务商/模型不存在时置 `null`（读取与每次写入时都检查）。
-- `pdf.bilingual` 不进文档的 `settingsSnapshot`：写回阶段读当时的设置（5.7）。`pdf.minFontScale` 与 `translation.llm` 的 `chunkChars`、`maxSegmentsPerRequest`、`maxRequestChars` 自 2026-09-26（ADR-0016）起不再使用，只为兼容旧 settings.json 留在 schema 里。读取时若 `translation.systemPrompt` 等于 4.0.0 的默认提示词，换成 pdf2zh 的默认模板（04 §4.9）。
+- `pdf.*` 不进文档的 `settingsSnapshot`，用到时读当时的设置（5.7）：`ocrWorkaround` 在扫描件判定之后读；`fontFamily` 在翻译阶段开始时读一次（判断样式占位符，04 §4.9），写回时再读；`bilingual`、`dualMode`、`dualTranslateFirst` 在写回时读。`pdf.minFontScale` 与 `translation.llm` 的 `chunkChars`、`maxSegmentsPerRequest`、`maxRequestChars` 自 2026-09-26（ADR-0016）起不再使用，只为兼容旧 settings.json 留在 schema 里。
+- 读取时 `upgradePrompt()` 把 4.0.x 的提示词（4.0.0 的默认提示词、4.0.1 的 pdf2zh 模板、任何含 `$text` 的模板）清空为 `''`，即 BabelDOC 的默认角色（04 §4.9）。
+- `glossaries` 由 `glossaries:import/update/delete` 维护（5.6），CSV 文件在文档库的 `glossaries/` 里（5.1）。
 - 代理（02 §2.5 第 7 步，`app/proxy.ts`）：打开文档库时（启动、更改文档库）和 `proxy` 变化时 `session.defaultSession.setProxy()`，随后 `closeAllConnections()` 让已建立的连接改走新路由；与上次应用的配置相同则跳过，失败只写日志（下次再试）。`system` → `{ mode: 'system' }`；`direct` → `{ mode: 'direct' }`；`custom` → `{ mode: 'fixed_servers', proxyRules: 'scheme://host:port' }`（去掉路径与凭据，`socks5h` 写成 `socks5`：Chromium 的 SOCKS5 本来就在代理端解析域名）。回环地址不走代理（Chromium 默认），本地 mock 服务不受影响。
 
 ## 5.4 `manifest.json`（文档记录）
@@ -110,6 +131,7 @@ export const DocumentManifest = z
     pages: z.number().int().nullable(),
     translator: z.object({ providerId: z.string(), model: z.string(), label: z.string() }),
     settingsSnapshot: TranslationRuntime, // 入队时快照；自动重试沿用，手动重试重新快照
+    options: DocumentOptions.optional(), // 新建翻译时按文档填的选项（4.0.x 的记录没有）
     status: DocumentStatus,
     stage: Stage,
     progress: z.number().min(0).max(100),
@@ -130,6 +152,7 @@ export const DocumentManifest = z
     outputs: z.object({
       mono: z.object({ bytes: z.number() }).nullable(),
       dual: z.object({ bytes: z.number() }).nullable(),
+      glossary: z.object({ bytes: z.number() }).nullable().optional(), // output/glossary.csv（04 §4.15）
     }),
     createdAt: z.string().datetime(),
     updatedAt: z.string().datetime(),
@@ -137,13 +160,23 @@ export const DocumentManifest = z
     completedAt: z.string().datetime().nullable(),
   })
   .strict()
+
+export const DocumentOptions = z
+  .object({
+    pages: z.string().max(200).optional(), // 页码范围原文，如 '1-3,5,8-'（BabelDOC pages）
+    onlyTranslatedPages: z.boolean().optional(), // only_include_translated_page：输出只含所选页
+    glossaryIds: z.array(z.string()).optional(), // 新建时启用的用户术语表
+  })
+  .strict()
 ```
 
-`documents:create` 写入的初值：`title` = 请求里的 `title`（去首尾空白）或文件名去掉 `.pdf`（空则 `文档`），最长 300 字符；给了 `title` 时 `titleCustom = true`；`status: 'queued'`、`stage: 'received'`、`progress: 2`、`pages/stats/failure/nextAttemptAt/startedAt/completedAt` 为 `null`、`attempts: 0`、`outputs` 两项为 `null`；`settingsSnapshot` = 当时的 `settings.translation`。
+`documents:create` 写入的初值：`title` = 请求里的 `title`（去首尾空白）或文件名去掉 `.pdf`（空则 `文档`），最长 300 字符；给了 `title` 时 `titleCustom = true`；`status: 'queued'`、`stage: 'received'`、`progress: 2`、`pages/stats/failure/nextAttemptAt/startedAt/completedAt` 为 `null`、`attempts: 0`、`outputs` 为 `{ mono: null, dual: null }`；`settingsSnapshot` = 当时的 `settings.translation`；`options` = `{ pages?（去首尾空白后非空时）, onlyTranslatedPages?（有页码且勾选时为 true）, glossaryIds（当时启用的术语表 id，可能为空数组）}`，同一批文件共用。`options` 在手动重试时不变。
 
-渲染进程看到的是 `DocumentSummary`（manifest 去掉 `settingsSnapshot`，加 `files: { source?, mono?, dual? }`、`suggestedNames: { mono, dual, bundle, source }`、`running: boolean`（调度器里正在跑））。`files` 是 `docflow://library/documents/<id>/source.pdf`、`…/output/mono.pdf`、`…/output/dual.pdf`：`source` 总是给出，`mono`/`dual` 在 manifest 的 `outputs` 记有该文件时给出（不检查磁盘）。`docflow://` 协议（`app/protocol.ts`）只返回文档库内的 `.pdf`（拒绝 `..`，`realpath` 后仍须在库内），带 `Content-Type: application/pdf`、`Cache-Control: no-store`，其他一律 404。
+页码范围（`src/shared/pages.ts`，照 BabelDOC `parse_pages` / `should_translate_page`）：逗号分隔，每项为 `n`、`a-b`、`a-`（到最后一页）或 `-b`（从第 1 页起），页码从 1 起，允许空白；空串表示全部页。`pageRangeProblem()` 给界面与 `documents:create` 用：格式不对 → `页码格式不对，例如 1-3,5,8-`；有页码 < 1 或结束页小于开始页 → `页码从 1 开始，范围的结束页不能小于开始页`。流水线在 inspect 后用 `selectedPages()` 换成 0 起的页号列表；一页都没选中（如 10 页的文档填 `20-`）→ 永久失败 `pages_out_of_range`（`页码范围里没有这个 PDF 的页，请删除后重新添加并填写正确的页码。`）。
 
-`suggestedNames`：`stem = sanitize(title)`（`\/:*?"<>|` 与控制字符换成 `_`，去首尾空白与点，空则 `文档`，最长 120 字符）→ `${stem}-中文译文.pdf`、`${stem}-双语对照.pdf`、`${stem}-完整文件.zip`、源文件用 `originalFilename`。
+渲染进程看到的是 `DocumentSummary`（manifest 去掉 `settingsSnapshot`，加 `files: { source?, mono?, dual?, glossary? }`、`suggestedNames: { mono, dual, bundle, source, glossary }`、`running: boolean`（调度器里正在跑））。`files` 的 `source`/`mono`/`dual` 是 `docflow://library/documents/<id>/source.pdf`、`…/output/mono.pdf`、`…/output/dual.pdf`：`source` 总是给出，`mono`/`dual` 在 manifest 的 `outputs` 记有该文件时给出（不检查磁盘）；`glossary` 在 `outputs.glossary` 有记录时为字符串 `glossary.csv`，只让界面知道有术语表可以导出，不经 `docflow://` 提供。`docflow://` 协议（`app/protocol.ts`）只返回文档库内的 `.pdf`（拒绝 `..`，`realpath` 后仍须在库内），带 `Content-Type: application/pdf`、`Cache-Control: no-store`，其他一律 404。
+
+`suggestedNames`：`stem = sanitize(title)`（`\/:*?"<>|` 与控制字符换成 `_`，去首尾空白与点，空则 `文档`，最长 120 字符）→ `${stem}-中文译文.pdf`、`${stem}-双语对照.pdf`、`${stem}-完整文件.zip`、`${stem}-术语表.csv`、源文件用 `originalFilename`。
 
 内存索引（`library/index.ts`）：`Map<id, DocumentManifest>`，`library.open()` 扫描 `documents/*/manifest.json` 建立（读不出或校验失败的目录跳过）；`list(filter, query)` 在内存里过滤，按 `createdAt` 降序；`counts(query)` 按同一个 `query`（不看 `filter`）返回四个分组数。分组与匹配规则在 `src/shared/library-filter.ts`，渲染进程判断推送来的文档是否属于当前筛选时用同一份：`active` = queued/processing/retrying，`completed`，`failed` = failed/cancelled；`query` 对 `title` 与 `originalFilename` 做不区分大小写的包含匹配，多个空白分隔的词全部匹配。
 
@@ -176,13 +209,17 @@ export const ProcessingEvent = z.object({
 | stage     | level 与 message                                                                                                                                                                                                                                                                                                                                  |
 | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | received  | info：`已复制源文件并加入处理队列`（`documents:create` 时写，流水线不再写；detail：`<字节数> 字节，SHA-256 <前 16 位>`）                                                                                                                                                                                                                          |
-| inspect   | info：`检查 PDF：N 页`；失败见「任意」                                                                                                                                                                                                                                                                                                            |
-| analyze   | info：`版面检测 i / N 页`（每页一条，带 current/total，progress 10–25）；warning：`第 P 页没有识别到可翻译段落`（逐页，先于汇总）；info：`分析版面：识别到 N 个段落，其中 M 个待翻译，公式 K 处`；没有待翻译段落 → 失败 `no_paragraphs`；版面模型文件缺失 → 失败 `layout_model_missing`                                                           |
-| translate | info：`开始翻译：<translator.label>，共 N 段`；info 进度 `已翻译 X / N 段`（带 `current/total`）；warning：重试与保留原文（04 章）；success：`翻译完成：N 段，保留原文 K 段，用量 输入 A / 输出 B tokens`                                                                                                                                         |
+| inspect   | info：`检查 PDF：N 页`；扫描件判定也在这一阶段，info `检测到扫描件…`；失败 `pages_out_of_range`、`scanned_with_text`（见表后），其他失败见「任意」                                                                                                                                                                                                |
+| analyze   | info：`版面检测 i / N 页`（每个所选页一条，带 current/total，progress 10–25）；warning：`第 P 页没有识别到可翻译段落`（逐页，先于汇总）；info：`分析版面：识别到 N 个段落，其中 M 个待翻译，公式 K 处`；没有待翻译段落 → 失败 `no_paragraphs`；版面模型文件缺失 → 失败 `layout_model_missing`                                                     |
+| translate | info：术语抽取、`开始翻译：N 段，合并为 M 个请求`、进度 `抽取术语 X / Y 段`、`已翻译 X / Y 段`（带 `current/total`）等（见表后）；warning：重试与保留原文（04 §4.11）；success：`翻译完成：N 段，保留原文 K 段，用量 输入 A / 输出 B tokens`（有自动术语表时再加 `，术语表 T 条`）                                                                |
 | compose   | warning：`第 P 页有公式字符找不到原字体，未能重画`（`font_unmapped`），`第 P 页有段落在任何字号下都放不下，没有写入译文`（`paragraph_not_fit`），未知 code → `第 P 页生成时出现警告`（没有页号时 `生成 PDF 时出现警告`；detail：`<code>: <warning 自带的 message>`）；info：`改写内容流：删除原文文字指令 M 条，写入 N 段译文，原样重绘公式 K 处` |
 | verify    | success：`校验通过：中文 PDF N 页，双语 PDF M 页`（M 取 verify 结果）；没有生成双语时 `校验通过：中文 PDF N 页`                                                                                                                                                                                                                                   |
 | archive   | success：`已保存到文档库`                                                                                                                                                                                                                                                                                                                         |
 | 任意      | error：`处理失败：<message>`（detail：技术原因，若有）；warning：`已取消处理`；warning：`等待自动重试（第 n 次）`（detail：技术原因，没有则为失败信息）；info：`应用重新启动，从断点继续`（启动恢复）                                                                                                                                             |
+
+- inspect：页码范围一页都没选中 → 失败 `pages_out_of_range`（5.4）。扫描件判定（03 §3.3）：带 OCR 文字层的扫描件且没开 `pdf.ocrWorkaround` → 失败 `scanned_with_text`；开了 → info `检测到扫描件（S / C 页）：译文用黑色写在白底上`（S 扫描页数、C 检查页数）。
+- analyze：只检测、分析所选页，`版面检测 i / N 页` 的 N 是所选页数。
+- translate（04 §4.11、§4.15）：开启自动术语抽取时先 info `抽取术语…`，结束时 `抽取术语：N 条` 或 `抽取术语：没有得到术语`（有失败的批时 detail `K 批术语抽取失败，不影响翻译`）；分完批 info `开始翻译：N 段，合并为 M 个请求`；进度：开启自动术语抽取时先是 `抽取术语 X / Y 段`（占翻译阶段进度的前一半），再是 `已翻译 X / Y 段`（Y 为进了批的段数），都带 `current/total`；结束时有才发 info `缓存命中 N 个请求`、`N 段的批量译文未通过检查，已逐段重译`；warning `翻译请求失败（<原因>），<n> 秒后重试`、`第 P 页有一段翻译失败，已保留原文`。4.0.x 的 `开始翻译：<translator.label>，共 N 段` 不再写。
 
 ## 5.6 IPC 契约（`src/shared/ipc.ts`）
 
@@ -206,7 +243,7 @@ export const ProcessingEvent = z.object({
 | `providers:delete`       | `{ id }`                                                                                                                                           | `SettingsView`（同时删除它的 Key，作废翻译池）                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | `providers:listModels`   | `{ providerId?, type, baseUrl, key?: string }`（key 为 undefined 时用 `providerId` 已保存的 Key；`providerId` 是已保存的服务商时沿用它的其他配置） | `{ models: ModelInfo[] }`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | `providers:check`        | 同上 + `model`                                                                                                                                     | `{ ok: true, latencyMs, reply } \| { ok: false, message }`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| `documents:create`       | `{ paths: string[], title?: string, translator: TranslatorChoice }`                                                                                | `{ created: DocumentSummary[], failed: { path, message }[] }`（服务商或模型不存在 → 整个请求失败：`找不到这个翻译服务商。`／`找不到这个模型。`；单个文件失败进 `failed`：`无法读取这个文件。`、`请选择 PDF 文件。`（不是文件或扩展名不是 `.pdf`）、`文件是空的（0 字节），请选择其他 PDF。`、`文件太大，请选择小于 500 MB 的 PDF。`，其他为 `无法添加这个文件。`；每建一篇推送一次 `document:changed`，最后触发一次调度）                                                                                                                                                                                                                                                                 |
+| `documents:create`       | `{ paths: string[], title?: string, translator: TranslatorChoice, pages?: string（≤ 200 字符）, onlyTranslatedPages?: boolean }`                   | `{ created: DocumentSummary[], failed: { path, message }[] }`（服务商或模型不存在 → 整个请求失败：`找不到这个翻译服务商。`／`找不到这个模型。`；页码范围见表后；单个文件失败进 `failed`：`无法读取这个文件。`、`请选择 PDF 文件。`（不是文件或扩展名不是 `.pdf`）、`文件是空的（0 字节），请选择其他 PDF。`、`文件太大，请选择小于 500 MB 的 PDF。`，其他为 `无法添加这个文件。`；每建一篇推送一次 `document:changed`，最后触发一次调度）                                                                                                                                                                                                                                                 |
 | `documents:list`         | `{ filter: 'all' \| 'active' \| 'completed' \| 'failed', query?: string }`                                                                         | `{ items: DocumentSummary[], counts: { all, active, completed, failed } }`（5.4）                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | `documents:get`          | `{ id }`                                                                                                                                           | `DocumentSummary`（不存在 → `not_found`：`找不到这个文档。`）                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | `documents:events`       | `{ id, afterSeq?: number, limit?: number }`                                                                                                        | `{ items: ProcessingEvent[], lastSeq }`（5.5）                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
@@ -214,9 +251,12 @@ export const ProcessingEvent = z.object({
 | `documents:retry`        | `{ id }`                                                                                                                                           | `DocumentSummary`（只对 failed/cancelled 生效，否则 `只有失败或已取消的文档可以重新处理。`；见 5.7）                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | `documents:cancel`       | `{ id }`                                                                                                                                           | `DocumentSummary`（只对 queued/processing/retrying 生效，其他状态原样返回；见 5.7）                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | `documents:delete`       | `{ ids: string[] }`                                                                                                                                | `{ deleted: string[] }`（逐个删除，每删一个推送 `document:removed`；见 5.7）                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| `documents:export`       | `{ id, kind: 'mono' \| 'dual' \| 'source' \| 'bundle' }`                                                                                           | `{ cancelled: true } \| { path }`（主进程弹保存对话框「导出」，默认名 `suggestedNames[kind]`；bundle 用 fflate 打 ZIP：`source/<originalFilename>`、`output/mono.pdf` 与 `output/dual.pdf`（有才放）、`manifest.json`（完整 manifest）、`events.jsonl`、`README.txt`。文件不在文档库里 → `not_found`（如 `中文 PDF 不存在，可能已被删除。请重新处理这篇文档。`；复制途中源文件消失 → `文件已不在文档库里，请重新处理这篇文档。`）；写入失败按 errno 转成用户错误，只含原因与下一步：`没有写入权限，请换一个位置。`、`磁盘空间不足，请清理后重试。`、`文件被其他程序占用，请关闭后重试或换一个位置。`、`保存位置不存在，请换一个位置。` 等，界面在前面加上文件名；未知原因按内部错误处理） |
+| `documents:export`       | `{ id, kind: 'mono' \| 'dual' \| 'source' \| 'bundle' \| 'glossary' }`                                                                             | `{ cancelled: true } \| { path }`（主进程弹保存对话框「导出」，默认名 `suggestedNames[kind]`；bundle 用 fflate 打 ZIP：`source/<originalFilename>`、`output/` 下的 PDF 与 `glossary.csv`（有则放入）、`manifest.json`（完整 manifest）、`events.jsonl`、`README.txt`。文件不在文档库里 → `not_found`（如 `中文 PDF 不存在，可能已被删除。请重新处理这篇文档。`；复制途中源文件消失 → `文件已不在文档库里，请重新处理这篇文档。`）；写入失败按 errno 转成用户错误，只含原因与下一步：`没有写入权限，请换一个位置。`、`磁盘空间不足，请清理后重试。`、`文件被其他程序占用，请关闭后重试或换一个位置。`、`保存位置不存在，请换一个位置。` 等，界面在前面加上文件名；未知原因按内部错误处理） |
 | `documents:reveal`       | `{ id, kind?: 'mono' \| 'dual' \| 'source' \| 'folder' }`                                                                                          | `{}`（`shell.showItemInFolder`，`kind` 默认 `folder`；`id` 为空串时显示文档库文件夹（设置 → 通用 用）；文件不存在 → `not_found`，说明缺什么）                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | `documents:openExternal` | `{ id, kind: 'mono' \| 'dual' \| 'source' }`                                                                                                       | `{}`（`shell.openPath`；文件不存在 → `not_found`，例如「这篇文档没有双语对照 PDF…」；打开失败 → `无法打开文件：<原因>`）                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `glossaries:import`      | —                                                                                                                                                  | `{ cancelled: true } \| { glossary: GlossaryInfo }`（导入一个用户术语表 CSV，见表后）                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `glossaries:update`      | `{ id, enabled: boolean }`                                                                                                                         | `{}`（改启用状态；id 不存在 → `not_found`：`找不到这个术语表。`）                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `glossaries:delete`      | `{ id }`                                                                                                                                           | `{}`（从 `settings.glossaries` 移除并删除 CSV 文件；id 不存在也成功）                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | `dialog:pickPdfs`        | —                                                                                                                                                  | `{ paths: string[] }`（标题 `选择 PDF`，过滤 `.pdf`，多选；取消 → 空数组）                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | `dialog:pickFolder`      | `{ title, message }`                                                                                                                               | `{ path } \| { cancelled: true }`（可新建文件夹；设置了 `DOCFLOW_E2E_FOLDER_PATH` 时直接返回它）                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | `library:change`         | `{ path }`                                                                                                                                         | `{ libraryDir }`（5.2；新库打不开时抛用户错误，旧库继续运行）                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
@@ -225,6 +265,13 @@ export const ProcessingEvent = z.object({
 | `shell:openLogs`         | —                                                                                                                                                  | `{}`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | `shell:openNotices`      | —                                                                                                                                                  | `{}`（打开 `THIRD_PARTY_NOTICES.md`：先找当前工作目录，再找 `process.resourcesPath`；都没有则什么也不做）                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 
+4.1.0 新增的部分（ADR-0018）：
+
+- `documents:create` 的 `pages`（≤ 200 字符）与 `onlyTranslatedPages`：页码范围不合法 → 整个请求失败 `pages_out_of_range`，message 为 `pageRangeProblem()` 的文案（5.4）；`options` 按 5.4 写入这一批的每篇文档（`glossaryIds` 取当时启用的术语表）。
+- `documents:export` 的 `kind: 'glossary'`：复制 `output/glossary.csv`，默认名 `${stem}-术语表.csv`；没有时 `not_found`：`这篇文档没有术语表：处理时没有开启自动抽取术语，或者没有抽到术语。`。`bundle` 的 ZIP 放 `output/mono.pdf`、`output/dual.pdf`、`output/glossary.csv` 中已有的，`README.txt` 写 `output/  中文译文、双语对照与自动抽取的术语表（若已生成）`。`documents:reveal`、`documents:openExternal` 没有 `glossary`。
+- `glossaries:import`：设置了 `DOCFLOW_E2E_GLOSSARY_PATH` 时直接用它，否则弹打开对话框（标题 `选择术语表`，过滤 CSV，单选；取消 → `{ cancelled: true }`）。已有 100 个 → `最多导入 100 个术语表，请先删除不用的术语表。`；读不出 → `not_found`：`无法读取这个文件。`；按 04 §4.15 解析，失败 → `术语表 CSV 必须包含 source 和 target 两列。`（缺列）或 `无法解析这个 CSV 文件，术语表需要 source、target 两列。`（其他解析错误）。名称 = 文件名去掉 `.csv`（最长 200 字符，空则 `术语表`）；文件原样复制到 `<library>/glossaries/<16 位十六进制 id>.csv`，`settings.glossaries` 追加 `{ id, name, enabled: true, entries }`。
+- `glossaries:import/update/delete` 都经 `settings.update` 保存，因而推送 `settings:changed`，界面靠它刷新列表。删除后，已加入但还没翻译到的文档读不到这个文件，就不用它（04 §4.15）。
+
 推送型通道（main → renderer，`webContents.send`，preload 暴露 `on(channel, cb) → unsubscribe`）：
 
 | 通道               | 载荷                                                                                                                                                                                                                                                |
@@ -232,7 +279,7 @@ export const ProcessingEvent = z.object({
 | `document:changed` | `DocumentSummary`（流水线与调度器引起的状态、进度、阶段变化按文档节流：200 ms 内合并为一次、发最新状态，同时刷新 Dock 徽标与进度条；`documents:create/rename/retry/cancel` 的 handler 另外立即推送一次）                                            |
 | `document:removed` | `{ id }`                                                                                                                                                                                                                                            |
 | `document:event`   | `ProcessingEvent & { documentId }`（每条事件写入后推送）                                                                                                                                                                                            |
-| `settings:changed` | `SettingsView`（`settings.update` 成功后，包括 `providers:save/delete`；更改文档库后。`secrets:set` 不推送）                                                                                                                                        |
+| `settings:changed` | `SettingsView`（`settings.update` 成功后，包括 `providers:save/delete` 与 `glossaries:import/update/delete`；更改文档库后。`secrets:set` 不推送）                                                                                                   |
 | `library:changed`  | `{ libraryDir }`                                                                                                                                                                                                                                    |
 | `app:openFiles`    | `{ paths: string[] }`（macOS open-file / 第二实例命令行 / Dock 拖入；没有窗口时先建窗口；渲染进程取走 `app:takePendingFiles` 之后才直接推送）                                                                                                       |
 | `app:command`      | `{ name: 'new-translation' \| 'settings' \| 'focus-search' }`（macOS 应用菜单「新建翻译…」CmdOrCtrl+N 与「设置…」CmdOrCtrl+,；Windows 没有菜单栏，同样的快捷键由渲染进程直接处理；`focus-search` 在 schema 里、渲染进程也处理，但主进程目前不发送） |
@@ -251,7 +298,7 @@ preload 的 `on` 只接受 `PushChannels` 里的通道名（其他名字返回�
   - 被中断的任务自己不再写状态，不会覆盖取消或更新的状态；流水线在中断后才返回时（已归档）照常记为完成。
 - 重试等待（04 §4.11）与并发池排队都随 abort 立即结束，取消与删除不会被退避等待卡住。
 - 失败：用户错误与服务商错误按原文（服务商错误见 04 §4.5 的文案表，`failure.code` 为错误类别 `kind`）；其他意外错误写日志（含堆栈），界面显示 `处理时发生内部错误，详情见日志。`（code `internal`；磁盘写满时 `磁盘空间不足，请清理磁盘后重新处理。`，code `disk_full`），原始错误文字放进事件 `detail`。
-- `documents:retry`：仅 `failed/cancelled` 可用；`attempts = 0`、`failure = null`、`nextAttemptAt = null`、`startedAt = completedAt = null`（「已用时」从新的一次算起）、重新快照 `settingsSnapshot`、状态 `queued`；`translator` 不变，`stage/progress` 保持到流水线重新进入各阶段。
+- `documents:retry`：仅 `failed/cancelled` 可用；`attempts = 0`、`failure = null`、`nextAttemptAt = null`、`startedAt = completedAt = null`（「已用时」从新的一次算起）、重新快照 `settingsSnapshot`、状态 `queued`；`translator` 与 `options`（页码范围、术语表）不变，`stage/progress` 保持到流水线重新进入各阶段。
 - `documents:delete`：进行中先中断（不写 `cancelled`）并等待任务函数返回（最多 5 s），再从索引移除并 `rm -rf documents/<id>`（`maxRetries: 5`、`retryDelay: 200`，Windows 上 PDF 查看器或杀毒软件短暂占用文件时重试；仍失败则放回索引并报错）；删除后仍在收尾的任务写 manifest 会得到 `not_found`，写入恰好落在删除之后时再删一次目录，不会让文档「复活」。预览 iframe 需先卸载：渲染进程在发起删除前把预览 `src` 置空。
 - 启动恢复（`scheduler.start()`，启动与更改文档库时）：`processing/retrying` → `queued`、清空 `nextAttemptAt`（等待退避的也立即排队），各写一条 info 事件 `应用重新启动，从断点继续`；`attempts` 不变，`work/` 保留即断点。
 - 单文档流程 `pipeline/run.ts`：
@@ -259,15 +306,23 @@ preload 的 `on` 只接受 `PushChannels` 里的通道名（其他名字返回�
 ```
 received(0–2)    → documents:create 时已复制源文件并写事件；流水线不再处理这个阶段
 inspect(3–9)     → worker inspect → 检查点 work/inspection.json；pages 写 manifest；!titleCustom && inspection.title 存在时更新标题
-analyze(10–29)   → 逐页 worker detect（10–25，检查点 work/layout.json）→ worker analyze → 检查点 work/analysis.json；stats 写 manifest；translatable=0 → no_paragraphs
-translate(30–79) → translateStage → translateDocument（04 章）→ 逐段缓存 work/translation-cache.json；translated/kept/usage 写 stats
-compose(80–89)   → worker compose → work/mono.pdf、work/dual.pdf（当时的 settings.pdf.bilingual=false 时不生成）；warnings 写事件；stats.kept 加上写回时保留原文的段数，opsRemoved 写 stats
-verify(90–93)    → worker verify
-archive(94–100)  → rename 到 output/、删除 work/、事件「已保存到文档库」、outputs 写 manifest（不论当时状态）
+                   → options.pages 换成所选页（一页都没有 → pages_out_of_range）
+                   → worker scan（扫描件判定，03 §3.3，只看所选页）→ 检查点 work/scan.json；是扫描件时读当时的
+                     settings.pdf.ocrWorkaround：关 → scanned_with_text，开 → 事件「检测到扫描件…」
+analyze(10–29)   → 所选页逐页 worker detect（10–25，检查点 work/layout.json）→ worker analyze（所选页、ocrWorkaround）
+                   → 检查点 work/analysis.json；stats 写 manifest；translatable=0 → no_paragraphs
+translate(30–79) → translateStage → translateDocument（04 章）：术语检查点 work/auto-glossary.json、缓存
+                   work/translation-cache.json、自动术语表 work/glossary.csv；translated/kept/usage 写 stats
+compose(80–89)   → worker compose（当时的 settings.pdf 的 bilingual、fontFamily、dualMode、dualTranslateFirst，以及所选页与
+                   options.onlyTranslatedPages）→ work/mono.pdf、work/dual.pdf（bilingual=false 时不生成）；warnings 写事件；
+                   stats.kept 加上写回时保留原文的段数，opsRemoved 写 stats
+verify(90–93)    → worker verify（页数取写回后中文 PDF 的页数，双语按 dualMode 检查）
+archive(94–100)  → mono.pdf、dual.pdf、glossary.csv（有才有）rename 到 output/、删除 work/、事件「已保存到文档库」、
+                   outputs（mono、dual、glossary）写 manifest（不论当时状态）
 流水线返回后      → 调度器按条件写 status completed、stage done、progress 100、completedAt；状态变化触发通知（5.8）
 ```
 
-断点续传：inspect、版面检测、analyze 的结果以 `{ sourceSha256, data }` 存为检查点，阶段开始时文件存在、`sourceSha256` 与 manifest 一致、且数据通过 zod 校验（旧版本写的检查点形状不同）就直接用，否则重算并写入。translate 没有整阶段的检查点（不写 `translation.json`），靠 04 §4.12 的逐段缓存：指纹一致时已缓存的段落不再请求。compose、verify 每次重跑；`pdf.bilingual` 在写回时读当时的设置，不来自 `settingsSnapshot`。
+断点续传：各检查点都存为 `{ sourceSha256, data }`，阶段开始时文件存在、键一致（且 scan、layout、analysis 的数据通过 zod 校验：旧版本写的检查点形状不同，例如分析 v4）就直接用，否则重算并写入。inspection 的键就是 manifest 的 `sourceSha256`；scan 与 layout 的键是 `<sourceSha256>:<所选页的 0 起页号，逗号分隔，全部页时为 all>`，analysis 再加 `:ocr`（开 OCR workaround 时）或 `:`——换了页码范围或 OCR 设置就重算（字段名仍叫 `sourceSha256`）。translate 没有整阶段的检查点（不写 `translation.json`），靠 04 §4.12 的缓存（指纹一致时同样的提示词不再请求）与 04 §4.15 的术语检查点。compose、verify 每次重跑；`pdf.*` 用到时读当时的设置，不来自 `settingsSnapshot`（5.3）。
 
 ## 5.8 通知
 

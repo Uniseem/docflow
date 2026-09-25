@@ -22,7 +22,7 @@ ADR-0017 只从 BabelDOC 搬了修 pdf2zh 毛病的部分（颜色、排版、�
 
 - 照搬 `il_translator_llm_only.py` 与 `il_translator.py`：
   - 分批：先把相邻两页中「上一页最后一个正文段 + 下一页第一个正文段」成对提交（跨页），再在每页内把相邻两个正文段中后一段顶边比前一段高 20 pt 以上的成对提交（跨栏），其余段按页顺序累积，累计 token > 200 或段数 > 5 时提交一批。正文段 = 版面类别 `text`/`plain text`/`paragraph_hybrid`。
-  - 过滤：竖排段、空段、纯数字段（`^-?\d+(\.\d+)?$`）、只有占位符与空白的段、80% 以上是 `(cid:N)` 的段、文字少于 `min_text_length`（5）个字符的段不送翻译，按原文原样画。
+  - 过滤：空段、纯数字段（`^-?\d+(\.\d+)?$`）、只有占位符与空白的段、80% 以上是 `(cid:N)` 的段、文字少于 `min_text_length`（5）个字符的段不送翻译，按原文原样画。竖排段不单独过滤：pdf2zh 的分段已经把竖排字当成公式。
   - 提示词、JSON 输入输出格式、`_clean_json_output`、上下文（全文第一个 `title` 段与最近一个 `title` 段）、术语表块原文照抄；只发一条 user 消息。`custom_system_prompt` 对应设置里的「自定义角色提示词」，为空时用 BabelDOC 的默认角色。目标语言写 `zh-CN`（pdf2zh-next 界面选「简体中文」时传给 BabelDOC 的值）。
   - 批量结果逐项检查：条数不符或 JSON 解析失败 → 整批逐段回退；某项与原文相同且 > 10 token、token 比不在 (0.3, 3)、编辑距离 < 5 且 > 20 token → 该段逐段回退；`[. 。…，]{20,}` 换成 `.`。回退用 `ILTranslator` 的单段提示词，再失败保留原文。
   - token 计数用 o200k_base（BabelDOC 的 `tiktoken.encoding_for_model("gpt-4o")`），实现为 `gpt-tokenizer`（纯 JS，MIT，作为 devDependency 打进主进程包）。
@@ -46,7 +46,7 @@ ADR-0017 只从 BabelDOC 搬了修 pdf2zh 毛病的部分（颜色、排版、�
 - 送翻译的文本照 `get_translate_input`：公式为 `{vN}`，与基准样式不同（且不是只差字号 0.7–1.3 倍、也不是只差字体但映射到同一字体）的同样式片段包成 `<style id='N'>…</style>`，编号在段内从 1 起（公式 +1，样式 +2），与原文冲突时顺延；占位符超过 40 个时本段不用样式占位符。译文照 `parse_translate_output` 拆回：公式、带样式的片段、基准样式的文字；样式片段内文字去掉空格后与原文相同的，用原字形。模型编造的同形占位符删掉。
 - 字体：照 `FontMapper` 与 BabelDOC 简体中文字体族：正文 思源宋体 CN 粗体/常规、思源黑体 CN 粗体/常规；手写（原字体为斜体时）霞鹜文楷 GB；回退 Go Noto Kurrent 常规/粗体；`base` 为思源黑体常规（首行缩进、中英间隔用它量「你」的宽度）。拉丁字符也走映射，不再用 Times-Roman（BabelDOC 相同）。设置「译文字体」对应 `primary_font_family`：自动（默认）/ 衬线 / 无衬线 / 手写。只嵌入用到的字体（子集）。
 - 排版单元：原字形单元（BabelDOC `TypesettingUnit(char=…)`）宽高取原字形框，重排时按缩放搬动；一段全是原字形（没翻译的段）时整段原样画（`can_passthrough`）。译文单元的字号取其样式的字号，颜色取其样式的图形状态。
-- 字体文件从 BabelDOC-Assets（GitHub，`raw.githubusercontent.com/funstory-ai/BabelDOC-Assets`）下载并按 BabelDOC 元数据的 SHA3-256 校验：`scripts/fetch-assets.mjs`（`npm run assets`，`predev`/`prebuild` 自动运行，CI 缓存），不提交进 git；已提交的思源宋体常规与 BabelDOC 的同一文件（SHA3 一致）保留。安装包随带全部 7 个字体（约 +96 MB 未压缩）。
+- 字体文件从 BabelDOC-Assets（GitHub，`raw.githubusercontent.com/funstory-ai/BabelDOC-Assets`）下载并按 BabelDOC 元数据的 SHA3-256 校验：`scripts/fetch-assets.mjs`（`npm run assets`，`predev`/`prebuild` 自动运行，CI 缓存），不提交进 git；已提交的思源宋体常规与 BabelDOC 的同一文件（SHA3 一致）保留。安装包随带全部 15 个字体（新增 14 个，约 +95 MB 未压缩）。
 
 ### 4. 输出
 
@@ -70,5 +70,5 @@ ADR-0017 只从 BabelDOC 搬了修 pdf2zh 毛病的部分（颜色、排版、�
 ## 后果
 
 - 好处：请求数约降到原来的 1/5，每批带上下文与术语，译名前后一致；粗体、彩色链接等段内格式保留；没翻译的作者名、数字、短标签与原文一模一样；双语对照可以左右并排看；可以只翻几页；带 OCR 文字层的扫描件能处理。
-- 代价：安装包增大约 50 MB（字体）；自动术语抽取多一轮请求（可关）；译文里的拉丁字母改用思源字体的拉丁字形（BabelDOC 相同）；分析结果变大（每个文字字符都要记下以便原样重画）；旧版本的检查点（分析 v4、翻译缓存）会重新计算。
+- 代价：安装包增大约 95 MB（字体，未压缩）；自动术语抽取多一轮请求（可关）；译文里的拉丁字母改用思源字体的拉丁字形（BabelDOC 相同）；分析结果变大（每个文字字符都要记下以便原样重画）；旧版本的检查点（分析 v4、翻译缓存）会重新计算。
 - 跟进：真实大模型对照（M8-7 并入 M10-8）；旋转字仍等维护者决定（M9-6）。

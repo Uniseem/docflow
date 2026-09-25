@@ -1,6 +1,6 @@
 # 04 翻译子系统
 
-> 这是 3.x Rust 实现（`engine/src/providers.rs`、`pipeline/translate.rs`、`pipeline/translate_native.rs`、`translation_pool.rs`、`secrets.rs`）的 TypeScript 移植，除本章注明的改动外行为与参数一致。模块位于 `src/main/translate/`，全部是可在 vitest 里直接测的纯 Node 代码：`http.ts` 不引用 Electron，生产用的 `net.fetch` 由 `app/session.ts` 注入。提示词与常量在 `src/shared/constants.ts`，URL 拼接在 `src/shared/provider-url.ts`（设置页也用它显示「请求地址」）。
+> 服务商、请求、响应、错误分类、密钥、并发池与传输级重试（4.1–4.8、4.11 末条）是 3.x Rust 实现（`engine/src/providers.rs`、`pipeline/translate.rs`、`pipeline/translate_native.rs`、`translation_pool.rs`、`secrets.rs`）的 TypeScript 移植，除本章注明的改动外行为与参数一致。「翻译哪些段、怎样组织请求、怎样检查译文、术语表」（4.9–4.12、4.15）自 4.1.0 起照搬 BabelDOC 0.6.4（PDFMathTranslate-next 2.9.0 的引擎）的 `ILTranslatorLLMOnly`、`ILTranslator`、`AutomaticTermExtractor` 与 `Glossary`，见 [ADR-0018](../adr/0018-port-babeldoc-features.md)（4.0.x 照 pdf2zh 逐段请求，ADR-0016，已替换）。模块位于 `src/main/translate/`（BabelDOC 部分在 `babeldoc/`），全部是可在 vitest 里直接测的纯 Node 代码：`http.ts` 不引用 Electron，生产用的 `net.fetch` 由 `app/session.ts` 注入。提示词模板在 `babeldoc/templates.ts`（BabelDOC 原文），常量在 `src/shared/constants.ts`，URL 拼接在 `src/shared/provider-url.ts`（设置页也用它显示「请求地址」）。
 
 ## 4.1 类型
 
@@ -49,12 +49,17 @@ export const LlmRuntime = z.object({
 })
 export const TranslationRuntime = z.object({
   llm: LlmRuntime,
-  perDocumentConcurrency: z.number().int().min(1).max(1000).default(100),
-  systemPrompt: z.string().max(12_000),
+  perDocumentConcurrency: z.number().int().min(1).max(1000).default(100), // BabelDOC pool_max_workers（4.8）
+  systemPrompt: z.string().max(12_000), // BabelDOC custom_system_prompt：替换提示词开头的角色行，'' = 默认角色（4.9）
+  minTextLength: z.number().int().min(1).max(1000).default(5), // BabelDOC min_text_length
+  autoExtractGlossary: z.boolean().default(true), // BabelDOC auto_extract_glossary（pdf2zh-next 默认开，4.15）
+  richText: z.boolean().default(true), // false = disable_rich_text_translate（不用样式占位符，4.9）
 })
 ```
 
 `models` id 唯一与 `extraBody` 禁用键由 `.strict()` 之后的 `.superRefine()` 检查（报错 `models id 必须唯一`、`extraBody 不得包含 <键>`）；禁用键列表是 `constants.ts` 的 `EXTRA_BODY_FORBIDDEN`。
+
+`TranslationRuntime` 整个进文档的 `settingsSnapshot`（05 §5.4）。4.1.0 新增的三个字段都有默认值，4.0.x 的 settings.json 与排队文档的快照读进来时自动补上。`llm.chunkChars`、`maxSegmentsPerRequest`、`maxRequestChars` 自 ADR-0016 起不再使用，只为兼容旧 settings.json 留在 schema 里。`systemPrompt` 的迁移见 4.9 末尾。
 
 ## 4.2 预设（`src/shared/presets.ts`）
 
@@ -110,11 +115,11 @@ URL：
 { ...(system ? { systemInstruction: { parts: [{ text: system }] } } : {}), contents: [{ role: 'user', parts: [{ text: user }] }], ...(maxTokens ? { generationConfig: { maxOutputTokens: maxTokens } } : {}) }
 ```
 
-翻译请求的 `system` 为空（pdf2zh 只发一条 user 消息，4.9），此时不带 system 字段；「检查模型」仍带 system。
+翻译请求的 `system` 为空（BabelDOC 的整条提示词作为一条 user 消息发送，4.9），此时不带 system 字段；「检查模型」仍带 system。
 
 `extraBody` 深合并进请求体（对象递归合并，数组与标量覆盖），例如 `{"generationConfig":{"thinkingConfig":{"thinkingBudget":0}}}` 会保留我们的 `maxOutputTokens`。
 
-温度策略：默认不传 `temperature`，用各服务商模型自身的默认值；需要固定温度的服务商（如 DeepSeek 官方翻译建议 1.3）由用户在 extraBody 里自行配置，代码不写死。（`buildRequest` 与 `ModelConfig` 都没有温度字段；2026 年主流模型多为推理模型，对非默认温度报 400 或忽略，见 [ADR-0011](../adr/0011-provider-presets-follow-research.md)、worklog 2026-09-23-presets 与 `docs/reference/providers/README.md`。）
+温度策略：默认不传 `temperature`，用各服务商模型自身的默认值；需要固定温度的服务商（如 DeepSeek 官方翻译建议 1.3）由用户在 extraBody 里自行配置，代码不写死。（`buildRequest` 与 `ModelConfig` 都没有温度字段；2026 年主流模型多为推理模型，对非默认温度报 400 或忽略，见 [ADR-0011](../adr/0011-provider-presets-follow-research.md)、worklog 2026-09-23-presets 与 `docs/reference/providers/README.md`。pdf2zh-next 默认也不发温度与 JSON mode，ADR-0018。）
 
 超时：`REQUEST_TIMEOUT_MS = 900_000`（15 分钟，与 3.x 一致）。`buildRequest` 自带 `AbortSignal.timeout(900_000)`，但翻译请求的 signal 会被池替换为 `AbortSignal.any([调用方 signal, AbortSignal.timeout(REQUEST_TIMEOUT_MS)])`，在拿到槽位后开始计时，同一请求内换 Key 重发（4.7）共用这 15 分钟。`postChat()`、`checkModel()` 与 `listModels()` 共用 `send()`：`fetch` 或读正文时抛出的任何异常（`fetch failed`、DNS、TLS、代理、超时）都由 `classifyNetworkError()` 转成 transient，message 是中文并说明下一步——超时（`TimeoutError`/`AbortError`）为 `翻译请求超时，请检查网络或代理设置后重试。`，其他为 `无法连接翻译服务（<原因>），请检查网络或代理设置，以及服务地址是否正确。`（原因优先取 `error.cause.message`，如 `connect ECONNREFUSED …`，同时放进 `snippet`）；不再把英文的 `TypeError: fetch failed` 直接给用户看。2xx 正文不是 JSON → transient `翻译服务返回的内容无法解析：<snippet>。请检查服务地址是否正确。`。
 
@@ -132,7 +137,7 @@ type ChatReply = { text: string; finish: Finish; usage?: { input: number; output
 - openai：`choices[0].message.content` 可能是字符串或数组（取 `type==='text'` 的 `text`，以及其他带 `text` 且 `thought !== true` 的项）；`finish_reason ∈ {length, max_tokens, model_length}` → truncated；`∈ {content_filter, safety, sensitive, refusal}` 或（文本为空且 `message.refusal` 非空）→ refused；usage `prompt_tokens/completion_tokens`。
 - anthropic：拼接 `content[].type==='text'` 的 text；`stop_reason === 'max_tokens'` → truncated；`'refusal'` → refused；usage `input_tokens/output_tokens`。
 - gemini：`promptFeedback.blockReason` 存在 → refused（空文本）；拼接 `candidates[0].content.parts[]` 中 `thought !== true` 的 text；`finishReason === 'MAX_TOKENS'` → truncated；`∈ {SAFETY, RECITATION, BLOCKLIST, PROHIBITED_CONTENT, SPII, IMAGE_SAFETY}` → refused；usage `usageMetadata.promptTokenCount/candidatesTokenCount`。
-- 所有文本经 `stripReasoning()`：去掉开头的 `<think>…</think>` / `<thinking>…</thinking>`（`/^\s*<think(?:ing)?>[\s\S]*?<\/think(?:ing)?>\s*/i`）。
+- 所有文本经 `stripReasoning()`：去掉开头的 `<think>…</think>` / `<thinking>…</thinking>`（`/^\s*<think(?:ing)?>[\s\S]*?<\/think(?:ing)?>\s*/i`）。翻译请求的回复之后还按 pdf2zh-next 再清理一次（4.9）。
 
 ## 4.5 错误分类（`errors.ts`）
 
@@ -201,55 +206,81 @@ retryable = kind === 'transient' || kind === 'rateLimited'
 - `execute(request, signal, provider) → Promise<ChatReply>`：拿槽 → 选 Key（4.7）→ `postChat()` → 成功时更新自适应；rateLimited 时降速后原样抛出（重试由 `submit()` 负责）→ 释放。**池不保存服务商配置**：每个请求带上调用方（文档开始翻译时）的 provider 快照，所以两篇按不同设置开始的文档不会互相改掉对方的服务地址。上层统一走 `TranslationPools.execute(provider, request, signal)`，每次尝试都重新取池。（最初的实现由池保存配置，长文档每次提交都用旧快照改回配置，M5 复查第 37 条改为现在的做法。）
 - 排队可中断：`signal` abort 时排队中的请求立刻离开队列（不占槽），进行中的请求随 fetch 一起中止；调用方取消（文档取消、应用退出）一律以 `UserError('cancelled')` 结束，不当作服务商错误、不发重试事件。
 - `TranslationPools.invalidate(providerId?)`：丢弃该服务商（不传则全部）的池与 KeyRing，下一次请求重新读 Key 与并发数。`secrets:set`、`providers:save`、`providers:delete` 之后作废对应服务商，更改文档库时全部作废（换库后不会再用旧库的 Key，M5 复查第 9 条）；已在进行中的请求在旧池上完成。
-- 文档级并发 `perDocumentConcurrency` 在 `translate-document.ts` 用 `pLimit` 风格的信号量 `createLimit(n)` 实现（自己写 20 行，不引库）。
+- 文档内并发 `perDocumentConcurrency`（= BabelDOC 的 `pool_max_workers`）：批量请求与逐段回退各有一个这么大的并发池（`babeldoc/translator.ts` 的 `createPool(n)`，按提交顺序排队；批量还没跑完时回退已经开始，所以一篇文档最多约 2 × n 个请求同时在路上），术语抽取用 n 个 worker 依次取批（`babeldoc/terms.ts`）。都是自己写的十几行，不引库；实际同时发出的请求数仍受服务商池的 `current` 限制。
 
-## 4.9 逐段请求与提示词（照 pdf2zh `translator.py`，`pdf2zh-prompt.ts`）
+## 4.9 批量请求与提示词（照 BabelDOC `ILTranslatorLLMOnly`，`babeldoc/`）
 
-> 2026-09-26 起照搬 PDFMathTranslate 1.9.11（[ADR-0016](../adr/0016-port-pdfmathtranslate.md)）。4.0.0 的分批、占位符保护、回复校验、拆分与隔离重译（原 4.9–4.11）全部删除。
+> 4.0.x 照 pdf2zh 1.9.11 一段一请求，提示词是带 `$text` 的模板（ADR-0016）；4.1.0 起改为 BabelDOC 0.6.4 的多段 JSON 请求（[ADR-0018](../adr/0018-port-babeldoc-features.md)），`pdf2zh-prompt.ts` 已删除。文件：`babeldoc/paragraphs.ts`（BabelDOC 眼中的段落与过滤）、`translator.ts`（分批、请求、检查、回退）、`prompts.ts` + `templates.ts`（提示词）、`placeholders.ts`（占位符）、`text.ts`（token 计数与 Python 字符串语义）、`glossary.ts` + `terms.ts`（4.15）。`translate-document.ts` 先抽取术语（4.15）再翻译，所有请求都经 4.11 的 `submit()` 与 4.12 的缓存。
 
-- **一段一请求**：03 章 §3.8 列出的每个段落字符串（`sstk`，空白串与纯 `{vN}` 串不送）单独请求一次，文档内按 `perDocumentConcurrency` 并发（pdf2zh 的 `ThreadPoolExecutor`）。
-- **消息**：只有一条 user 消息，`system` 为空。内容 = `safe_substitute(模板, { lang_in: 'en', lang_out: 'zh', text: 段落 })`（Python `string.Template` 规则：`$name`、`${name}`、`$$`，未知变量原样保留）。默认模板即 pdf2zh `BaseTranslator.prompt` 的默认消息（`DEFAULT_SYSTEM_PROMPT`，一字不改）：
+- **段落**（`buildParagraphs(analysis)`）：分析结果（03 章，v5）每个单元的每个 pdf2zh 段落一项，id 仍是 `${unit.id}#${index}`。记下页号、版面类别 `label`（模型框名，如 `title`、`plain text`）、`top`（段落框 `y1`）、组成（连续同样式的文字字符为一个片段，每个公式一个片段；同样式照 `is_same_style`：字体资源名相同、字号差 < 0.02、图形状态相同）、基准样式（`_calculate_base_style`：各字符样式求交，字体、字号不同时取众数）与段落文本 `unicode`（`get_paragraph_unicode`：文字与公式字符按字距和换行插空格，NFKC，连续空白合为一个空格后 strip）。竖排字符在 pdf2zh 分段里已归入公式（03 章 §3.7），不另判竖排段。
+- **不送翻译**（这些段按原字形原样画，03 章）：`(cid:N)` 字符超过 80% 的段；段落文本少于 `minTextLength`（默认 5，Python `len`，按码点）的段；纯数字段（strip 后匹配 `^-?\d+(\.\d+)?$`，`\d` 为任意 Unicode 十进制数字）；除公式外只有空白的段（`is_placeholder_only_paragraph`）；没有组成或只有一个公式的段；换成占位符后送翻译文本少于 `minTextLength` 的段。
+- **分批**（`translateParagraphs`，照 `ILTranslatorLLMOnly.translate`）。正文段 = 版面类别为 `text`、`plain text` 或 `paragraph_hybrid`，且不是 cid 段、不短于 `minTextLength`。按顺序：
+  1. 跨页（`process_cross_page_paragraph`）：相邻两页都有正文段时，上一页最后一个正文段与下一页第一个正文段成对为一批；
+  2. 跨栏（`process_cross_column_paragraph`）：每页内相邻两个正文段，后一段 `top` 比前一段高 20 pt 以上（`p2.top − p1.top > 20`）时成对为一批；
+  3. 其余（`process_page`）：逐页按顺序累积还没进批的段（跳过 cid、过短、纯数字、只有占位符的段），累计 token > 200 或段数 > 5 时成批，页末余下的也成一批——每批最多 6 段，不跨页。
 
-  ```
-  You are a professional, authentic machine translation engine. Only Output the translated text, do not include any other text.
+  一段只进一批。批的 token 数 = 各段 `unicode` 的 token 之和。执行时批按 token 数降序（同数按建立顺序）进 4.8 的批量池（BabelDOC `PriorityThreadPoolExecutor` 的优先级 `1048576 − tokens`）。
 
-  Translate the following markdown source text to ${lang_out}. Keep the formula notation {v*} unchanged. Output translation directly without any additional text.
+- **上下文**：`title` = 全文第一个版面类别为 `title` 的段；`localTitle` = 成批时最近的 `title` 段（`process_page` 按页顺序扫描时更新；跨页、跨栏的成对批在此之前建立，所以是全文第一个标题）。两者是同一段时提示词只写第一条。
+- **token 计数**：o200k_base（BabelDOC 的 `tiktoken.encoding_for_model("gpt-4o")`），用 `gpt-tokenizer` 的 `encode(text, { disallowedSpecial: new Set() })`：特殊 token 的字面串按普通文本计，出错计 0。
+- **送翻译的文本**（`getTranslateInput`，照 `ILTranslator.get_translate_input`，占位符形状是 pdf2zh-next OpenAI 翻译器的）：
+  - 只有一个文字片段：就用段落文本，没有占位符。
+  - 公式 → `{vN}`；与基准样式不同的文字片段 → `<style id='N'>…</style>`。N 在段内从 1 起，公式后 +1、样式片段后 +2；段落文本开头正好是同形占位符时顺延（Python `re.match` 语义）。文本由 `get_char_unicode_string` 拼出。
+  - 文字片段满足以下之一时不加样式占位符：与基准样式相同；只差字号且字号比在 (0.7, 1.3)；只差字体且两种字体经 FontMapper（按设置 `pdf.fontFamily`，03 章）映射到同一个内置字体。设置 `translation.richText` 关、分析结果 `ocrWorkaround` 为真（带文字层的扫描件，03 §3.3）或段落没有基准样式时，一律不加。
+  - 占位符超过 40 个时，这一段改为不加样式占位符重算（公式照旧）。
+  - 原文里本来就有的形似占位符的串（`{vN}`、`<style id='N'>`、`</style>`）记下来，拆回时保留。
+- **拆回译文**（`parseTranslateOutput`，照 `parse_translate_output`）：按占位符正则（不区分大小写、容许空白；样式片段非贪婪匹配到 `</style>`）切开译文：公式占位符 → 该公式（原样重画）；样式片段 → 片段内文字去掉空格后与原文相同时用原字形（`original`），否则按该片段的样式排译文；其余文字用基准样式。模型编造的同形占位符（既不在原文里、也不是本段的）删掉；丢失的公式就不画。结果写进 `TranslatedParagraph.comps` 交给写回（03 章）。
+- **提示词**（`prompts.ts`；模板是 BabelDOC 原文，用 Python 导出后生成 `templates.ts`，逐字比对过；按 `string.Template.substitute` 语义填 `$name`）：
+  - 角色块（`_build_role_block`）：`systemPrompt` 为空时是
 
-  Source Text: ${text}
+    ```
+    You are a professional zh-CN native translator who needs to fluently translate text into zh-CN.
 
-  Translated Text:
-  ```
+    Follow all rules strictly.
+    ```
 
-  设置 → 高级 →「翻译提示词」编辑的就是这个模板（对应 pdf2zh 的 `--prompt`，settings 字段名仍是 `translation.systemPrompt`）。4.0.0 的默认提示词（`LEGACY_SYSTEM_PROMPT`）在读取设置时换成新默认；4.0.0 排队的文档快照里带着旧提示词，请求时也按新默认处理。
+    非空时取 `trim()` 后的内容，不含 `Follow all rules strictly.` 就另起一行补上。
 
-- **回复**（`OpenAITranslator.do_translate`）：`strip()` → 去掉开头的 `^<think>.+?\n*(</think>|\n)*(</think>)\n*` → 再 `strip()`（Python `str.isspace` 的空白）。不校验 `{vN}`：丢失、多出或越界的标记在排版时按 pdf2zh 的规则处理（越界的跳过，丢失的公式就不画）。`maxTokens` = `runtime.llm.maxOutputTokens > 0 ? 它 : undefined`；输出被截断（finish = truncated）照样采用。
-- **拒绝**：finish = refused（内容过滤，没有正文）→ 抛 `ProviderError('refused')`，按 4.11 保留原文。pdf2zh 在这里会因 `None.strip()` 抛异常后无限重试。
-- **温度**：不传（[ADR-0011](../adr/0011-provider-presets-follow-research.md)）。pdf2zh 的 OpenAI 翻译器传 `temperature: 0`；DocFlow 的服务商请求层保持原样，需要时由用户在 extraBody 里配置。
-- `settings.translation.llm` 的 `chunkChars`、`maxSegmentsPerRequest`、`maxRequestChars` 不再使用（保留在 schema 里以兼容旧 settings.json，界面已去掉）。
+  - 批量（`il_translator_llm_only.PROMPT_TEMPLATE`）：角色块 → `## Structure Rules`、`## Do NOT Modify` → 术语表用法（`## Glossary`，本批命中术语时）→ `## Output Format`、`## Style`、`### Example` → 上下文（`## Contextual Hints for Better Translation`：`1. First title in full text: …`、`2. The most recent title is: …`）→ 术语表（`## Glossary Tables`，每个命中的术语表一张 `| Source Term | Target Term |` 表，条目排序）→ `## Here is the input:` 与 JSON。JSON 是 `json.dumps(…, ensure_ascii=False, indent=2)` 形式的 `[{ "id": 0, "input": 送翻译的文本, "layout_label": 版面类别 }, …]`，id 从 0 起，只含有送翻译文本的段。
+  - 逐段（`il_translator.PROMPT_TEMPLATE`，4.10 的回退用）：角色块 → `## Rules` → 术语表（`## Glossary`）→ 上下文（`## Context / Hints`：`First title in the full text`、`The most recent title is`）→ `## Output` → `Now translate the following text:` 与文本。公式占位符提示（BabelDOC 默认关）不加。
+  - 目标语言写 `zh-CN`（`LANG_OUT`，pdf2zh-next 界面选「简体中文」时传给 BabelDOC 的值）。
+  - 请求：只有一条 user 消息，`system` 为空；`maxTokens` = `runtime.llm.maxOutputTokens > 0 ? 它 : 不传`；不开 JSON mode、不传温度（[ADR-0011](../adr/0011-provider-presets-follow-research.md)）。
+- **回复**：4.4 的解析之后照 pdf2zh-next `_remove_cot_content`：Python `strip()`，再去掉开头的 `<think>…</think>`（`/^<think>[\s\S]+?<\/think>/`）；这就是存进缓存、交给 4.10 的回复。输出被截断（finish = truncated）照样采用（JSON 不完整时走 4.10 的整批回退）。finish = refused（内容过滤，没有正文）→ 抛 `ProviderError('refused', '服务商拒绝翻译这一段')`，不进缓存，按 4.10、4.11 回退或保留原文。
+- **角色提示词与迁移**：设置 → 高级 →「角色提示词」编辑的是 `translation.systemPrompt`（字段名沿用），默认 `''`（`DEFAULT_SYSTEM_PROMPT`）。4.0.x 的值不再适用：读取 settings.json 时 `upgradePrompt()` 把 4.0.0 的默认提示词（`LEGACY_SYSTEM_PROMPT`）、4.0.1 的 pdf2zh 模板（`PDF2ZH_PROMPT_TEMPLATE`）和任何含 `$text` / `${text}` 的提示词清空（`isStalePrompt()`）；4.0.x 排队的文档快照里的旧提示词在翻译阶段同样按 `''` 处理，缓存指纹也用清空后的值。
 
-## 4.10 （已删除）
+## 4.10 批量结果检查与逐段回退（`ILTranslatorLLMOnly.translate_paragraph`、`ILTranslator`）
 
-原「校验与恢复」。pdf2zh 不校验译文。
+> 4.0.0 的「校验与恢复」在 4.0.1 删除（pdf2zh 不校验译文）；4.1.0 起这里是 BabelDOC 的检查与回退。
+
+- **解析**：回复 strip 后按 `_clean_json_output` 去掉首尾的 `<json>` / `</json>` 与 Markdown 代码围栏（开头 ` ```json ` 或 ` ``` `，结尾 ` ``` `），再 `JSON.parse`。是单个对象且其 `output`（没有这个键时看 `input`）为真值 → 当作一项的列表；不是列表 → 失败。每项必须有 `id`（按 Python `int()` 转换），译文取 `output`（没有这个键时取 `input`）；id 重复时后一个覆盖。
+- **整批回退**：JSON 解析失败、不是列表、某项没有 `id` 或 `id` 越界、项数与输入不符（`Translation results length mismatch. Expected: N, Got: M`），或请求抛出不结束文档的错误（4.11）→ 这一批每一段都改走逐段回退。
+- **逐项检查**：原送翻译文本与译文先各自把 `[. 。…，]{20,}` 换成 `.`，然后依次判断：译文不是字符串；与原文相同且原文 > 10 token；原文 0 token；token 比（译文 / 原文）不在 (0.3, 3) 内；编辑距离（`python-Levenshtein` 语义，按码点）< 5 且原文 > 20 token。命中任一条 → 这一段逐段回退；都不命中 → 采用处理后的译文。
+- **逐段回退**（`ILTranslator.translate_paragraph`，`use_as_fallback`）：用逐段提示词（4.9，带该批的上下文与术语表）单独请求，进 4.8 的回退池；回复同样把 `[. 。…，]{20,}` 换成 `.` 后直接采用，不再检查。请求出错（不结束文档的）→ 这一段保留原文（4.11）。
+- 翻译结束时有回退则发 info `N 段的批量译文未通过检查，已逐段重译`（N 含整批回退的每一段）。
 
 ## 4.11 失败处理（`translate-document.ts`）
 
-- **段落级** `translateSegment`：请求成功就用回复；请求抛出 `UserError`（取消、连续拒绝）、fatal/credential、`RetriesExhaustedError` → 向上抛，中止整篇文档；其他 `ProviderError`（rejected、oversized、refused、output）→ **这一段保留原文**，发 warning 事件 `第 N 段翻译失败，已保留原文`（detail 为原因）。pdf2zh 的 `worker` 对任何异常每秒重试、不停止；DocFlow 保留自己的传输层重试与文档级失败，见下。
-- **文档级**：任何段落向上抛错时，内部 `AbortController` 中止其余请求，`translateDocument` 抛出第一个错误。缓存命中数在结束时发一条 info `缓存命中 N 段`。`keptChars > 400 && keptChars × 5 > totalChars` → 永久失败 `mostly_untranslated`。连续 `REJECTED_STREAK_LIMIT (6)` 次 rejected → 永久失败 `翻译服务连续拒绝了 6 个请求，已停止处理`。
+- **结束整篇文档的错误**（`endsDocument()`）：`UserError`（取消、连续拒绝）、`RetriesExhaustedError`、`ProviderError` 的 fatal / credential。第一个这样的错误出现时，内部 `AbortController` 中止其余请求（术语抽取、批量与回退都停下，之后排到的任务什么也不做），`translateDocument` 抛出这个错误。
+- **其余错误**（rejected、oversized、refused、output，以及 4.10 的 JSON 与检查失败）：批量请求 → 整批逐段回退（4.10）；逐段回退的请求 → **这一段保留原文**，发 warning `第 P 页有一段翻译失败，已保留原文`（detail 为原因），结果记为 `kept: true`、`text` = 段落文本；术语抽取的一批 → 丢掉这批（4.15）。pdf2zh / BabelDOC 对异常的重试方式不照搬，DocFlow 保留自己的传输层重试与文档级失败，见下。
+- **文档级**：`keptChars > 400 && keptChars × 5 > totalChars` → 永久失败 `mostly_untranslated`（按 Python `len` 统计有译文或保留原文的段；4.9 过滤掉、没有送翻译的段不计）。连续 `REJECTED_STREAK_LIMIT (6)` 次 rejected → 永久失败 `翻译服务连续拒绝了 6 个请求，已停止处理`（code `internal`）。
+- **进度**：`onProgress({ fraction, current, total, message })`，`fraction` 是整个翻译阶段的进度。开启自动术语抽取时前一半是抽取：`fraction = 已处理段数 / 全部段数 / 2`，`message` 为 `抽取术语 X / Y 段`（被过滤的段立即计入）；后一半是翻译：`fraction = (1 + 已完成段数 / N) / 2`，`message` 为 `已翻译 X / N 段`，N = 进了批的段数（续跑时术语来自检查点，也从一半开始）。关闭时 `fraction = 已完成段数 / N`。流水线把 `fraction` 换算成 30–79%，每次写一条带 `current/total` 的事件（05 §5.5）。`translateDocument` 自己的逐段事件（`已翻译 d / N 段`）被 `translateStage` 丢掉，不重复写。
+- **处理记录**：info `抽取术语…`、`抽取术语：N 条` / `抽取术语：没有得到术语`（4.15）；info `开始翻译：N 段，合并为 M 个请求`（分完批时）；warning 保留原文（上面）与重试（下面）；结束时有才发 info `缓存命中 N 个请求`、`N 段的批量译文未通过检查，已逐段重译`。成功事件由流水线写（05 §5.5）。
 - **传输级** `submit()`（不变）：最多 `SUBMIT_ATTEMPTS (8)` 次，每次经 `TranslationPools.execute()` 取池；fatal/credential 立即抛出；rejected 计入连续拒绝后抛出；不可重试的种类立即抛出；transient、rateLimited 退避重试：`backoff = min(2^(attempt−1), 32) × 1000 ms`，`delay = max(retryAfterMs ?? backoff, backoff/2) + jitter(0–2040 ms)`；前 `RETRY_NOTICES (12)` 次及每个请求第 3 次起的失败发 warning `翻译请求失败（<原因>），<n> 秒后重试`；用尽 → `RetriesExhaustedError`（可重试的文档失败，调度器稍后自动重试，已翻译的段落在缓存里）。
 
 取消：所有 await 点检查 `signal.aborted`；`fetch` 传入同一 `signal`；重试等待与并发池排队都随 `signal` 立即结束。
 
 ## 4.12 缓存（`cache.ts`）
 
-- 文件：`documents/<id>/work/translation-cache.json`：`{ version: 1, fingerprint, entries: { [sha256(原文)]: { text, at } } }`。
-- `fingerprint = sha256(JSON.stringify({ version: 1, translator: `llm:${type}:${baseUrl}:${model}`, chunkChars, maxSegmentsPerRequest, maxRequestChars, systemPrompt }))`——改提示词或模型即失效。
-- 命中：按原文取出存的译文，原样使用（pdf2zh `TranslationCache.get`，不再校验）。
-- 写入：每 2 s 或每 20 条新增落盘（原子写），阶段结束再落盘；写失败只在处理记录里记一次 warning `翻译缓存写入失败（不影响翻译结果）：<原因>`。
+- 文件：`documents/<id>/work/translation-cache.json`：`{ version: 1, fingerprint, entries: { [sha256(完整提示词)]: { text, at } } }`。键是整条提示词（BabelDOC `llm_translate` 的缓存键），其中已含角色、上下文、术语表与 JSON 输入；批量、逐段回退与术语抽取三种请求都经过它。
+- ``fingerprint = sha256(JSON.stringify({ version: 2, translator: `llm:${type}:${baseUrl}:${model}`, maxOutputTokens, systemPrompt }))``：换服务地址、模型、最大输出或角色提示词即整体失效。4.0.x 的缓存（指纹 version 1、按原文取）读进来一律不命中。
+- 命中：直接返回存的回复（已做 4.9 的清理），不发请求，仍走 4.10 的解析与检查；命中数在结束时发 info `缓存命中 N 个请求`。
+- 写入：拿到回复（refused 除外）即存；每 2 s（`CACHE_FLUSH_MS`）或每 20 条（`CACHE_FLUSH_EVERY`）新增落盘（原子写），阶段结束再落盘；写失败只在处理记录里记一次 warning `翻译缓存写入失败（不影响翻译结果）：<原因>`。
+- 同一个指纹也用于术语检查点 `work/auto-glossary.json`（4.15）。
 - 任务成功归档后删除整个 `work/`；失败、取消时保留。
 
 ## 4.13 假服务商模式
 
-`DOCFLOW_FAKE_PROVIDERS=1`：`http.ts` 的 `createFetch()` 返回不走网络的 `fakeFetch`（`fake.ts`），对任意 chat 请求返回同时含 openai/anthropic/gemini 三种形状的确定性译文：用户消息是 pdf2zh 提示词时取出 `Source Text: ` 与 `\n\nTranslated Text:` 之间的原文，译文 = 原文（`{vN}` 原样保留）+ 后缀 `〔测试译文〕`，空白原文不加（旧的 `<segment>` 批量格式仍识别，只供检查模型等用途）；GET `…/models` 返回 `fake-model`；`checkModel` 照常请求，得到 `Hello, world.〔测试译文〕`，设置页显示为「可用」。打开文档库时若设置里没有 `fake` 服务商就自动加入 `fakeProvider()`（id `fake`、名称 `假服务商`、type openai、baseUrl `http://127.0.0.1:9`、模型 `fake-model`「假模型」，本机地址所以无需 Key）；流水线找不到文档记录的服务商时也回退到它。用于开发时不花钱跑通全流程与截图。
+`DOCFLOW_FAKE_PROVIDERS=1`：`http.ts` 的 `createFetch()` 返回不走网络的 `fakeFetch`（`fake.ts`），对任意 chat 请求返回同时含 openai/anthropic/gemini 三种形状的确定性回复，按最后一条用户消息认提示词：批量提示词（`## Here is the input:\n\n` 之后的 JSON）→ `[{ id, output: input + '〔测试译文〕' }]`；逐段提示词（`Now translate the following text:\n\n` 之后的文本）→ 原文 + `〔测试译文〕`；术语抽取提示词（含 `Input Text:\n```\n`）→ `[]`（所以没有自动术语表）；其他 → 用户消息 + 后缀。空白原文不加后缀，占位符随原文原样带回。只有一两个 token 的短段加上后缀后 token 比 ≥ 3，会走 4.10 的逐段回退，结果相同。GET `…/models` 返回 `fake-model`；`checkModel` 照常请求，得到 `Hello, world.〔测试译文〕`，设置页显示为「可用」。打开文档库时若设置里没有 `fake` 服务商就自动加入 `fakeProvider()`（id `fake`、名称 `假服务商`、type openai、baseUrl `http://127.0.0.1:9`、模型 `fake-model`「假模型」，本机地址所以无需 Key）；流水线找不到文档记录的服务商时也回退到它。用于开发时不花钱跑通全流程与截图。
 
 ## 4.14 模块接口
 
@@ -323,24 +354,116 @@ export class TranslationPools {
   invalidate(providerId?: string): void
 }
 
+// cache.ts
+export function cacheFingerprint(
+  p: ProviderConfig,
+  model: string,
+  runtime: TranslationRuntime,
+): string
+export class TranslationCache {
+  constructor(path: string, fingerprint: string, onWarning?: (message: string) => void)
+  load(): Promise<void>
+  start(): void // 定时落盘
+  stop(): void
+  get(prompt: string): string | undefined
+  set(prompt: string, text: string): void
+  flush(): Promise<void>
+}
+
 // translate-document.ts
+export type TranslateOptions = {
+  minTextLength: number
+  disableRichText: boolean // !runtime.richText || analysis.ocrWorkaround
+  fontFamily: PrimaryFontFamily // 当时的 settings.pdf.fontFamily（FontMapper，4.9）
+  userGlossaries: readonly Glossary[] // 文档的用户术语表（4.15）
+  autoExtractGlossary: boolean
+  savedAutoGlossary?: Glossary | null // 检查点里的自动术语表；undefined = 重新抽取
+}
+export function endsDocument(error: unknown): boolean // 4.11
 export async function translateDocument(input: {
-  segments: Segment[]
+  analysis: AnalysisResult
   provider: ProviderConfig
   model: string
   runtime: TranslationRuntime
+  options: TranslateOptions
   pools: TranslationPools
   cache: TranslationCache
   signal: AbortSignal
   onProgress(done: number, total: number): void
   onEvent(e: EventInput): void
+  onAutoGlossary?(glossary: Glossary | null): Promise<void> // 抽取完、翻译前调用（写检查点）
   hooks?: TranslateHooks // 测试注入重试等待 delay 与抖动 jitterMs
 }): Promise<{
-  results: TranslatedParagraph[]
+  results: TranslatedParagraph[] // { id, text, kept, comps? }
   keptChars: number
   totalChars: number
   usage: { input: number; output: number }
+  autoGlossary: Glossary | null
 }>
+
+// babeldoc/paragraphs.ts
+export function buildParagraphs(analysis: AnalysisResult): BdParagraph[]
+
+// babeldoc/translator.ts
+export async function translateParagraphs(
+  paragraphs: readonly BdParagraph[],
+  options: {
+    minTextLength: number
+    disableRichText: boolean
+    customPrompt: string // systemPrompt
+    mapper: FontMapper
+    glossaries: readonly Glossary[] // glossariesForTranslation() 的结果
+    concurrency: number
+  },
+  hooks: {
+    llm(prompt: string): Promise<string> // 缓存 + submit() + 4.9 的回复清理
+    isFatal(error: unknown): boolean
+    onFatal(error: unknown): void
+    onPlanned(paragraphs: number, batches: number): void
+    onParagraphDone(): void
+    onFallback(paragraph: BdParagraph, reason: string): void
+    onKept(paragraph: BdParagraph, error: unknown): void
+  },
+): Promise<Map<string, { id: string; text: string; comps: OutputComp[] }>>
+
+// babeldoc/placeholders.ts
+export function getTranslateInput(p: BdParagraph, options: InputOptions): TranslateInput | undefined
+export function parseTranslateOutput(input: TranslateInput, output: string): OutputComp[]
+
+// babeldoc/glossary.ts
+export class Glossary {
+  constructor(name: string, entries: readonly GlossaryEntry[])
+  readonly name: string
+  readonly entries: GlossaryEntry[] // { source, target, targetLanguage? }
+  activeEntries(text: string): Array<[string, string]>
+  toCsv(): string
+}
+export function glossaryFromCsv(name: string, bytes: Uint8Array, langOut: string): Glossary // 缺列抛 GlossaryFormatError
+
+// babeldoc/terms.ts
+export async function extractTerms(
+  paragraphs: readonly BdParagraph[],
+  userGlossaries: readonly Glossary[],
+  concurrency: number,
+  hooks: TermHooks, // llm、isFatal、onFatal、onBatchDone、onError
+): Promise<{ glossary: Glossary | null; pairs: Array<[string, string]> }>
+export function glossariesForTranslation(
+  user: readonly Glossary[],
+  auto: Glossary | null,
+  autoExtract: boolean,
+): Glossary[]
 ```
 
-单测覆盖（08 章）：URL 构造 × 4 类型、请求体与 extraBody 合并（含空 system）、响应解析（含 `<think>`、refusal、truncated）、错误分类表、Retry-After、KeyRing 轮换与下架、池自适应 100→50→62→…→100、pdf2zh 提示词逐字比对、`safe_substitute`、回复清理、逐段请求、失败保留原文、缓存命中。
+单测覆盖（08 章）：URL 构造 × 4 类型、请求体与 extraBody 合并（含空 system）、响应解析（含 `<think>`、refusal、truncated）、错误分类表、Retry-After、KeyRing 轮换与下架、池自适应 100→50→62→…→100；BabelDOC 部分（`babeldoc/*.test.ts`）：每批 6 段、短段/纯数字/cid 不送、跨页与跨栏成对、页码范围外的空页、标题上下文、照抄原文与条数不符时回退、代码围栏、回退失败保留原文、致命错误只结束一次，占位符的编号、顺延、40 个上限与拆回，术语表 CSV、匹配、提示词与自动抽取；`translate-document.test.ts`（mock 服务或注入 fetch）：批量与缓存命中、拒答时逐段回退、取消、一条 user 消息与 `<think>` 清理、术语进入批量提示词、假 fetch、重试阶梯、`mostly_untranslated`；`pipeline/stages/translate.test.ts`：缓存写失败只记一次、用户术语表、`glossary.csv`。
+
+## 4.15 术语表（`babeldoc/glossary.ts`、`babeldoc/terms.ts`）
+
+> 4.1.0 新增，照 BabelDOC `glossary.py` 与 `midend/automatic_term_extractor.py`（ADR-0018 §2）。
+
+- **`Glossary`**：名称 + 条目 `{ source, target, targetLanguage? }`；按 `normalizeSource`（小写、连续空白合为一个空格、trim）去重，先出现的留下。`activeEntries(text)`：文本的连续空白换成一个空格后只折叠 ASCII 大小写，条目原文（同样只折叠 ASCII）是它的子串即命中（BabelDOC 用 hyperscan `HS_FLAG_CASELESS`，没开 UTF8/UCP）。
+- **CSV**（`glossaryFromCsv`）：先按 UTF-8 解码（去掉 BOM），不是合法 UTF-8 时按 GB18030（代替 BabelDOC 的 chardet 猜测）；按 Python `csv` 默认方言解析；首行是表头，必须有 `source`、`target` 列（否则 `GlossaryFormatError`：`术语表 CSV 必须包含 source 和 target 两列`），可选 `tgt_lng`：非空且小写、`-` 换成 `_` 后不等于 `zh_cn` 的行跳过。`toCsv()`：表头 `source,target,tgt_lng`，CRLF 行尾，含 `"`、`,`、换行的字段加引号。
+- **用户术语表**：设置 → 高级 →「术语表」导入（`glossaries:import`，05 §5.6），CSV 原样复制到 `<library>/glossaries/<id>.csv`，`settings.glossaries` 记 `GlossaryInfo = { id, name, enabled, entries }`（名称 = 文件名去掉 `.csv`，最多 100 个）。`documents:create` 把当时启用的 id 存进 manifest `options.glossaryIds`；翻译阶段（`loadUserGlossaries`）按这些 id 读文件，名称取设置里的（设置里已没有时用 id），文件已删除就跳过。
+- **自动抽取**（`extractTerms`，照 `AutomaticTermExtractor`）：`translation.autoExtractGlossary` 开（默认）时在翻译前进行。逐页累积段落（跳过 cid、纯数字、只有占位符的段，不看 `minTextLength`），累计 token > 600 或段数 > 12 时成批，页末余下的也成一批；按 token 降序由 `perDocumentConcurrency` 个 worker 执行。提示词 `automatic_term_extractor.LLM_PROMPT_TEMPLATE`（`str.format` 语义）：目标语言 `zh-CN`，输入为该批段落文本以空行连接，用户术语表在其中命中的条目作为 `Reference Glossaries (for consistency and quality):` 附上。回复经 `_clean_json_output` 后 `JSON.parse`，不是数组就包成数组；每项取 `src`、`tgt`（Python `str()` 后 trim），两者相同且少于 3 个字符的跳过，两者非空且 `src` 少于 100 个字符的收下。一批出错（不结束文档的）就丢掉这批，结束事件的 detail 为 `K 批术语抽取失败，不影响翻译`。
+- **合成**（`finalize_auto_extracted_glossary`）：同一原文取出现最多的译文（并列取先出现的），名为 `auto_extracted_glossary`（与用户术语表重名时加 `#1`、`#2`…）；一条都没有时为 null。事件 `抽取术语：N 条` / `抽取术语：没有得到术语`。
+- **翻译时用哪些**（`get_glossaries_for_translation`）：开启自动抽取且得到了自动术语表 → 只用自动术语表（用户术语表只在抽取时作参考）；否则用用户术语表。每个请求只列出在本批（或本段）送翻译文本里命中的条目（4.9）。
+- **检查点与输出**（`pipeline/stages/translate.ts`）：抽取完、翻译前写 `work/auto-glossary.json`（`{ fingerprint, name, entries }`，没有术语时 `name`、`entries` 为 null；指纹同 4.12），续跑时指纹一致就直接用，不再抽取。翻译完成且有自动术语表时写 `work/glossary.csv`（UTF-8 带 BOM，即 BabelDOC `save_auto_extracted_glossary` 的 `utf-8-sig`），归档时移到 `output/glossary.csv`，manifest `outputs.glossary` 记字节数，翻译完成事件末尾加 `，术语表 N 条`（05 §5.5）；文档详情的「导出」可另存（06 §6.4）。

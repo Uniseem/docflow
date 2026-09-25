@@ -71,16 +71,17 @@
 
 受控的 `Modal.Backdrop`（`isDismissable`）+ `Modal.Container size="lg"`（HeroUI 的 lg 是 `max-width: var(--container-lg)`，即 32rem ≈ 512 px，没有另设 640），标题 `新建翻译`。每次打开重新挂载，不保留上次的内容。
 
-1. **文件**区（小标题 `文件`）：空时虚线框（普通 `div`，不是 HeroUI `DropZone`；文件由 6.2 的整窗拖放接收），`将文件拖到这里` + `Button variant="secondary"` `选择文件…`（`dialog:pickPdfs`）；有文件时列表：`FileText` 图标、文件名（`title` 为完整路径）、红色问题文字（有则显示）、`CloseButton`（`aria-label` `移除这个文件`）；底部 `Button variant="ghost"` `添加文件…`。区下方说明 `只支持带文本层的 PDF；扫描件、加密文件和 Office 文档无法处理。`
-2. **翻译模型**：`components/TranslatorSelect.tsx` 的 `Select`（标签 `翻译模型`），选项按服务商分组（`ListBox.Section` + `Header` = 服务商名，项 = 模型名或 id），只列出已启用且有 Key（或本机服务无需 Key）的服务商的模型；值 = `providerId/model`；默认 = `settings.defaultTranslator`，它不可用时取第一个可用模型；未选时占位 `请选择模型`；无可用模型时占位 `尚未添加` 并禁用。说明 `由所选的大模型翻译；速度和费用取决于服务商和模型。`
+1. **文件**区（小标题 `文件`）：空时虚线框（普通 `div`，不是 HeroUI `DropZone`；文件由 6.2 的整窗拖放接收），`将文件拖到这里` + `Button variant="secondary"` `选择文件…`（`dialog:pickPdfs`）；有文件时列表：`FileText` 图标、文件名（`title` 为完整路径）、红色问题文字（有则显示）、`CloseButton`（`aria-label` `移除这个文件`）；底部 `Button variant="ghost"` `添加文件…`。区下方说明 `只支持带文字层的 PDF；没做过 OCR 的扫描件、加密文件和 Office 文档无法处理。`
+2. **翻译模型**：`components/TranslatorSelect.tsx` 的 `Select`（标签 `翻译模型`），选项按服务商分组（`ListBox.Section` + `Header` = 服务商名，项 = 模型名或 id），只列出已启用且有 Key（或本机服务无需 Key）的服务商的模型；值 = `providerId/model`；默认 = `settings.defaultTranslator`，它不可用时取第一个可用模型；未选时占位 `请选择模型`；无可用模型时占位 `尚未添加` 并禁用。说明 `由所选的大模型翻译；速度和费用取决于服务商和模型。`，设置里有启用的术语表时紧接着 `使用术语表：<名称>、<名称>。`（新建的文档记下这些术语表，05 §5.4）。
 3. **标题**：仅当恰好一个文件时显示 `TextField`（标签 `标题`），占位 `默认使用文件名`，预填文件主名；用户改动前随文件增删更新。只有用户改过且非空时才作为 `title` 发出，否则由 PDF 元数据标题或文件名决定（05 §5.7）。
-4. 阻塞提示（`Alert status="warning"`）：`还没有可用的大模型：请在设置的“翻译服务”中添加服务商、填写 API Key 并获取模型。`（带 `Button size="sm" variant="secondary"` `打开设置…`，关闭弹窗并打开设置 → 翻译服务）；`所选的模型已停用或已删除，请换一个模型。`
-5. 提交错误（`Alert status="danger"`）：`部分文件未能添加`，下面逐行 `<文件名>：<原因>`。整个请求被拒绝时（例如模型刚被删除），所有文件都列出同一个原因。
-6. 底部：`取消`（ghost）/ `开始翻译`（一个文件）或 `开始翻译 N 个文件`（primary，`isPending` 时转圈；没有文件、有问题文件或模型不可用时禁用）。`Enter` 提交（输入法组字时除外）。
+4. **页码范围**（4.1.0，BabelDOC `pages` / `only_include_translated_page`）：`TextField`（标签 `页码范围`，占位 `全部页`），下方 `Description` `例如 1-3,5,8-（第 8 页到最后）。只翻译这些页，其余页保持原文。`；格式不对时换成 `FieldError`，文案取 `shared/pages.ts` 的 `pageRangeProblem()`（`页码格式不对，例如 1-3,5,8-` / `页码从 1 开始，范围的结束页不能小于开始页`），并禁用提交。下面 `Switch` `生成的 PDF 只包含这些页`（页码为空时禁用）。页码去首尾空白后非空时，请求带上 `pages` 与 `onlyTranslatedPages`，对这次加入的每个文件都生效（05 §5.4）。
+5. 阻塞提示（`Alert status="warning"`）：`还没有可用的大模型：请在设置的“翻译服务”中添加服务商、填写 API Key 并获取模型。`（带 `Button size="sm" variant="secondary"` `打开设置…`，关闭弹窗并打开设置 → 翻译服务）；`所选的模型已停用或已删除，请换一个模型。`
+6. 提交错误（`Alert status="danger"`）：`部分文件未能添加`，下面逐行 `<文件名>：<原因>`。整个请求被拒绝时（例如模型刚被删除），所有文件都列出同一个原因。
+7. 底部：`取消`（ghost）/ `开始翻译`（一个文件）或 `开始翻译 N 个文件`（primary，`isPending` 时转圈；没有文件、有问题文件、页码范围有误或模型不可用时禁用）。`Enter` 提交（输入法组字时除外）。
 
-文件校验：加入列表时渲染进程只能检查扩展名，不是 `.pdf` 的显示 `只支持 .pdf 文件` 并阻止提交；沙箱里拿不到文件大小，所以列表不显示大小，渲染进程也不做大小检查（原先的 `文件为空`、`文件超过 500 MB` 两个分支永远不会触发，已删除，见 [M5 E2E worklog](../worklog/2026-09-23-m5-e2e.md)）。读不到、不是文件、0 字节、超过 500 MB 由主进程在 `documents:create` 时逐个拒绝（`无法读取这个文件。`、`请选择 PDF 文件。`、`文件是空的（0 字节），请选择其他 PDF。`、`文件太大，请选择小于 500 MB 的 PDF。`，其他异常 `无法添加这个文件。`），显示在第 5 项里。去重按路径（不区分文件来源）。
+文件校验：加入列表时渲染进程只能检查扩展名，不是 `.pdf` 的显示 `只支持 .pdf 文件` 并阻止提交；沙箱里拿不到文件大小，所以列表不显示大小，渲染进程也不做大小检查（原先的 `文件为空`、`文件超过 500 MB` 两个分支永远不会触发，已删除，见 [M5 E2E worklog](../worklog/2026-09-23-m5-e2e.md)）。读不到、不是文件、0 字节、超过 500 MB 由主进程在 `documents:create` 时逐个拒绝（`无法读取这个文件。`、`请选择 PDF 文件。`、`文件是空的（0 字节），请选择其他 PDF。`、`文件太大，请选择小于 500 MB 的 PDF。`，其他异常 `无法添加这个文件。`），显示在第 6 项里。去重按路径（不区分文件来源）。
 
-提交：`documents:create` 一次传所有路径。只要有成功的：Toast `已添加 N 个文档`、把筛选切到 `全部文档`（若当前是已完成/失败）、把新文档并入列表并选中第一个。全部成功 → 关闭；部分失败 → 列表只留下失败的文件并显示第 5 项的错误。
+提交：`documents:create` 一次传所有路径。只要有成功的：Toast `已添加 N 个文档`、把筛选切到 `全部文档`（若当前是已完成/失败）、把新文档并入列表并选中第一个。全部成功 → 关闭；部分失败 → 列表只留下失败的文件并显示第 6 项的错误。
 
 ## 6.4 文档详情（`views/Document/`）
 
@@ -90,7 +91,7 @@
 
 标题（单行截断，`title` 给完整；可双击进入重命名）、`Chip size="sm"` 状态（`排队中`/`处理中`/`等待重试`/`已完成`/`失败`/`已取消`，颜色 default/accent/warning/success/danger/default）、副标题 `<translator.label> · <N 页>（有则显示）· <大小>`。右侧 `ButtonGroup`：
 
-- 完成：`打开`（`variant="secondary"`，`ExternalLink` 图标，默认应用打开中文 PDF）、`导出`（`variant="secondary"` 的 `Button` 直接放在 `Dropdown` 里当触发器，菜单 `中文 PDF…`、`双语对照 PDF…`（有则显示）、`源文件…`、分隔、`全部文件（ZIP）…`）、`更多`（`variant="ghost"` 的文字按钮，不设 `aria-label`，免得和列表行的 `更多` 冲突）菜单：`在访达中显示`/`在文件资源管理器中显示`、`重命名…`、`删除…`。已完成的文档不提供 `重新处理`（05 §5.7：只有失败或已取消的文档可以重新处理）。
+- 完成：`打开`（`variant="secondary"`，`ExternalLink` 图标，默认应用打开中文 PDF）、`导出`（`variant="secondary"` 的 `Button` 直接放在 `Dropdown` 里当触发器，菜单 `中文 PDF…`、`双语对照 PDF…`（有则显示）、`术语表（CSV）…`（有自动术语表时显示，即 `files.glossary`，05 §5.4）、`源文件…`、分隔、`全部文件（ZIP）…`）、`更多`（`variant="ghost"` 的文字按钮，不设 `aria-label`，免得和列表行的 `更多` 冲突）菜单：`在访达中显示`/`在文件资源管理器中显示`、`重命名…`、`删除…`。已完成的文档不提供 `重新处理`（05 §5.7：只有失败或已取消的文档可以重新处理）。
 - 进行中：`取消处理…`（`variant="danger"`）、`更多`：`在访达中显示`、`重命名…`（进行中不能从详情删除；列表行菜单仍有 `删除…`）。确认框打开期间文档完成或失败（离开排队/处理/等待重试）时，确认框自动关闭，不会去取消一篇已经结束的文档。
 - 失败/取消：`重新处理`（primary）、`更多`：`在访达中显示`、`重命名…`、`删除…`。
 - 按钮触发的操作（打开、重新处理、在访达中显示等）失败时，用户错误用 Toast 显示原因（`notifyError`），内部错误只有 6.6 的全局 Toast。
@@ -125,7 +126,7 @@
 
 ## 6.5 设置（`views/Settings/`）
 
-全页视图（顶栏左侧出现 `返回文档库` 按钮），左侧 `Tabs orientation="vertical"`（`Tabs.ListContainer` 宽 180，每个 `Tabs.Tab` 内各放一个 `Tabs.Indicator`，原因同 6.4）：`通用`、`翻译服务`、`网络`、`高级`、`关于`。经 `ui.openSettings()` 打开时（6.1），`llmReady=false` 定位到 `翻译服务`，否则 `通用`；空状态的 `添加大模型服务商…` 直接指定 `翻译服务`。设置项修改后即时保存（`settings:update`），用户错误 Toast `设置未保存：<原因>`（内部错误只有 6.6 的全局 Toast）；例外写在各项里：主题走 `app:setTheme`，服务商走 `providers:save`/`providers:delete`/`secrets:set`，提示词、自定义代理、附加请求参数要按按钮才保存。
+全页视图（顶栏左侧出现 `返回文档库` 按钮），左侧 `Tabs orientation="vertical"`（`Tabs.ListContainer` 宽 180，每个 `Tabs.Tab` 内各放一个 `Tabs.Indicator`，原因同 6.4）：`通用`、`翻译服务`、`网络`、`高级`、`关于`。经 `ui.openSettings()` 打开时（6.1），`llmReady=false` 定位到 `翻译服务`，否则 `通用`；空状态的 `添加大模型服务商…` 直接指定 `翻译服务`。设置项修改后即时保存（`settings:update`），用户错误 Toast `设置未保存：<原因>`（内部错误只有 6.6 的全局 Toast）；例外写在各项里：主题走 `app:setTheme`，服务商走 `providers:save`/`providers:delete`/`secrets:set`，术语表走 `glossaries:import`/`glossaries:update`/`glossaries:delete`，角色提示词、自定义代理、附加请求参数要按按钮才保存。
 
 ### 通用
 
@@ -159,9 +160,13 @@
 
 ### 高级
 
-`Card` `大模型请求`：`最大输出 tokens`（0–1000000，步 1024，说明 `0 = 使用服务商默认值`）、`单个文档最多同时发出的请求数`（1–1000）。都是 `NumberField`，清空输入不保存。（2026-09-26 起翻译照搬 pdf2zh 逐段请求，`每段最多字符`、`单次请求最多段数`、`单次请求最多字符` 三项去掉，ADR-0016。）
-`Card` `翻译提示词`：`TextArea` 8 行（等宽字体，`aria-label="翻译提示词"`），下方一行 `N / 12000。每个段落单独发送这段提示词（与 PDFMathTranslate 相同），其中 $text 替换为段落原文，$lang_in、$lang_out 替换为 en、zh；段落里的 {v0}、{v1}… 是公式占位符，需要原样保留。新任务使用新提示词，进行中的任务保持提交时的设置。`（计数与说明在同一个 `Description` 里；默认提示词见 04 章 §4.9）；按钮 `恢复默认`（secondary，只把默认提示词填进输入框，仍要按 `保存`）/ `保存`。
-`Card` `PDF 写回`：`Switch` `同时生成双语对照 PDF`。（`译文最小缩放` 已去掉：pdf2zh 不缩小字号，ADR-0016。）
+从上到下五张 `Card`（4.1.0 起，ADR-0018）。除术语表外，开关、单选与数字即时保存（`settings:update`），`NumberField` 清空输入不保存。
+
+- `Card` `大模型请求`：`最大输出 tokens`（0–1000000，步 1024，说明 `0 = 使用服务商默认值`）、`单个文档最多同时发出的请求数`（1–1000）。都是 `NumberField`。（2026-09-26 起 `每段最多字符`、`单次请求最多段数`、`单次请求最多字符` 三项去掉，ADR-0016；4.1.0 的分批规则是 BabelDOC 写死的，04 §4.9。）
+- `Card` `翻译`：`最短翻译长度（字符）`（`NumberField` 1–1000，说明 `比这更短的段落（编号、短标签等）保留原文。`，即 `translation.minTextLength`）；`Switch` `自动提取术语表`（说明 `翻译前先让大模型找出文中的术语并定好译名，整篇译名一致；结果可以在导出里保存为 CSV。会多用一些 tokens。`，即 `translation.autoExtractGlossary`）；`Switch` `保留段内格式`（说明 `段落里的粗体、斜体、颜色（如蓝色的引用链接）在译文里保留。模型总是弄乱格式时可以关掉。`，即 `translation.richText`）。这三项与大模型请求一样进文档的 `settingsSnapshot`，只影响之后新建（或手动重新处理）的文档。
+- `Card` `术语表`：`Card.Description` `导入 CSV（source、target 两列，可选 tgt_lng 列），新建翻译时使用已勾选的术语表。打开“自动提取术语表”时，它们交给大模型提取术语时参考。`。没有时显示 `还没有导入术语表。`；否则每行一个术语表：`Switch`（`aria-label="使用术语表 <名称>"`，切换即 `glossaries:update`）、名称（单行截断，`title` 给完整）、`N 条`、`删除`（`Button size="sm" variant="ghost"`）。底部 `导入 CSV…`（secondary，导入中转圈）调 `glossaries:import`：成功 Toast `已导入术语表“<名称>”（N 条）`，取消无提示，失败用 Toast 显示原因（05 §5.6）。删除走 `ConfirmDialog`：标题 `删除术语表“<名称>”？`，正文 `删除后，新建翻译不再使用它；还在排队或之后重新处理的文档也不会再用到它。`，按钮 `删除`（danger）/ `取消`，确认后 `glossaries:delete`。列表随 `settings:changed` 推送刷新。（已加入、还没翻译到的文档翻译时读不到被删的文件，就不用它，04 §4.15。）
+- `Card` `角色提示词`：`TextArea` 4 行（等宽字体，`aria-label="角色提示词"`，占位 `You are a professional zh-CN native translator who needs to fluently translate text into zh-CN.`），下方 `Description` `N / 12000。留空使用默认。填写后替换每个请求开头的角色说明（如“你是一名化学领域的专业译者”），译文格式、占位符与术语表的要求不受影响。新任务使用新设置，进行中的任务保持提交时的设置。`（计数与说明在同一个 `Description` 里；角色块的规则见 04 §4.9）；按钮 `恢复默认`（secondary，清空输入框，仍要按 `保存`）/ `保存`。4.0.x 的「翻译提示词」（pdf2zh 模板）已去掉，旧值读设置时清空。
+- `Card` `PDF 写回`：`Switch` `同时生成双语对照 PDF`；`RadioGroup` `双语对照排法`：`左右并排（原文与译文在同一页）`（默认）/ `原文页与译文页交替`；`Switch` `译文在前`（说明 `左右并排时译文在左边，交替时译文页在前。`）——这两项在关闭双语时禁用；`RadioGroup` `译文字体`：`自动：按原文的粗细、斜体与有无衬线选择`（默认）/ `宋体（思源宋体）` / `黑体（思源黑体）` / `楷体（霞鹜文楷）`（`pdf.fontFamily` 的 `auto`/`serif`/`sans-serif`/`script`）；`Switch` `自动处理带文字层的扫描件`（说明 `扫描件的文字层多半是 OCR 的结果，原文印在图片里。打开后遇到这类 PDF，译文用黑色写在白底上盖住原文；关闭时会提示无法处理。`，即 `pdf.ocrWorkaround`，默认关）。这些设置不进文档快照，处理到相应阶段时读当时的值（05 §5.3）。（`译文最小缩放` 已去掉：ADR-0016。）
 
 ### 关于
 
