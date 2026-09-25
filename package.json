@@ -1,6 +1,6 @@
 {
   "name": "docflow",
-  "version": "4.0.0",
+  "version": "4.0.1",
   "private": true,
   "description": "PDF 论文翻译桌面应用",
   "author": "DocFlow contributors",

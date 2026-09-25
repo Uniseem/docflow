@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+## [4.0.1] - 2026-09-26
+
+修复译文与原文叠在一起的问题：PDF 处理改为照搬 PDFMathTranslate 1.9.11。
+
 ### 变更
 
 - PDF 处理改为照搬 PDFMathTranslate 1.9.11：DocLayout-YOLO 版面模型（MuPDF.js 渲染页面）划分段落与保留区域，逐字符识别公式，删除页面上的全部原文文字后整页重绘，译文按原文换行排版（拉丁字符 Times、中文思源宋体）。原文不再残留在译文下面（ADR-0016）。
@@ -63,6 +67,7 @@
 
 旧版本线（Rust 引擎 + BabelDOC）。见 `old` 分支与 GitHub Releases。
 
-[Unreleased]: https://github.com/Uniseem/docflow/compare/v4.0.0...HEAD
+[Unreleased]: https://github.com/Uniseem/docflow/compare/v4.0.1...HEAD
+[4.0.1]: https://github.com/Uniseem/docflow/compare/v4.0.0...v4.0.1
 [4.0.0]: https://github.com/Uniseem/docflow/compare/v3.1.0...v4.0.0
 [3.1.0]: https://github.com/Uniseem/docflow/releases/tag/v3.1.0
