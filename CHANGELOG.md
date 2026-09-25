@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+## [4.0.0] - 2026-09-25
+
+完全重写：Electron + React + HeroUI 3，全部 TypeScript，不再需要 MinerU、Python 或 BabelDOC。Windows 提供安装程序，macOS 用终端一行命令安装（见 README）。
+
 ### 新增
 
 - 工程骨架：Electron 44 + React 19 + HeroUI 3 空窗口可启动，含 lint/单测/图标与 `dist:dir` 打包。
@@ -47,5 +51,6 @@
 
 旧版本线（Rust 引擎 + BabelDOC）。见 `old` 分支与 GitHub Releases。
 
-[Unreleased]: https://github.com/Uniseem/docflow/compare/v3.1.0...HEAD
+[Unreleased]: https://github.com/Uniseem/docflow/compare/v4.0.0...HEAD
+[4.0.0]: https://github.com/Uniseem/docflow/compare/v3.1.0...v4.0.0
 [3.1.0]: https://github.com/Uniseem/docflow/releases/tag/v3.1.0

@@ -99,7 +99,7 @@ E2E 启动的是 `electron-builder --dir` 产物，改渲染进程或主进程�
 1. 本地：更新 `CHANGELOG.md`（Unreleased → 版本），`npm version 4.0.0 --no-git-tag-version`，提交 `chore: 发布 4.0.0`，`git tag v4.0.0`，`git push origin main v4.0.0`。
 2. 工作流：`build` job 两台 runner 并行打包（Windows x64：windows-latest，`--win --x64`；macOS：一台 macos-15（arm64）runner 上 `--mac --arm64 --x64`）。每台依次 `npm ci` → 校验标签 == `package.json` 版本 → `npm run check` → `npm run build` → `npx electron-builder <参数> --publish never`，把 `release/DocFlow-*.{exe,dmg,pkg,zip}` 上传为工件 `installers-<OS>`（保留 7 天，缺文件即失败）；`publish` job（ubuntu-latest）合并工件、`sha256sum` 生成 `SHA256SUMS.txt`、用 `.github/release-notes.md`（`__VERSION__` 替换）`gh release create --verify-tag` 建 Release。工作流也能手动触发（`workflow_dispatch`）：选 `v*` 标签时与推送标签完全一样；选分支时跳过标签校验、不跑 `publish` job，只打包并上传工件（用来演练打包）。标签校验步骤与 `publish` job 都以 `startsWith(github.ref, 'refs/tags/v')` 为条件，发布只由 `v*` 标签触发。
 3. 产物名：`DocFlow-4.0.0-win-x64-setup.exe`、`DocFlow-4.0.0-macos-arm64.pkg/.dmg/.zip`、`DocFlow-4.0.0-macos-x64.pkg/.dmg/.zip`、`SHA256SUMS.txt`。
-4. 先用 `v4.0.0-beta.1` 演练一次：版本号含 `-` 时 publish 步骤自动给 `gh release create` 加 `--prerelease`。
+4. 先用 `v4.0.0-beta.1` 演练一次：版本号含 `-` 时 publish 步骤自动给 `gh release create` 加 `--prerelease`。（4.0.0 实际没有打 beta 标签：维护者决定直接发布，改为在 `main` 上手动触发一次 release.yml 只打包不发布作为演练，通过后打 `v4.0.0`；见 worklog 2026-09-25-release。）
 
 ## 7.6 签名（预留，不在 4.0.0 范围）
 
@@ -109,6 +109,6 @@ electron-builder 读取环境变量自动签名：macOS `CSC_LINK`（p12 base64�
 
 - `npm run dist:dir` 后启动 `release/mac-arm64/DocFlow.app` 或 `release/win-unpacked/DocFlow.exe`，确认：字体路径正确（写回成功）、pdf.js 的 cmaps 路径正确（含 CJK 字体的 PDF 能解析）、`docflow://` 预览正常、日志在文档库 `logs/`。
 - 安装包体积 ≤ 130 MB；`npx electron-builder --dir` 的 `app.asar` 里没有 `tests/`、`docs/`、`.map`，`app.asar.unpacked` 里没有 `.node`（ADR-0010）。
-  - 2026-09-23 实测（macOS arm64，`npm run dist`）：dmg 155.6 MB、pkg 155.8 MB、zip 155.8 MB，超出目标；是调整目标还是只带一个字重，待维护者决定（worklog 2026-09-23-m5-fixes）。
+  - 2026-09-23 实测（macOS arm64，`npm run dist`）：dmg 155.6 MB、pkg 155.8 MB、zip 155.8 MB，超出目标；是调整目标还是只带一个字重，待维护者决定（worklog 2026-09-23-m5-fixes）。2026-09-25 维护者决定 4.0.0 按现有体积发布，目标留待之后再议。
 - Windows：安装到含中文的路径也能启动；卸载不删文档库。
 - macOS：`sudo installer -pkg … -target /` 后应用能直接打开；`.dmg` 拖入后首次打开需要在隐私设置放行（写在 README）。
