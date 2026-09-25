@@ -1,6 +1,6 @@
 # ADR-0016：PDF 处理逐步照搬 PDFMathTranslate 1.9.11（版面模型、删除全部文字、整页重绘、逐段翻译）
 
-- 状态：已采纳（取代 ADR-0008、ADR-0015；修订 ADR-0003 的「不用版面模型」与「不用 MuPDF.js」）
+- 状态：已采纳（取代 ADR-0008、ADR-0015；修订 ADR-0003 的「不用版面模型」与「不用 MuPDF.js」）；第 2–4 条与「随 pdf2zh 一起带来的行为」由 ADR-0017 修订
 - 日期：2026-09-26
 - 相关：docs/plan/03-pdf-pipeline.md（整章重写）、docs/plan/04-translation.md、worklog 2026-09-26-pdf2zh-port、docs/reference/pdfmathtranslate-notes.md
 

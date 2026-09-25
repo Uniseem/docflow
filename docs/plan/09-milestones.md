@@ -109,6 +109,17 @@
 - [x] M8-6 单测、E2E（8 个）、调试脚本、CI 模型缓存、文档（02–08 章、ADR、README、CHANGELOG）。
 - [ ] M8-7 用真实大模型翻几篇论文，与 pdf2zh 实际输出对照（需要维护者的 Key）。
 
+## M9 修正 pdf2zh 自身的问题（4.0.1 之后，维护者要求）
+
+按 BabelDOC 0.6.4 的做法修正 pdf2zh 的问题，排版换成 BabelDOC 的 `Typesetting`（[ADR-0017](../adr/0017-babeldoc-fixes.md)，03 章 §3.5–§3.9、§3.13、§3.14）。
+
+- [x] M9-1 颜色：解释器逐算子记图形状态，段落共同样式，写回 `q {状态} BT … ET Q`。
+- [x] M9-2 排版：`pdf2zh/reflow.ts` 移植 BabelDOC 的框内重排、缩放、扩框、全文上限、重叠修正与段间距。
+- [x] M9-3 分段：BabelDOC 的公式字体表、空白统一、空格规则；`strict` 选项保留 pdf2zh 对照。
+- [x] M9-4 内联图片保留、旋转页用逆 CTM 写回、90° 字按原方向重画。
+- [x] M9-5 单测（reflow、parse、interp、chars、compose 旋转页与颜色）、维护者论文假译文目检、文档。
+- [ ] M9-6 转了 90° 以外角度的字怎么重画（pdf2zh 正立、BabelDOC 丢弃），等维护者决定。
+
 ## 之后（不在 4.0.0）
 
 - 版面检测模型（可选安装）；MuPDF.js 评估；术语表；多目标语言；签名与公证；自动更新；DOCX 输入。

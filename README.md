@@ -2,7 +2,7 @@
 
 PDF 论文翻译桌面应用（Windows / macOS）。把带文本层的 PDF 拖进来，DocFlow 在本机分析版面，用你自己配置的大模型 API（DeepSeek、通义、Kimi、智谱、OpenAI、Claude、Gemini、Ollama 等）翻译正文，再按原版式写回，生成 **中文 PDF** 和 **双语对照 PDF**。公式、图表、表格保持原样。
 
-4.0 是一次完全重写：Electron + React + HeroUI 3，全部 TypeScript，不再需要 MinerU、Python 或 BabelDOC。PDF 的版面分析、公式识别与写回照搬 [PDFMathTranslate（pdf2zh）](https://github.com/PDFMathTranslate/PDFMathTranslate) 1.9.11 的处理逻辑：用 DocLayout-YOLO 版面模型划分段落，删除页面上的全部原文后重新排版，公式与图表内的文字原样重画。
+4.0 是一次完全重写：Electron + React + HeroUI 3，全部 TypeScript，不再需要 MinerU、Python 或 BabelDOC。PDF 的版面分析、公式识别与写回照搬 [PDFMathTranslate（pdf2zh）](https://github.com/PDFMathTranslate/PDFMathTranslate) 1.9.11 的处理逻辑：用 DocLayout-YOLO 版面模型划分段落，删除页面上的全部原文后重新排版，公式与图表内的文字原样重画。PDFMathTranslate 自身的几处问题（颜色丢失、单行不换行、不缩字号、小字号空格判成公式等）按它的后继项目 BabelDOC 0.6.4 的做法修正：译文在原段落框内重排，放不下时缩小字号，保留原文颜色。
 
 ## 下载与安装
 
@@ -41,16 +41,14 @@ ARCH=$([ "$(sysctl -n hw.optional.arm64 2>/dev/null)" = 1 ] && echo arm64 || ech
 
 ## 已知问题
 
-以下是 PDFMathTranslate 本身的行为，DocFlow 照搬了它的处理逻辑，所以表现相同：
+以下是 PDFMathTranslate 与 BabelDOC 都没有解决的，DocFlow 表现相同：
 
-1. 译文与重画的公式都是黑色，原文的彩色标题、链接颜色不保留。
-2. 只有原文段落本身有换行时译文才换行：单行的标题、图注，译文比原文长时会向右超出。
-3. 行距最多压到 1 倍左右，不缩小字号：译文比原文长很多时会压到下面的内容。
-4. 版面模型判为图、表、公式、页眉页脚的区域不翻译；模型的框不准时，段落可能被合并或拆开。
-5. 斜体、等宽等字体名像公式字体的整段文字（例如 Times-Italic）会当作公式保留原文。
-6. 少数 PDF 的空格用很小的字号排版，空格会被当成角标公式，译文词与词之间出现空隙。
-7. 内联图片会被删除；旋转页面、竖排文字的字符当作公式按正立方向重画。
-8. 扫描件（没有文本层）不支持，也没有 OCR。
+1. 版面模型判为图、表、公式、页眉页脚的区域不翻译；模型的框不准时，段落可能被合并或拆开。
+2. 转了 90° 以外角度的文字（例如出版社页边竖排的下载声明）当作公式，按正立方向重画。
+3. 一段里有多种颜色（例如带蓝色链接的正文）时译文用黑色；粗体、斜体不保留。
+4. 分隔竖线、图标等图形留在原位，译文重排后可能与它们交叠。
+5. 译文比原文长很多时整篇字号会缩小；极少数任何字号都放不下的段落不写入（处理记录里有警告）。
+6. 扫描件（没有文本层）不支持，也没有 OCR。
 
 ## 开发
 

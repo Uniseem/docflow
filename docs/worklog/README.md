@@ -32,3 +32,4 @@
 | [2026-09-25](2026-09-25-release.md)          | 发布 4.0.0                    |
 | [2026-09-25](2026-09-25-win-menu.md)         | Windows 去掉菜单栏            |
 | [2026-09-26](2026-09-26-pdf2zh-port.md)      | PDF 处理照搬 PDFMathTranslate |
+| [2026-09-26](2026-09-26-babeldoc-fixes.md)   | 按 BabelDOC 修正 pdf2zh 问题  |
