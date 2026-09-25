@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+## [4.1.0] - 2026-09-26
+
+把 PDFMathTranslate 的后继版本（PDFMathTranslate-next 2.9.0 / BabelDOC 0.6.4）的优点搬进来：多段合并翻译、术语表、段内格式、按原文挑字体、左右并排的双语对照、页码范围、带 OCR 文字层的扫描件（ADR-0017、ADR-0018）。
+
 ### 新增
 
 - 照搬 PDFMathTranslate-next 2.9.0 / BabelDOC 0.6.4 的其余优点（ADR-0018）：
@@ -93,7 +97,8 @@
 
 旧版本线（Rust 引擎 + BabelDOC）。见 `old` 分支与 GitHub Releases。
 
-[Unreleased]: https://github.com/Uniseem/docflow/compare/v4.0.1...HEAD
+[Unreleased]: https://github.com/Uniseem/docflow/compare/v4.1.0...HEAD
+[4.1.0]: https://github.com/Uniseem/docflow/compare/v4.0.1...v4.1.0
 [4.0.1]: https://github.com/Uniseem/docflow/compare/v4.0.0...v4.0.1
 [4.0.0]: https://github.com/Uniseem/docflow/compare/v3.1.0...v4.0.0
 [3.1.0]: https://github.com/Uniseem/docflow/releases/tag/v3.1.0
