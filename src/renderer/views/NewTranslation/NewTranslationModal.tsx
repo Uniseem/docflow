@@ -198,7 +198,7 @@ export function NewTranslationModal() {
             />
             <p className="text-xs text-foreground/60">
               由所选的大模型翻译；速度和费用取决于服务商和模型。
-              {glossaries.length > 0 ? ` 使用术语表：${glossaries.join('、')}。` : ''}
+              {glossaries.length > 0 ? `使用术语表：${glossaries.join('、')}。` : ''}
             </p>
             {files.length === 1 ? (
               <TextField value={title} onChange={setTitleDraft}>
