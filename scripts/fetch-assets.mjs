@@ -1,7 +1,8 @@
 // Downloads what the app ships but git does not hold (ADR-0016, ADR-0018): the DocLayout-YOLO
 // model into resources/models/ and BabelDOC's fonts into resources/fonts/, each checked against
 // its SHA3-256. Files already present with the right hash are skipped. Mirrors are tried in
-// order; DOCFLOW_MODEL_URL / DOCFLOW_FONTS_URL (a base URL ending in /) replace them.
+// order; DOCFLOW_MODEL_URL (the model file's URL) and DOCFLOW_FONTS_URL (a base URL ending in /,
+// followed by each font's file name) replace them.
 import { createHash } from 'node:crypto'
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'

@@ -110,6 +110,13 @@ for (const name of productionPackageNames()) {
   sections.push(`### ${name} (${license})\n\n${text}\n`)
 }
 
+// devDependencies the main-process build bundles (electron.vite.config.ts): the o200k token list.
+sections.push('## Bundled main-process dependencies\n')
+for (const name of ['gpt-tokenizer']) {
+  const { license, text } = readPackageLicense(name)
+  sections.push(`### ${name} (${license})\n\n${text}\n`)
+}
+
 sections.push('## Bundled renderer dependencies\n')
 for (const name of bundled) {
   const { license, text } = readPackageLicense(name)
