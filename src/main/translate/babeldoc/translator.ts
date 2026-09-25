@@ -183,8 +183,12 @@ export async function translateParagraphs(
     results.set(p.id, { id: p.id, text, comps: parseTranslateOutput(input, text) })
   }
 
-  // ILTranslator.translate_paragraph (use_as_fallback)
+  // ILTranslator.translate_paragraph (use_as_fallback). A paragraph goes at most once: a batch
+  // that fails after queueing some of its items would otherwise request them twice.
+  const queued = new Set<string>()
   const fallback = (p: BdParagraph, batch: Batch) => {
+    if (queued.has(p.id)) return
+    queued.add(p.id)
     fallbacks.push(
       guard(
         secondary(async () => {
