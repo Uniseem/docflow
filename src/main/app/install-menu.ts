@@ -9,8 +9,10 @@ export function installApplicationMenu(input: {
   openLogs: () => void
 }): void {
   const template = buildMenuTemplate(input.platform)
-  const electronTemplate = template.map((item) => toElectronItem(item, input))
-  Menu.setApplicationMenu(Menu.buildFromTemplate(electronTemplate))
+  // null must be set explicitly: without an application menu Electron installs its default one.
+  Menu.setApplicationMenu(
+    template ? Menu.buildFromTemplate(template.map((item) => toElectronItem(item, input))) : null,
+  )
 }
 
 function toElectronItem(

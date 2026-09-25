@@ -22,7 +22,7 @@
 └──────────┴───────────────────────────┴───────────────────────────────┘
 ```
 
-- 顶栏：macOS 左侧留 80 px（`w-20`）给红绿灯（`titleBarStyle: hiddenInset`，`trafficLightPosition` 16/16），整条 `titlebar-drag`，内部控件 `titlebar-no-drag`。Windows 用系统标题栏，顶栏左侧只留 8 px。文档库视图：左侧文字 `DocFlow`，右侧 `SearchField`（宽 224）+ `Button variant="primary" size="sm"` `新建翻译`；设置视图：左侧换成 `返回文档库`（`variant="ghost"`），不显示搜索与新建。弹出层（backdrop、popover）设为 `no-drag`，否则压在顶栏上的部分点不动。
+- 顶栏：macOS 左侧留 80 px（`w-20`）给红绿灯（`titleBarStyle: hiddenInset`，`trafficLightPosition` 16/16），整条 `titlebar-drag`，内部控件 `titlebar-no-drag`。Windows 用系统标题栏、不显示菜单栏，顶栏左侧只留 8 px。文档库视图：左侧文字 `DocFlow`，右侧 `SearchField`（宽 224）+ `Button variant="primary" size="sm"` `新建翻译`；设置视图：左侧换成 `返回文档库`（`variant="ghost"`），不显示搜索与新建。弹出层（backdrop、popover）设为 `no-drag`，否则压在顶栏上的部分点不动。
 - 侧栏（`aside` + `ListBox aria-label="文档筛选"`）：四个筛选项，右侧 `Chip size="sm"` 显示计数（`进行中` 且计数 > 0 时为 `accent`，其他 `default`）；底部「设置」按钮（`Button variant="ghost"` + `Settings` 图标）。宽 220 px 固定。
 - 列表与详情不做拖动分隔，固定：列表 `flex-1 min-w-[360px]`，详情 `w-[52%] min-w-[480px]`。窗口 < 1100 px 时详情改为覆盖式 `Drawer` 从右侧滑出，宽度写在 `Drawer.Dialog` 上（`w-[min(52%,720px)] min-w-[480px]`；`Drawer.Content` 是铺满窗口的定位层）。抽屉只在用户点行（点行内按钮除外）或在列表上按 `Enter`/`Space` 时打开，不跟随自动选中（启动和 `list()` 会自动选中第一项、没有选中时推送来的文档也会被选中，跟随的话抽屉会自己弹出来）。
 - 键盘：`⌘/Ctrl+N` 新建翻译；`⌘/Ctrl+,` 设置；`⌘/Ctrl+F` 聚焦搜索；`Delete/Backspace` 删除选中（弹 6.2 的删除确认）；`Esc` 关闭文档信息抽屉与窄窗口详情抽屉（对话框自己处理 Esc）；`↑↓` 在列表中移动选择。macOS 只认 `⌘`，Windows 只认 `Ctrl`（输入框里的 Control-N/F 是移动光标，不能被劫持）。`Delete`/`↑↓` 只在文档库视图、没有打开对话框/抽屉/弹出菜单、焦点不在输入框与对话框里时生效；焦点在自带方向键导航的控件（选项、页签、单选、菜单项等）上时 `↑↓` 留给控件。

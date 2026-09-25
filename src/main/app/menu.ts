@@ -10,8 +10,11 @@ export type MenuTemplateItem = {
   submenu?: MenuTemplateItem[]
 }
 
-export function buildMenuTemplate(platform: NodeJS.Platform): MenuTemplateItem[] {
-  const isMac = platform === 'darwin'
+// Only macOS gets an application menu. Windows keeps the system title bar without a menu bar:
+// every menu command also lives in the UI (settings, about), the renderer handles Ctrl+N/,/F
+// itself, and Chromium handles the clipboard keys in text fields without menu roles.
+export function buildMenuTemplate(platform: NodeJS.Platform): MenuTemplateItem[] | null {
+  if (platform !== 'darwin') return null
   const appMenu: MenuTemplateItem = {
     label: 'DocFlow',
     submenu: [
@@ -32,7 +35,7 @@ export function buildMenuTemplate(platform: NodeJS.Platform): MenuTemplateItem[]
     submenu: [
       { label: '新建翻译…', accelerator: 'CmdOrCtrl+N', command: 'new-translation' },
       { type: 'separator' },
-      isMac ? { role: 'close', label: '关闭窗口' } : { role: 'quit', label: '退出' },
+      { role: 'close', label: '关闭窗口' },
     ],
   }
   const editMenu: MenuTemplateItem = {
@@ -53,9 +56,8 @@ export function buildMenuTemplate(platform: NodeJS.Platform): MenuTemplateItem[]
     submenu: [
       { role: 'minimize', label: '最小化' },
       { role: 'zoom', label: '缩放' },
-      ...(isMac
-        ? ([{ type: 'separator' }, { role: 'front', label: '前置全部窗口' }] as MenuTemplateItem[])
-        : []),
+      { type: 'separator' },
+      { role: 'front', label: '前置全部窗口' },
     ],
   }
   const helpMenu: MenuTemplateItem = {
@@ -65,7 +67,5 @@ export function buildMenuTemplate(platform: NodeJS.Platform): MenuTemplateItem[]
       { label: '打开日志文件夹', command: 'open-logs' },
     ],
   }
-  return isMac
-    ? [appMenu, fileMenu, editMenu, windowMenu, helpMenu]
-    : [fileMenu, editMenu, windowMenu, helpMenu]
+  return [appMenu, fileMenu, editMenu, windowMenu, helpMenu]
 }

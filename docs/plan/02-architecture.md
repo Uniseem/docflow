@@ -244,7 +244,7 @@ audit=false
 5. 决定文档库目录（05 章 5.1）→ 建目录并试写 → `settings.load()`、`secrets.load()`、`library.open()`（扫描 manifest 建索引）。打不开时回落到默认文档库，窗口出现后弹框说明原因（`host.json` 保留原设置，下次启动再试）。
 6. 初始化日志（2.7；日志在文档库的 `logs/` 下，所以放在确定文档库之后）→ `session.defaultSession.setProxy(...)` 按设置（并 `closeAllConnections()`）→ `protocol.handle('docflow', handler)`（2.6）。
 7. 注册 IPC（`ipc/register.ts`）→ `scheduler.start()`：把上次未完成（`processing`/`retrying`）的文档改回 `queued` 并开始跑。
-8. 安装应用菜单（`app/install-menu.ts`），创建主窗口（`src/main/index.ts` 的 `createWindow()`；`show: false`，`ready-to-show` 时再显示），macOS 上 `titleBarStyle: 'hiddenInset'`、`trafficLightPosition: {x: 16, y: 16}`；Windows 默认标题栏。最小尺寸 960×600，默认 1240×800，记住上次尺寸、位置与是否最大化（存 `host.json`；标题栏不在任何屏幕内时用默认尺寸，见 `app/window-state.ts`）。
+8. 安装应用菜单（`app/install-menu.ts`），创建主窗口（`src/main/index.ts` 的 `createWindow()`；`show: false`，`ready-to-show` 时再显示），macOS 上 `titleBarStyle: 'hiddenInset'`、`trafficLightPosition: {x: 16, y: 16}`；Windows 默认标题栏，没有菜单栏（`Menu.setApplicationMenu(null)`：菜单里的命令在设置与「关于」里都有，快捷键由渲染进程处理；2026-09-25 起，此前 Windows 也有「文件/编辑/窗口/帮助」菜单栏）。最小尺寸 960×600，默认 1240×800，记住上次尺寸、位置与是否最大化（存 `host.json`；标题栏不在任何屏幕内时用默认尺寸，见 `app/window-state.ts`）。
 9. macOS：`app.on('open-file')` 与 Dock 拖入 → 新建翻译（渲染进程订阅前先排队，由 `app:takePendingFiles` 取走）；`activate` 时没有窗口就重建；`window-all-closed` 时不退出（macOS）/ 退出（Windows）。
 10. `before-quit`：`AppSession.dispose()` → `scheduler.stop()`（给正在跑的任务最多 5 s 收尾；它们保持 `processing`，下次启动从断点续跑），然后 terminate 两个 worker，再退出。
 

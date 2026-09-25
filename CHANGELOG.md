@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### 变更
+
+- Windows 窗口去掉「文件 / 编辑 / 窗口 / 帮助」菜单栏，只保留系统标题栏；菜单里的功能在设置与「关于」里都有，快捷键不变。
+
 ## [4.0.0] - 2026-09-25
 
 完全重写：Electron + React + HeroUI 3，全部 TypeScript，不再需要 MinerU、Python 或 BabelDOC。Windows 提供安装程序，macOS 用终端一行命令安装（见 README）。

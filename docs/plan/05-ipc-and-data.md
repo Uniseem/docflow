@@ -227,15 +227,15 @@ export const ProcessingEvent = z.object({
 
 推送型通道（main → renderer，`webContents.send`，preload 暴露 `on(channel, cb) → unsubscribe`）：
 
-| 通道               | 载荷                                                                                                                                                                                                           |
-| ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `document:changed` | `DocumentSummary`（流水线与调度器引起的状态、进度、阶段变化按文档节流：200 ms 内合并为一次、发最新状态，同时刷新 Dock 徽标与进度条；`documents:create/rename/retry/cancel` 的 handler 另外立即推送一次）       |
-| `document:removed` | `{ id }`                                                                                                                                                                                                       |
-| `document:event`   | `ProcessingEvent & { documentId }`（每条事件写入后推送）                                                                                                                                                       |
-| `settings:changed` | `SettingsView`（`settings.update` 成功后，包括 `providers:save/delete`；更改文档库后。`secrets:set` 不推送）                                                                                                   |
-| `library:changed`  | `{ libraryDir }`                                                                                                                                                                                               |
-| `app:openFiles`    | `{ paths: string[] }`（macOS open-file / 第二实例命令行 / Dock 拖入；没有窗口时先建窗口；渲染进程取走 `app:takePendingFiles` 之后才直接推送）                                                                  |
-| `app:command`      | `{ name: 'new-translation' \| 'settings' \| 'focus-search' }`（菜单「新建翻译…」CmdOrCtrl+N 与「设置…」CmdOrCtrl+,（只在 macOS 应用菜单里）；`focus-search` 在 schema 里、渲染进程也处理，但主进程目前不发送） |
+| 通道               | 载荷                                                                                                                                                                                                                                                |
+| ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `document:changed` | `DocumentSummary`（流水线与调度器引起的状态、进度、阶段变化按文档节流：200 ms 内合并为一次、发最新状态，同时刷新 Dock 徽标与进度条；`documents:create/rename/retry/cancel` 的 handler 另外立即推送一次）                                            |
+| `document:removed` | `{ id }`                                                                                                                                                                                                                                            |
+| `document:event`   | `ProcessingEvent & { documentId }`（每条事件写入后推送）                                                                                                                                                                                            |
+| `settings:changed` | `SettingsView`（`settings.update` 成功后，包括 `providers:save/delete`；更改文档库后。`secrets:set` 不推送）                                                                                                                                        |
+| `library:changed`  | `{ libraryDir }`                                                                                                                                                                                                                                    |
+| `app:openFiles`    | `{ paths: string[] }`（macOS open-file / 第二实例命令行 / Dock 拖入；没有窗口时先建窗口；渲染进程取走 `app:takePendingFiles` 之后才直接推送）                                                                                                       |
+| `app:command`      | `{ name: 'new-translation' \| 'settings' \| 'focus-search' }`（macOS 应用菜单「新建翻译…」CmdOrCtrl+N 与「设置…」CmdOrCtrl+,；Windows 没有菜单栏，同样的快捷键由渲染进程直接处理；`focus-search` 在 schema 里、渲染进程也处理，但主进程目前不发送） |
 
 preload 的 `on` 只接受 `PushChannels` 里的通道名（其他名字返回空的 unsubscribe），回调用 `ipcRenderer.on` 包装并 `structuredClone` 载荷；推送载荷不做运行时校验，`PushChannels` 的 schema 只用来推导类型。不暴露 `ipcRenderer` 本身。`window.docflow` 类型 `DocflowApi` 由表推导：`invoke<K extends ChannelName>(channel: K, payload: z.input<Channels[K]['request']>): Promise<z.output<Channels[K]['response']>>`、`on<K extends PushChannelName>(channel: K, cb: (payload: z.output<PushChannels[K]>) => void): () => void`、`pathsForFiles(files: File[]): string[]`。
 
