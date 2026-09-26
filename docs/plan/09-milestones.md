@@ -130,7 +130,7 @@ pdf2zh 的后继 PDFMathTranslate-next 2.9.0 / BabelDOC 0.6.4 里 ADR-0017 没�
 - [x] M10-4 写回：字体资源下载脚本、FontMapper、样式单元、原字形单元与整段原样、译文字体选项、OCR 白底；单测与维护者论文目检。
 - [x] M10-5 输出：双语并排/交替页、译文在前、书签迁移、页码范围、只输出所选页；新建翻译与设置界面；单测。
 - [x] M10-6 扫描件：DetectScannedFile（SSIM）与自动 OCR workaround；inspect 调整；单测（带 OCR 文字层的 fixture）。
-- [ ] M10-7 文档（02–08 章、README、CHANGELOG、worklog）、E2E、CI 字体缓存；发布 `v4.1.0`。
+- [x] M10-7 文档（02–08 章、README、CHANGELOG、worklog）、E2E、CI 字体缓存；发布 `v4.1.0`。
 - [ ] M10-8 用真实大模型翻几篇论文目检（需要维护者的 Key；原 M8-7）。
 
 ## 之后（不在 4.0.0）

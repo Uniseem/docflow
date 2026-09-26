@@ -84,3 +84,31 @@
 - `53b2067 build: 第三方许可附上 gpt-tokenizer 的许可证全文`
 - `7a324e6 docs: 02、04–07 章对齐 4.1.0 的实现`
 - `d57024c chore: 发布 4.1.0`
+
+## 会话 1 续（发布 4.1.0）
+
+### 做了什么
+
+- 维护者回复「可以推送到 main 并打标签」后，把 `main` 从 360139c 快进到 95ae160（普通推送，不改写历史）。
+- 本会话推 `v4.1.0` 标签失败：`git-receive-pack` 返回 HTTP 403，推分支（包括 `main`）正常，代理没有记录失败。按环境说明 403 不重试、不绕过，请维护者在本机推；维护者在 d57024c 上打了 `v4.1.0` 并推送。
+- release.yml（run 36216462681）由标签触发，四个任务全部成功：Windows x64 约 5 分钟，macOS x64 与 arm64 各约 3.5 分钟，GitHub Release 不到 1 分钟。
+
+### 怎么验证的
+
+- [Release v4.1.0](https://github.com/Uniseem/docflow/releases/tag/v4.1.0)：正式版（非草稿、非预发布），是 Latest。8 个文件：`DocFlow-4.1.0-win-x64-setup.exe` 240.8 MB；macOS arm64 的 dmg、pkg、zip 各约 276.7–276.9 MB，x64 的各约 280.7–281.0 MB；`SHA256SUMS.txt`。比 4.0.1 大约 45–55 MB，来自新增的字体。
+- `SHA256SUMS.txt` 里 7 个安装包的校验和与 GitHub 为每个文件记录的 SHA-256 一致。
+- README 的 macOS 一行命令里的查询（`releases/latest` 里找 `-macos-<arch>.pkg`）解析出两个架构的 v4.1.0 pkg 链接；Windows setup、两个 pkg 与 arm64 dmg 的下载链接用范围请求取前 16 字节都返回 206，文件头分别是 `MZ`、`xar!`。（HEAD 请求跟随跳转后得到 401，GET 正常，只是存储端对 HEAD 的限制。）没有在实机上下载安装。
+- CI run 36216244736（`main` 上的 95ae160，只比 d57024c 多工作日志）：写这段时 check 与 macOS 打包冒烟加 E2E 已通过，Windows 还在跑（结果见下一条）。
+
+### 没做成 / 坑
+
+- 这个环境里的会话能推分支但推不了标签（HTTP 403）；以后发布，打标签这一步由维护者在本机做。
+
+### 下一步
+
+- M10-8：用真实大模型翻几篇论文目检（需要维护者的 Key）；实机安装 4.1.0（Windows 覆盖安装、macOS 终端命令）。
+- M9-6 仍等维护者决定。
+
+### 提交
+
+- `docs: 记录 4.1.0 发布结果`
